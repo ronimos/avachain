@@ -69,13 +69,13 @@ Initial K-means: 1,283 clusters from 64,162 cells
 
 ### 4.3 Recursive splitting
 
-Clusters exceeding `max_cells_per_cluster` (20) are recursively bisected using MiniBatchKMeans(n_clusters=2) in PCA space. Splitting is skipped if the cluster's maximum per-survey standard deviation is below `max_cluster_std_m` (8 cm) — these clusters are already internally homogeneous despite their size, and forcing a split would create artificial boundaries.
+Clusters exceeding `max_cells_per_cluster` (20) are recursively bisected using MiniBatchKMeans(n_clusters=2) in PCA space. Splitting is skipped if the cluster's maximum per-survey standard deviation is below `max_cluster_std_m` (5 cm) — these clusters are already internally homogeneous despite their size, and forcing a split would create artificial boundaries.
 
 Each split is checked for quality: both halves must contain at least `min_cluster_size` (4) cells. Degenerate splits (one half below minimum) are rejected, and the cluster is kept intact. Random seeds vary across iterations to avoid deterministic split failures.
 
 ```
 After recursive splitting: 4,998 clusters (max size: 65, target max: 20)
-Skipped 18 split(s) — cluster std < 8 cm
+Skipped 18 split(s) — cluster std < 5 cm
 14 cluster(s) still exceed max size (kept because std < threshold or unsplittable)
 ```
 
@@ -147,7 +147,7 @@ The snowpack property panels show the physically meaningful group differences: t
 |-----------|-------|-------------|
 | `target_cells_per_cluster` | 50 | Initial k-means target (before splitting) |
 | `max_cells_per_cluster` | 20 | Recursive splitting threshold |
-| `max_cluster_std_m` | 0.08 (8 cm) | Skip splitting if cluster is this homogeneous |
+| `max_cluster_std_m` | 0.05 (5 cm) | Skip splitting if cluster is this homogeneous |
 | `n_pca_components` | 0.99 | PCA variance retention threshold |
 | `min_cluster_size` | 4 | Minimum cells per cluster (reject smaller splits) |
 | `enforce_contiguity` | True | Split non-contiguous cluster regions |

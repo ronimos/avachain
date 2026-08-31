@@ -64,20 +64,20 @@ PANEL_SETS = {
         ("dhs_dt",  "dHS/dt (cm/d)", "RdBu_r", -20,  20,  0.0,  False),
     ],
     "stability": [
-        ("sk38_min", "Min Sk38",  "RdYlGn", 0, 1.5, SK38_CRIT, True),
-        ("ssi_min",  "Min SSI",   "RdYlGn", 0, 4.0, SSI_CRIT,  True),
-        ("sn38_min", "Min Sn38",  "RdYlGn", 0, 3.0, SN38_CRIT, True),
+        ("sk38_min", "Min Sk38",  "plasma_r", 0, 1.5, SK38_CRIT, True),
+        ("ssi_min",  "Min SSI",   "plasma_r", 0, 4.0, SSI_CRIT,  True),
+        ("sn38_min", "Min Sn38",  "plasma_r", 0, 3.0, SN38_CRIT, True),
     ],
     "propagation": [
-        ("tg_min",   "Min TG (°C/m)",    "RdYlGn_r", 0,  30.0, TG_CRIT, False),
+        ("tg_min",   "Min TG (°C/m)",    "plasma",   0,  30.0, TG_CRIT, False),
         ("atg_mean", "Accum TG (°C/m·d)","YlOrRd",   0, 500.0, None,    False),
-        ("sdr_min",  "Min Stab Def Rate","RdYlGn",   0,   6.0, 1.0,     True),
+        ("sdr_min",  "Min Stab Def Rate","plasma_r",  0,   6.0, 1.0,     True),
     ],
     "structure": [
         ("HS",            "HS (cm)",               "Blues",    0,  350, None, False),
         ("wl_burial",     "WL burial depth (m)",   "YlOrRd",   None, None, None, False),
         ("slab_thick",    "Slab thickness (m)",    "Blues",    None, None, None, False),
-        ("wl_strength",   "WL shear strength (kPa)","RdYlGn",  None, None, None, True),
+        ("wl_strength",   "WL shear strength (kPa)","plasma_r", None, None, None, True),
         ("wl_grain",      "WL grain size (mm)",    "YlOrRd",   None, None, None, False),
         ("slab_density",  "Slab density (kg/m³)",  "Blues",    None, None, None, False),
     ],
@@ -85,11 +85,19 @@ PANEL_SETS = {
         ("E_slab",   "Slab E (MPa)",           "Blues",    None, None, None, False),
         ("Lambda",   "Λ elastic length (m)",   "YlOrRd",   None, None, None, False),
         ("sigma_t",  "σ_t tensile str (kPa)",  "Blues",    None, None, None, False),
-        ("tau_g",    "τ_g driving stress (Pa)","RdYlGn_r", None, None, None, False),
+        ("tau_g",    "τ_g driving stress (Pa)","plasma",    None, None, None, False),
         ("wl_burial","WL burial depth (m)",    "YlOrRd",   None, None, None, False),
         ("slab_density","Slab density (kg/m³)","Blues",    None, None, None, False),
     ],
+    "highlight": [
+        ("sk38_min", "Min Sk38",              "plasma_r", 0, 1.5, SK38_CRIT, True),
+        ("tau_g",    "τ_g driving stress (Pa)","plasma",   None, None, None, False),
+    ],
 }
+
+# Panel sets that should render as a portrait (nrows=n, ncols=1) rather than
+# the default landscape strip (nrows=1, ncols=n).
+PORTRAIT_PANELS = {"highlight"}
 
 
 # =====================================================================
@@ -141,9 +149,11 @@ def scalars_to_grid(values, location_names, cluster_map):
 
 def plot_frame(grids, dem, hillshade, bounds, timestamp,
                panel_set_name, panel_defs, output_path, min_depth_cm,
-               boundaries=None, start_zone_mask=None):
+               boundaries=None, start_zone_mask=None, portrait=False):
     n = len(panel_defs)
-    if n <= 3:
+    if portrait and n == 2:
+        nrows, ncols = 2, 1
+    elif n <= 3:
         nrows, ncols = 1, n
     else:
         ncols = 3
@@ -158,13 +168,44 @@ def plot_frame(grids, dem, hillshade, bounds, timestamp,
     is_event = abs((timestamp - EVENT_DATE).days) <= 1
     title_suffix = "  *** JAN 18 EVENT ***" if is_event else ""
 
+    # Spatial clip: zoom each panel to the release area (+ buffer) so that
+    # color variation near the boundary fills the frame and is visible.
+    # The same region drives the color-scale percentile, so the full
+    # colormap range spans only the values that are actually shown.
+    _CLIP_BUFFER_M = 50.0
+    clip_bounds = None   # (x_min, x_max, y_min, y_max) in data coords
+    clip_mask   = None   # bool array, same shape as each grid
+    x_left, x_right, y_bottom, y_top = bounds
+    if boundaries:
+        ra_xs, ra_ys = None, None
+        if 'release_area' in boundaries:
+            ra_xs, ra_ys = boundaries['release_area']
+        elif boundaries.get('release_area_multi'):
+            ra_xs = [x for xs, _ in boundaries['release_area_multi'] for x in xs]
+            ra_ys = [y for _, ys in boundaries['release_area_multi'] for y in ys]
+        if ra_xs:
+            clip_bounds = (
+                max(x_left,   min(ra_xs) - _CLIP_BUFFER_M),
+                min(x_right,  max(ra_xs) + _CLIP_BUFFER_M),
+                max(y_bottom, min(ra_ys) - _CLIP_BUFFER_M),
+                min(y_top,    max(ra_ys) + _CLIP_BUFFER_M),
+            )
+            ref_h, ref_w = next(iter(grids.values())).shape
+            col0 = max(0, int((clip_bounds[0] - x_left) / (x_right - x_left) * ref_w))
+            col1 = min(ref_w, int(np.ceil((clip_bounds[1] - x_left) / (x_right - x_left) * ref_w)))
+            row0 = max(0, int((y_top - clip_bounds[3]) / (y_top - y_bottom) * ref_h))
+            row1 = min(ref_h, int(np.ceil((y_top - clip_bounds[2]) / (y_top - y_bottom) * ref_h)))
+            clip_mask = np.zeros((ref_h, ref_w), dtype=bool)
+            clip_mask[row0:row1, col0:col1] = True
+
     for ax, (var, label, cmap, vmin, vmax, threshold, _) in zip(axes, panel_defs):
         ax.imshow(hillshade, cmap='gray', extent=bounds, alpha=0.5, aspect='auto')
         grid = grids.get(var)
         if grid is not None:
-            # Compute colorscale from start zone only when mask available
-            # — outside pixels have thin/patchy snow with extreme values
-            if start_zone_mask is not None:
+            # Color scale: clip region > start zone > full domain
+            if clip_mask is not None:
+                scale_pixels = grid[clip_mask & ~np.isnan(grid)]
+            elif start_zone_mask is not None:
                 scale_pixels = grid[start_zone_mask & ~np.isnan(grid)]
             else:
                 scale_pixels = grid[~np.isnan(grid)]
@@ -193,11 +234,14 @@ def plot_frame(grids, dem, hillshade, bounds, timestamp,
                 ax.plot(sz[0], sz[1], color='limegreen', linewidth=1.2, alpha=0.85)
             ra = boundaries.get('release_area')
             if ra:
-                ax.plot(ra[0], ra[1], color='red', linewidth=1.8, alpha=0.9)
+                ax.plot(ra[0], ra[1], color='black', linewidth=1.8, alpha=0.9)
             for xs, ys in boundaries.get('release_area_multi', []):
-                ax.plot(xs, ys, color='red', linewidth=1.8, alpha=0.9)
+                ax.plot(xs, ys, color='black', linewidth=1.8, alpha=0.9)
         ax.set_title(label, fontsize=10)
         ax.set_xticks([]); ax.set_yticks([])
+        if clip_bounds is not None:
+            ax.set_xlim(clip_bounds[0], clip_bounds[1])
+            ax.set_ylim(clip_bounds[2], clip_bounds[3])
 
     depth_str = "stability at WL interface"
     fig.suptitle(
@@ -338,7 +382,7 @@ def write_html_flipbook(base_dir: Path, frame_names: list, min_depth: float):
 <div style="font-size:12px;color:#aaa;margin-bottom:4px;">
   Stability at WL interface | Jan 18 = skier-triggered D2 event
   <span class="legend"> | <span style="color:limegreen">&#9646;</span> start zone
-  | <span style="color:red">&#9646;</span> release area</span>
+  | <span style="color:black">&#9646;</span> release area</span>
 </div>
 <div class="tabs">
   <button class="tab active" onclick="setPanel('loading',this)">&#9601; Loading (HS / dHS/dt)</button>
@@ -497,6 +541,52 @@ def main():
     print(f"Generating {len(daily_noons)} daily frames "
           f"({daily_noons[0].date()} -> {daily_noons[-1].date()})...")
 
+    # Pre-compute fixed color ranges from the reference window so the color
+    # scale is consistent across all frames and anchored to the pre-event
+    # period rather than drifting day to day.
+    REF_WIN = (pd.Timestamp('2026-01-11').date(), pd.Timestamp('2026-01-18').date())
+    ref_noons = [ts for ts in daily_noons if REF_WIN[0] <= ts.date() <= REF_WIN[1]]
+    auto_vars = {var for pdefs in PANEL_SETS.values()
+                 for (var, _, _, vmin, vmax, _, _) in pdefs
+                 if vmin is None or vmax is None}
+    fixed_ranges = {}
+    if ref_noons and auto_vars:
+        print(f"Pre-computing color ranges from "
+              f"{ref_noons[0].date()} to {ref_noons[-1].date()} "
+              f"({len(ref_noons)} days)...")
+        pooled = {var: [] for var in auto_vars}
+        phs = {}
+        for ts in ref_noons:
+            sc, phs = reduce_at_time(ds, ts, phs, args.min_depth, args.max_depth,
+                                     wl_method=args.wl_method)
+            for var in auto_vars:
+                if var not in sc:
+                    continue
+                g = scalars_to_grid(sc[var], location_names, cluster_map)
+                mask = ((start_zone_mask_raster & ~np.isnan(g))
+                        if start_zone_mask_raster is not None
+                        else ~np.isnan(g))
+                px = g[mask]
+                if len(px):
+                    pooled[var].append(px)
+        for var, arrays in pooled.items():
+            if arrays:
+                arr = np.concatenate(arrays)
+                fixed_ranges[var] = (float(np.percentile(arr, 2)),
+                                     float(np.percentile(arr, 98)))
+        print("  Fixed ranges: " + ", ".join(
+            f"{v}=[{lo:.3g}, {hi:.3g}]"
+            for v, (lo, hi) in sorted(fixed_ranges.items())))
+
+    def _apply_fixed_ranges(panel_defs):
+        return [
+            (var, label, cmap,
+             fixed_ranges[var][0] if (vmin is None and var in fixed_ranges) else vmin,
+             fixed_ranges[var][1] if (vmax is None and var in fixed_ranges) else vmax,
+             threshold, flag)
+            for (var, label, cmap, vmin, vmax, threshold, flag) in panel_defs
+        ]
+
     frame_names = []
     prev_hs_state = {}
 
@@ -527,9 +617,11 @@ def main():
         for panel_name, panel_defs in PANEL_SETS.items():
             out_path = base_dir / panel_name / f"{date_str}.png"
             plot_frame(grids, dem, hillshade, bounds, ts,
-                       panel_name, panel_defs, out_path, args.min_depth,
+                       panel_name, _apply_fixed_ranges(panel_defs),
+                       out_path, args.min_depth,
                        boundaries=boundaries,
-                       start_zone_mask=start_zone_mask_raster)
+                       start_zone_mask=start_zone_mask_raster,
+                       portrait=(panel_name in PORTRAIT_PANELS))
 
         write_combined_tif(grids, transform, crs,
                            combined_dir / f"{date_str}.tif", dem=dem,
