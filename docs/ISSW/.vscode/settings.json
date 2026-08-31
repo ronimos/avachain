@@ -2,15 +2,19 @@
   "latex-workshop.latex.tools": [
     {
       "name": "latexmk-lualatex",
-      "command": "latexmk",
+      "command": "/usr/local/texlive/2026/bin/x86_64-linux/latexmk",
       "args": [
         "-synctex=1",
         "-interaction=nonstopmode",
         "-file-line-error",
-        "-lualatex",
+        "-r",
+        "%DIR%/latexmkrc",
         "-outdir=%OUTDIR%",
         "%DOC%"
-      ]
+      ],
+      "env": {
+        "TEXINPUTS": ":/usr/share/texlive/texmf-dist/tex//:"
+      }
     }
   ],
   "latex-workshop.latex.recipes": [
