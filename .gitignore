@@ -54,3 +54,6 @@ src/snowpack-model-feeder/windninja/
 windninja
 Miniforge3-Linux-x86_64.sh
 ffmpeg*/
+
+claude-code-pilot/*
+run_march7_envelopes.sh
