@@ -67,6 +67,12 @@ class ProjectConfig:
     # --- Domain mask ---
     min_slope_deg: float = 15.0
 
+    # --- Avalanche / scour event detection ---
+    frac_loss_threshold: float = 0.60
+    min_scour_depth_m: float = 0.05
+    caic_obs_window_days: int = 3
+    caic_spatial_buffer_m: float = 200.0
+
     # --- Clustering ---
     target_cells_per_cluster: int = 50  # auto-determines initial cluster count
     max_cells_per_cluster: int = 20     # recursively split clusters larger than this
@@ -86,6 +92,39 @@ class ProjectConfig:
         self.windninja_library_dir = self.project_dir / self.windninja_library_dir
         self.snowpack_dir = self.project_dir / self.snowpack_dir
         self.release_geojson = self.project_dir / self.release_geojson
+
+    @property
+    def boundaries_dir(self) -> Path:
+        return self.project_dir / "data" / "boundaries"
+
+    @property
+    def avalanche_events_path(self) -> Path:
+        return self.boundaries_dir / "avalanche_events.json"
+
+    def release_geojsons_for_date(self, snapshot_date: str) -> list:
+        """
+        Return all avalanche_release_area_{YYYYMMDD}.geojson paths whose
+        embedded date is ≤ snapshot_date, sorted chronologically.
+        """
+        from datetime import date as _date
+        try:
+            snap = _date.fromisoformat(snapshot_date)
+        except ValueError:
+            return []
+        paths = []
+        for p in sorted(self.boundaries_dir.glob(
+                "avalanche_release_area_????????.geojson")):
+            date_str = p.stem.replace("avalanche_release_area_", "")
+            if len(date_str) == 8:
+                try:
+                    ev_date = _date(int(date_str[:4]),
+                                    int(date_str[4:6]),
+                                    int(date_str[6:8]))
+                    if ev_date <= snap:
+                        paths.append(p)
+                except ValueError:
+                    continue
+        return paths
 
     @property
     def analysis_dir(self) -> Path:
