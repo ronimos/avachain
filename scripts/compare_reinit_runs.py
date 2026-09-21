@@ -24,23 +24,46 @@ Usage:
 """
 
 import argparse
+import copy
 import json
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import geopandas as gpd
 import matplotlib
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 import rasterio
 import rasterio.features
 import zarr
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from pyproj import Transformer
 from scipy.interpolate import griddata
 
 matplotlib.use("Agg")
+
+# ── Presentation style ────────────────────────────────────────────────────────
+_PLOT_RC = {
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Helvetica Neue", "Arial", "Liberation Sans", "DejaVu Sans"],
+    "font.size": 11,
+    "figure.facecolor": "white",
+    "axes.facecolor": "white",
+    "savefig.facecolor": "white",
+    "pdf.fonttype": 42,   # embed fonts for Illustrator / PowerPoint
+    "ps.fonttype":  42,
+}
+
+# Two-run color identity — matches dataviz categorical slots 1 & 2
+_COLOR_NO_REINIT   = "#2a78d6"   # blue
+_COLOR_WITH_REINIT = "#c0392b"   # deep red
+
+# Zone boundary styles
+_RELEASE_LW, _RELEASE_COLOR = 1.8, "#f39c12"   # amber
+_CROWN_LW,   _CROWN_COLOR   = 1.3, "#ecf0f1"   # off-white dashed
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -71,7 +94,37 @@ FIELDS = {
         "diff_cmap": "RdBu",
         "diff_vmax": 0.5,
     },
+    "tau_g": {
+        "label": "τ_g driving shear (Pa)",
+        "cmap": "YlOrRd",
+        "vmin": 0.0,
+        "vmax": 1500.0,
+        "diff_cmap": "RdBu",
+        "diff_vmax": 200.0,
+    },
+    "Lambda": {
+        "label": "Λ elastic length (m)",
+        "cmap": "viridis",
+        "vmin": 0.0,
+        "vmax": 3.0,
+        "diff_cmap": "RdBu",
+        "diff_vmax": 0.5,
+    },
+    "sigma_t": {
+        "label": "σ_t tensile strength (kPa)",
+        "cmap": "plasma",
+        "vmin": 0.0,
+        "vmax": 10.0,
+        "diff_cmap": "RdBu",
+        "diff_vmax": 2.0,
+    },
 }
+
+# Meloche-framework physical constants (Gaume et al. 2018; Reiweger et al. 2010)
+_G_WL  = 0.2e6   # WL shear modulus (Pa)
+_NU    = 0.3      # Poisson's ratio
+_PHI   = 27.0     # friction angle (deg)
+_G_GRAV = 9.81    # m/s²
 
 EPOCH_STR = "hours since "
 
@@ -105,69 +158,116 @@ def find_time_index(times: list[datetime], target: datetime, tol_h: int = 12) ->
 # Per-cluster feature extraction at a single time index
 # ──────────────────────────────────────────────────────────────────────────────
 
-def extract_cluster_features(z: zarr.Group, t_idx: int) -> pd.DataFrame:
+def extract_cluster_features(
+    z: zarr.Group,
+    t_idx: int,
+    slope_angles: dict[str, float] | None = None,
+) -> pd.DataFrame:
     """
     Return a DataFrame indexed by cluster name with columns:
-      HS, slab_thickness, min_sk38
+      HS, slab_thickness, min_sk38, tau_g, Lambda, sigma_t
 
-    Reads only the time slice at t_idx.  Uses a simplified WL detection:
-    the WL interface is placed at the layer with the minimum sk38 value
-    (subject to sk38 < 1.5 and height > 0).  Slab thickness = depth from
-    surface to that interface.
+    WL detection: layer with minimum sk38 restricted to lower 60% of pack.
+    Meloche-framework fields (tau_g, Lambda, sigma_t) require slab density
+    and slope angle; set to NaN when inputs are missing.
     """
     locations = z["location"][:]
-    n_loc = len(locations)
 
-    # Read the full time-slice for layer variables — shape (n_loc, n_layers)
-    hs_arr = z["HS"][:, t_idx]                        # (n_loc,)
-    sk38_arr = z["sk38"][:, t_idx, :]                 # (n_loc, n_layers)
-    height_arr = z["height"][:, t_idx, :]             # (n_loc, n_layers) — z from surface, m
+    hs_arr      = z["HS"][:, t_idx]
+    sk38_arr    = z["sk38"][:, t_idx, :]
+    height_arr  = z["height"][:, t_idx, :]
+    density_arr = z["density"][:, t_idx, :]
 
+    phi_rad = np.radians(_PHI)
+    tan_phi = np.tan(phi_rad)
+
+    nan_row = {k: np.nan for k in ("HS", "slab_thickness", "min_sk38",
+                                    "tau_g", "Lambda", "sigma_t")}
     rows = []
-    for i in range(n_loc):
+    for i, loc in enumerate(locations):
         hs = float(hs_arr[i])
-
         sk38 = sk38_arr[i]
-        hgt = height_arr[i]     # negative = below surface (SNOWPACK convention: top > 0 , bottom < 0)
+        hgt  = height_arr[i]
+        dens = density_arr[i]
 
-        # Only consider layers with valid data
-        valid = (np.isfinite(sk38) & np.isfinite(hgt) & (hgt != 0.0))
+        valid = np.isfinite(sk38) & np.isfinite(hgt) & (hgt != 0.0)
         if valid.sum() < 2 or not np.isfinite(hs) or hs <= 0:
-            rows.append({"HS": np.nan, "slab_thickness": np.nan, "min_sk38": np.nan})
+            rows.append(dict(nan_row))
             continue
 
-        sk_v = sk38[valid]
-        hgt_v = hgt[valid]
+        sk_v   = sk38[valid]
+        hgt_v  = hgt[valid]
+        dens_v = dens[valid]
 
-        # WL interface: layer with minimum sk38 (rough proxy for weakest layer)
-        # Restrict to layers within the slab (upper 60% of HS) where sk38 < 2
-        # to avoid picking up near-surface new-snow layers.
+        # WL interface: min sk38 restricted to lower 60% of pack
         slab_zone = (hgt_v > 0) & (hgt_v < hs * 0.6) & (sk_v < 2.0)
         if slab_zone.sum() < 1:
-            # Fall back to global minimum
-            wl_idx = np.argmin(sk_v)
+            wl_idx = int(np.argmin(sk_v))
         else:
             slab_sk = np.where(slab_zone, sk_v, np.inf)
-            wl_idx = np.argmin(slab_sk)
+            wl_idx = int(np.argmin(slab_sk))
 
-        interface_depth = float(hgt_v[wl_idx])   # positive = above surface top (cm from bottom)
-        # SNOWPACK height coords: positive means above base, so slab thickness
-        # = HS - interface_depth when interface is measured from base.
-        # The .pro file stores height as cm from bottom (positive up).
-        # Zarr stores the same in metres.
-        # interface_depth > 0 means the layer top is that far from the base.
-        slab_thick = hs - interface_depth if interface_depth > 0 else np.nan
+        interface_ht = float(hgt_v[wl_idx])   # m from snowpack base
+        slab_thick   = hs - interface_ht if interface_ht > 0 else np.nan
 
-        # min sk38 in the ±3-layer window around WL interface
         lo = max(0, wl_idx - 2)
         hi = min(len(sk_v), wl_idx + 3)
         min_sk38 = float(np.nanmin(sk_v[lo:hi]))
 
-        rows.append({
+        row: dict = {
             "HS": hs,
             "slab_thickness": max(slab_thick, 0.0) if np.isfinite(slab_thick) else np.nan,
             "min_sk38": min_sk38,
-        })
+            "tau_g": np.nan,
+            "Lambda": np.nan,
+            "sigma_t": np.nan,
+        }
+
+        if not (np.isfinite(slab_thick) and slab_thick > 0.01):
+            rows.append(row)
+            continue
+
+        # Slab mean density (layers above WL interface)
+        slab_mask = np.isfinite(dens_v) & (hgt_v > interface_ht)
+        rho = float(np.nanmean(dens_v[slab_mask])) if slab_mask.sum() >= 1 else np.nan
+
+        if not np.isfinite(rho) or rho <= 0:
+            rows.append(row)
+            continue
+
+        # WL thickness: element spacing around the WL layer
+        n_v = len(hgt_v)
+        if wl_idx > 0 and wl_idx < n_v - 1:
+            D_wl = abs(float(hgt_v[wl_idx + 1] - hgt_v[wl_idx - 1])) / 2.0
+        elif wl_idx > 0:
+            D_wl = abs(float(hgt_v[wl_idx] - hgt_v[wl_idx - 1]))
+        elif n_v > 1:
+            D_wl = abs(float(hgt_v[1] - hgt_v[0]))
+        else:
+            D_wl = 0.02
+        D_wl = max(D_wl, 0.005)   # floor at 5 mm
+
+        h_m     = float(slab_thick)
+        E_slab  = (rho / 300.0) ** 2.5 * 4.0e6      # Pa — van Herwijnen 2016
+        sigma_t = (rho / 300.0) ** 1.4 * 5.0e3      # Pa — Meloche 2-10 kPa range
+        E_prime = E_slab / (1.0 - _NU ** 2)
+        K_wl    = _G_WL / D_wl
+        Lambda  = float(np.sqrt(E_prime * h_m / K_wl))
+
+        row["sigma_t"] = sigma_t / 1000.0   # Pa → kPa for display
+        row["Lambda"]  = Lambda
+
+        # tau_g needs slope angle per cluster
+        loc_str = str(loc)
+        psi_deg = (slope_angles or {}).get(loc_str, np.nan)
+        if np.isfinite(psi_deg) and psi_deg > 1.0:
+            psi_rad = np.radians(psi_deg)
+            sin_psi = np.sin(psi_rad)
+            tan_psi = np.tan(psi_rad)
+            factor  = max(0.0, 1.0 - tan_phi / tan_psi)
+            row["tau_g"] = rho * _G_GRAV * h_m * sin_psi * factor
+
+        rows.append(row)
 
     return pd.DataFrame(rows, index=locations)
 
@@ -176,25 +276,37 @@ def extract_cluster_features(z: zarr.Group, t_idx: int) -> pd.DataFrame:
 # Spatial interpolation
 # ──────────────────────────────────────────────────────────────────────────────
 
-def load_cluster_coords_utm(smet_dir: Path, dem_crs_wkt: str) -> dict[str, tuple[float, float]]:
-    """Read lat/lon from each cluster SMET header and project to DEM CRS (UTM)."""
+def load_cluster_coords_utm(
+    smet_dir: Path, dem_crs_wkt: str
+) -> tuple[dict[str, tuple[float, float]], dict[str, float]]:
+    """Read lat/lon and slope_angle from each cluster SMET header.
+
+    Returns (coords, slopes):
+      coords  — cluster_id → (easting, northing) in DEM CRS
+      slopes  — cluster_id → slope_angle in degrees
+    """
     tr = Transformer.from_crs("EPSG:4326", dem_crs_wkt, always_xy=True)
     coords: dict[str, tuple[float, float]] = {}
+    slopes: dict[str, float] = {}
     for smet in sorted(smet_dir.glob("cluster_*.smet")):
         cid = smet.stem
-        lat = lon = None
+        lat = lon = slope = None
         with open(smet) as fh:
             for line in fh:
                 if line.startswith("latitude"):
                     lat = float(line.split("=")[1])
                 elif line.startswith("longitude"):
                     lon = float(line.split("=")[1])
+                elif line.startswith("slope_angle"):
+                    slope = float(line.split("=")[1])
                 elif line.startswith("[DATA]"):
                     break
         if lat is not None and lon is not None:
             x, y = tr.transform(lon, lat)
             coords[cid] = (x, y)
-    return coords
+        if slope is not None:
+            slopes[cid] = slope
+    return coords, slopes
 
 
 def interpolate_to_grid(
@@ -239,54 +351,82 @@ def plot_comparison_date(
 ):
     fields = list(FIELDS.keys())
     n_fields = len(fields)
-    # Columns: no_reinit | with_reinit | difference
-    fig, axes = plt.subplots(n_fields, 3, figsize=(15, 4 * n_fields))
-    fig.suptitle(f"No-reinit vs With-reinit — {date_str}", fontsize=14, fontweight="bold")
 
-    col_titles = ["No Reinit", "With Reinit", "Difference (reinit − no_reinit)"]
-    for col, title in enumerate(col_titles):
-        axes[0, col].set_title(title, fontsize=11, pad=4)
+    with matplotlib.rc_context(_PLOT_RC):
+        fig, axes = plt.subplots(
+            n_fields, 3,
+            figsize=(17, 5.2 * n_fields),
+            gridspec_kw={"hspace": 0.38, "wspace": 0.05},
+        )
+        if n_fields == 1:
+            axes = axes[np.newaxis, :]
 
-    def _show(ax, data, cmap, vmin, vmax, label):
-        hs_bg = hillshade if hillshade is not None else np.zeros_like(data)
-        ax.imshow(hs_bg, cmap="gray", vmin=0, vmax=255, alpha=0.4,
-                  interpolation="nearest")
-        im = ax.imshow(data, cmap=cmap, vmin=vmin, vmax=vmax, alpha=0.85,
-                       interpolation="nearest")
-        cb = plt.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
-        cb.set_label(label, fontsize=8)
-        ax.set_xticks([]); ax.set_yticks([])
+        fig.text(0.5, 1.002, date_str,
+                 ha="center", va="bottom",
+                 fontsize=15, fontweight="bold", color="#1a1a1a")
 
-    def _add_contours(ax, mask, color, lw=1.5):
-        if mask is not None and mask.any():
-            ax.contour(mask.astype(float), levels=[0.5], colors=[color], linewidths=lw)
+        for col, (header, color) in enumerate(zip(
+            ["No Reinit", "With Reinit", "Δ (Reinit − No Reinit)"],
+            [_COLOR_NO_REINIT, _COLOR_WITH_REINIT, "#555555"],
+        )):
+            axes[0, col].set_title(header, fontsize=11, fontweight="semibold",
+                                   color=color, pad=8)
 
-    for row, fname in enumerate(fields):
-        cfg = FIELDS[fname]
-        nr = no_reinit_grids.get(fname)
-        wr = with_reinit_grids.get(fname)
+        def _show(ax, data, cmap_name, vmin, vmax, label):
+            hs = (hillshade if hillshade is not None
+                  else np.zeros(data.shape[:2], dtype=np.uint8))
+            ax.imshow(hs, cmap="gray", vmin=0, vmax=255, alpha=0.45,
+                      interpolation="bilinear")
+            cm = copy.copy(plt.get_cmap(cmap_name))
+            cm.set_bad("#d0d0d0")   # no-data areas → light gray
+            im = ax.imshow(np.ma.masked_invalid(data), cmap=cm,
+                           vmin=vmin, vmax=vmax, alpha=0.85,
+                           interpolation="bilinear")
+            ax.set_xticks([]); ax.set_yticks([])
+            for sp in ax.spines.values():
+                sp.set_linewidth(0.5); sp.set_color("#b8b8b8")
+            # Horizontal colorbar below the panel via inset_axes
+            cax = inset_axes(ax, width="88%", height="5%",
+                             loc="lower center",
+                             bbox_to_anchor=(0, -0.14, 1, 1),
+                             bbox_transform=ax.transAxes,
+                             borderpad=0)
+            cb = plt.colorbar(im, cax=cax, orientation="horizontal")
+            cb.set_label(label, fontsize=8.5, labelpad=3, color="#444444")
+            cb.ax.tick_params(labelsize=8, colors="#555555", length=2, width=0.5)
+            cb.outline.set_linewidth(0.4)
+            cb.locator = mticker.MaxNLocator(nbins=5, prune="both")
+            cb.update_ticks()
 
-        if nr is None or wr is None:
+        def _contours(ax, mask, color, lw, ls="solid"):
+            if mask is not None and mask.any():
+                ax.contour(mask.astype(float), levels=[0.5],
+                           colors=[color], linewidths=lw, linestyles=ls)
+
+        for row, fname in enumerate(fields):
+            cfg = FIELDS[fname]
+            nr = no_reinit_grids.get(fname)
+            wr = with_reinit_grids.get(fname)
+
+            axes[row, 0].set_ylabel(cfg["label"], fontsize=9.5,
+                                    labelpad=5, color="#333333")
+
+            if nr is None or wr is None:
+                for col in range(3):
+                    axes[row, col].set_visible(False)
+                continue
+
+            _show(axes[row, 0], nr,     cfg["cmap"],      cfg["vmin"],         cfg["vmax"],        cfg["label"])
+            _show(axes[row, 1], wr,     cfg["cmap"],      cfg["vmin"],         cfg["vmax"],        cfg["label"])
+            _show(axes[row, 2], wr - nr, cfg["diff_cmap"], -cfg["diff_vmax"],   cfg["diff_vmax"],  f'Δ {cfg["label"]}')
+
             for col in range(3):
-                axes[row, col].axis("off")
-            continue
+                _contours(axes[row, col], release_mask, _RELEASE_COLOR, _RELEASE_LW)
+                if crown_mask is not None:
+                    _contours(axes[row, col], crown_mask, _CROWN_COLOR, _CROWN_LW, "dashed")
 
-        diff = wr - nr
-        vmax_diff = cfg["diff_vmax"]
-
-        _show(axes[row, 0], nr, cfg["cmap"], cfg["vmin"], cfg["vmax"], cfg["label"])
-        _show(axes[row, 1], wr, cfg["cmap"], cfg["vmin"], cfg["vmax"], cfg["label"])
-        _show(axes[row, 2], diff, cfg["diff_cmap"], -vmax_diff, vmax_diff,
-              f"Δ {cfg['label']}")
-
-        for col in range(3):
-            _add_contours(axes[row, col], release_mask, "red")
-            if crown_mask is not None:
-                _add_contours(axes[row, col], crown_mask, "yellow", lw=1.2)
-
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+        fig.savefig(out_path, dpi=200, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
     print(f"  → {out_path.name}")
 
 
@@ -297,27 +437,193 @@ def plot_time_series(
     out_path: Path,
 ):
     fields = list(FIELDS.keys())
-    fig, axes = plt.subplots(len(fields), 1, figsize=(12, 3.5 * len(fields)), sharex=True)
-    fig.suptitle("Release-zone mean — no-reinit vs with-reinit", fontsize=13)
+    n = len(fields)
 
-    for ax, fname in zip(axes, fields):
-        cfg = FIELDS[fname]
-        if fname in stats_no_reinit.columns:
-            ax.plot(stats_no_reinit.index, stats_no_reinit[fname],
-                    color="steelblue", lw=2, label="No reinit")
-        if fname in stats_with_reinit.columns:
-            ax.plot(stats_with_reinit.index, stats_with_reinit[fname],
-                    color="firebrick", lw=2, linestyle="--", label="With reinit")
-        ax.axvline(event_date, color="black", linestyle=":", lw=1.5, label="Event")
-        ax.set_ylabel(cfg["label"], fontsize=9)
-        ax.legend(fontsize=8, loc="upper right")
-        ax.grid(axis="y", alpha=0.3)
+    with matplotlib.rc_context(_PLOT_RC):
+        fig, axes = plt.subplots(n, 1, figsize=(13, 3.4 * n), sharex=True,
+                                 gridspec_kw={"hspace": 0.35})
+        fig.suptitle("Release-zone mean — no-reinit vs with-reinit",
+                     fontsize=14, fontweight="bold", y=1.01, color="#1a1a1a")
 
-    axes[-1].set_xlabel("Date")
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+        for ax, fname in zip(axes, fields):
+            cfg = FIELDS[fname]
+
+            # Subtle event shading (±12 h)
+            ax.axvspan(event_date - timedelta(hours=12),
+                       event_date + timedelta(hours=12),
+                       color="#888888", alpha=0.09, zorder=0, lw=0)
+
+            if fname in stats_no_reinit.columns:
+                ax.plot(stats_no_reinit.index, stats_no_reinit[fname],
+                        color=_COLOR_NO_REINIT, lw=2.0,
+                        solid_capstyle="round", label="No reinit", zorder=3)
+            if fname in stats_with_reinit.columns:
+                ax.plot(stats_with_reinit.index, stats_with_reinit[fname],
+                        color=_COLOR_WITH_REINIT, lw=2.0, linestyle="--",
+                        solid_capstyle="round", label="With reinit", zorder=3)
+
+            ax.axvline(event_date, color="#333333", linestyle=":",
+                       lw=1.4, zorder=4, label="Jan 18 event")
+
+            ax.set_ylabel(cfg["label"], fontsize=10, color="#333333", labelpad=4)
+            ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=4, prune="both"))
+
+            ax.grid(True, axis="y", color="#e0e0e0", linewidth=0.8, zorder=0)
+            ax.set_axisbelow(True)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["left"].set_color("#d0d0d0")
+            ax.spines["bottom"].set_color("#d0d0d0")
+            ax.tick_params(colors="#555555", length=3, width=0.7)
+
+            handles, labels = ax.get_legend_handles_labels()
+            if handles:
+                ax.legend(handles, labels, fontsize=8.5, loc="upper right",
+                          frameon=False, labelcolor="#333333")
+
+        # Date formatting on the shared x-axis
+        loc = mdates.AutoDateLocator(minticks=5, maxticks=9)
+        axes[-1].xaxis.set_major_locator(loc)
+        axes[-1].xaxis.set_major_formatter(mdates.ConciseDateFormatter(loc))
+        axes[-1].tick_params(axis="x", labelsize=9, colors="#555555")
+
+        fig.savefig(out_path, dpi=200, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
     print(f"  → {out_path.name}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Index HTML
+# ──────────────────────────────────────────────────────────────────────────────
+
+def write_index_html(out_dir: Path) -> None:
+    """Generate index.html in out_dir for browsing spatial comparison images."""
+    spatial_dir = out_dir / "spatial"
+    images = sorted(spatial_dir.glob("compare_*.png"))
+    if not images:
+        return
+
+    rel_paths = [f"spatial/{img.name}" for img in images]
+
+    def _fmt_label(stem: str) -> str:
+        tag = stem.replace("compare_", "")          # e.g. "20260119_0000"
+        parts = tag.split("_")
+        d = parts[0]                                # "20260119"
+        t = parts[1] if len(parts) > 1 else "0000"  # "0000"
+        try:
+            return f"{d[:4]}-{d[4:6]}-{d[6:8]} {t[:2]}:{t[2:]}"
+        except Exception:
+            return tag.replace("_", " ")
+
+    labels = [_fmt_label(img.stem) for img in images]
+
+    paths_js  = json.dumps(rel_paths)
+    labels_js = json.dumps(labels)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reinit Comparison</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ background: #1a1a1a; color: #e0e0e0; font-family: sans-serif;
+         display: flex; flex-direction: column; height: 100vh; overflow: hidden; }}
+  #header {{ display: flex; align-items: center; gap: 16px; padding: 8px 16px;
+             background: #2a2a2a; border-bottom: 1px solid #444; flex-shrink: 0; }}
+  #header h1 {{ font-size: 1rem; font-weight: 600; }}
+  #date-label {{ font-size: 1.1rem; font-weight: 700; color: #7ec8e3; min-width: 160px; }}
+  #counter {{ font-size: 0.85rem; color: #888; }}
+  .btn {{ background: #3a3a3a; border: 1px solid #555; color: #e0e0e0;
+          padding: 5px 14px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }}
+  .btn:hover {{ background: #4a4a4a; }}
+  #main {{ flex: 1; display: flex; overflow: hidden; }}
+  #img-wrap {{ flex: 1; display: flex; align-items: center; justify-content: center;
+               overflow: hidden; position: relative; }}
+  #main-img {{ max-width: 100%; max-height: 100%; object-fit: contain;
+               transition: opacity 0.1s; }}
+  #strip-wrap {{ width: 120px; overflow-y: auto; background: #222;
+                 border-left: 1px solid #444; flex-shrink: 0; padding: 4px; }}
+  .thumb {{ cursor: pointer; margin-bottom: 4px; border: 2px solid transparent;
+             border-radius: 3px; overflow: hidden; }}
+  .thumb img {{ width: 100%; display: block; }}
+  .thumb.active {{ border-color: #7ec8e3; }}
+  .thumb .tlabel {{ font-size: 0.6rem; text-align: center; padding: 2px 0;
+                    color: #aaa; background: #2a2a2a; }}
+  #footer {{ padding: 4px 16px; background: #2a2a2a; border-top: 1px solid #444;
+             font-size: 0.75rem; color: #666; flex-shrink: 0; }}
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>No-reinit vs With-reinit</h1>
+  <span id="date-label"></span>
+  <button class="btn" id="btn-prev">&#8592; Prev</button>
+  <button class="btn" id="btn-next">Next &#8594;</button>
+  <span id="counter"></span>
+</div>
+<div id="main">
+  <div id="img-wrap">
+    <img id="main-img" src="" alt="comparison plot">
+  </div>
+  <div id="strip-wrap" id="strip"></div>
+</div>
+<div id="footer">&#8592;&#8594; or A/D to navigate &nbsp;|&nbsp; Home/End for first/last</div>
+
+<script>
+const PATHS  = {paths_js};
+const LABELS = {labels_js};
+let idx = 0;
+
+const mainImg   = document.getElementById('main-img');
+const dateLabel = document.getElementById('date-label');
+const counter   = document.getElementById('counter');
+const stripWrap = document.getElementById('strip-wrap');
+
+function buildStrip() {{
+  PATHS.forEach((p, i) => {{
+    const d = document.createElement('div');
+    d.className = 'thumb' + (i === 0 ? ' active' : '');
+    d.dataset.i = i;
+    d.innerHTML = `<img src="${{p}}" loading="lazy"><div class="tlabel">${{LABELS[i]}}</div>`;
+    d.addEventListener('click', () => show(i));
+    stripWrap.appendChild(d);
+  }});
+}}
+
+function show(i) {{
+  idx = (i + PATHS.length) % PATHS.length;
+  mainImg.style.opacity = 0.3;
+  mainImg.src = PATHS[idx];
+  mainImg.onload = () => {{ mainImg.style.opacity = 1; }};
+  dateLabel.textContent = LABELS[idx];
+  counter.textContent = (idx + 1) + ' / ' + PATHS.length;
+  document.querySelectorAll('.thumb').forEach((el, j) => {{
+    el.classList.toggle('active', j === idx);
+    if (j === idx) el.scrollIntoView({{block: 'nearest'}});
+  }});
+}}
+
+document.getElementById('btn-prev').addEventListener('click', () => show(idx - 1));
+document.getElementById('btn-next').addEventListener('click', () => show(idx + 1));
+
+document.addEventListener('keydown', e => {{
+  if (e.key === 'ArrowLeft'  || e.key === 'a') show(idx - 1);
+  if (e.key === 'ArrowRight' || e.key === 'd') show(idx + 1);
+  if (e.key === 'Home') show(0);
+  if (e.key === 'End')  show(PATHS.length - 1);
+}});
+
+buildStrip();
+show(0);
+</script>
+</body>
+</html>
+"""
+    out_path = out_dir / "index.html"
+    out_path.write_text(html, encoding="utf-8")
+    print(f"  → index.html  ({len(rel_paths)} images)")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -334,8 +640,8 @@ def main():
     ap.add_argument("--crown-geojson",    default=None,  type=Path)
     ap.add_argument("--event-date",       default="2026-01-18")
     ap.add_argument("--out-dir",          required=True, type=Path)
-    ap.add_argument("--days-after",       type=int, default=30,
-                    help="Number of days after event to plot (default 30)")
+    ap.add_argument("--days-after",       type=int, default=60,
+                    help="Number of days after event to plot (default 60)")
     ap.add_argument("--plot-interval-h",  type=int, default=24,
                     help="Time step between spatial plots in hours (default 24)")
     args = ap.parse_args()
@@ -368,10 +674,10 @@ def main():
     xs = dem_bounds.left + (grid_col + 0.5) * dem_transform.a
     ys = dem_bounds.top  + (grid_row + 0.5) * dem_transform.e  # e is negative
 
-    # ── Load cluster coordinates ──
+    # ── Load cluster coordinates and slope angles ──
     print("Loading cluster coordinates...")
-    coords = load_cluster_coords_utm(args.smet_dir, dem_crs_wkt)
-    print(f"  {len(coords)} clusters")
+    coords, slope_angles = load_cluster_coords_utm(args.smet_dir, dem_crs_wkt)
+    print(f"  {len(coords)} clusters, {len(slope_angles)} with slope angles")
 
     # ── Load Zarr stores ──
     print("Opening Zarr stores...")
@@ -382,9 +688,6 @@ def main():
     times_wr = zarr_times_as_datetimes(z_wr)
     print(f"  No-reinit:   {times_nr[0]} → {times_nr[-1]}  ({len(times_nr)} steps)")
     print(f"  With-reinit: {times_wr[0]} → {times_wr[-1]}  ({len(times_wr)} steps)")
-
-    locs_nr = list(z_nr["location"][:])
-    locs_wr = list(z_wr["location"][:])
 
     # ── Release and crown masks ──
     release_mask = build_release_mask(args.release_geojson, dem_transform, dem_shape)
@@ -404,6 +707,8 @@ def main():
     stats_nr_rows: list[dict] = []
     stats_wr_rows: list[dict] = []
 
+    print(f"\nGenerating spatial comparison plots (every {args.plot_interval_h} h, # days: {len(compare_datetimes)})...")
+    print(f" start date: {compare_datetimes[0]}  |  end date: {compare_datetimes[-1]}")
     for dt in compare_datetimes:
         ti_nr = find_time_index(times_nr, dt, tol_h=args.plot_interval_h // 2)
         ti_wr = find_time_index(times_wr, dt, tol_h=args.plot_interval_h // 2)
@@ -414,8 +719,8 @@ def main():
         date_str = dt.strftime("%Y-%m-%d %H:%M")
         date_tag  = dt.strftime("%Y%m%d_%H%M")
 
-        feats_nr = extract_cluster_features(z_nr, ti_nr)
-        feats_wr = extract_cluster_features(z_wr, ti_wr)
+        feats_nr = extract_cluster_features(z_nr, ti_nr, slope_angles)
+        feats_wr = extract_cluster_features(z_wr, ti_wr, slope_angles)
 
         # Build scatter arrays — only clusters present in both and in coords dict
         common = set(feats_nr.index) & set(feats_wr.index) & set(coords.keys())
@@ -477,6 +782,7 @@ def main():
         merged.to_csv(args.out_dir / "release_zone_stats.csv")
         print(f"  → release_zone_stats.csv")
 
+    write_index_html(args.out_dir)
     print("\nDone.")
 
 

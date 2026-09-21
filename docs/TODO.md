@@ -126,6 +126,12 @@
 
 ---
 
+## Post-ISSW Cleanup *(October 2026)*
+
+- [ ] **Delete one-off test scripts** — these were used for ISSW prep and won't be needed after the conference: `expand_march7_envelopes.sh`, `run_reinit_comparison.sh`, `scripts/compare_reinit_runs.py`. Currently left with unstaged changes; delete and commit after ISSW.
+
+---
+
 ## Visualization / Presentation
 
 - [ ] **High-resolution avalanche photo with Google Earth overlay** — acquire a higher-quality version of the Jan 18 avalanche photo (current image is a phone photo from Loveland Ski Area). Georeference the release area, track, and deposit boundaries and export as a KMZ overlay for Google Earth. This would allow interactive comparison of the observed avalanche extent against the BFS/probabilistic model polygons in 3D terrain context, and produce presentation-quality figures showing the model chain output draped on satellite imagery.

@@ -68,6 +68,7 @@ run_snowpack() {
     local out_dir="$1"
     local b_date="$2"
     local e_date="$3"
+    local force="${4:-0}"   # pass "1" to skip the FINISHED-log resume check
     local snow_in="$out_dir/input/snow"
     local output="$out_dir/output"
 
@@ -77,9 +78,18 @@ run_snowpack() {
     local smets=("$SMET_DIR"/cluster_*.smet)
     echo "    Clusters: ${#smets[@]}  |  $b_date → $e_date"
 
+    local n_skip=0
     for smet in "${smets[@]}"; do
         local cid lat lon alt res_sno cluster_sno cluster_ini
         cid=$(basename "$smet" .smet)
+
+        # Skip clusters that already finished successfully (only when not forced).
+        # force=1 is used for phase 2 so phase-1 FINISHED logs don't block it.
+        if [[ "$force" != "1" ]] && grep -q "FINISHED" "$output/${cid}.log" 2>/dev/null; then
+            n_skip=$((n_skip+1))
+            continue
+        fi
+
         lat=$(awk -F'=' '/^latitude/{gsub(/ /,"",$2); print $2}' "$smet")
         lon=$(awk -F'=' '/^longitude/{gsub(/ /,"",$2); print $2}' "$smet")
         alt=$(awk -F'=' '/^altitude/{gsub(/ /,"",$2); print $2}' "$smet")
@@ -119,20 +129,20 @@ EOF
             > "$output/${cid}.log" 2>&1 &
 
         local ct
-        ct=$(ps aux | grep "[s]nowpack.*exe" | wc -l)
+        ct=$(ps aux | grep "[s]nowpack.*exe" | wc -l) || true
         while [[ $ct -ge $MAX_JOBS ]]; do
             sleep 1
-            ct=$(ps aux | grep "[s]nowpack.*exe" | wc -l)
+            ct=$(ps aux | grep "[s]nowpack.*exe" | wc -l) || true
         done
     done
-    wait
+    wait || true
 
     local n_ok=0 n_fail=0
     for log in "$output"/cluster_*.log; do
-        grep -q "done!" "$log" 2>/dev/null && n_ok=$((n_ok+1)) || n_fail=$((n_fail+1))
+        grep -q "FINISHED" "$log" 2>/dev/null && n_ok=$((n_ok+1)) || n_fail=$((n_fail+1))
     done
-    echo "    Done: $n_ok ok, $n_fail failed"
-    [[ $n_fail -gt 0 ]] && echo "    (check $output/cluster_*.log for failures)"
+    echo "    Done: $n_ok ok, $n_fail failed  (skipped: $n_skip)"
+    [[ $n_fail -gt 0 ]] && echo "    (check $output/cluster_*.log for failures)" || true
 }
 
 # ─── 1. No-reinit: single full-season run ─────────────────────────────────────
@@ -141,10 +151,14 @@ run_snowpack "$NO_REINIT_DIR" "$BDATE" "$EDATE"
 
 echo ""
 echo "=== [2/5] Building no-reinit Zarr ==="
-$PYTHON "$REPO_DIR/src/avachain/build_zarr_chunked.py" \
-    --pro-dir "$NO_REINIT_DIR/output" \
-    --zarr-out "$NO_REINIT_DIR/output/slope_snowpack.zarr"
-echo "    → $NO_REINIT_DIR/output/slope_snowpack.zarr"
+if [[ -d "$NO_REINIT_DIR/output/slope_snowpack.zarr" ]]; then
+    echo "    → already exists, skipping"
+else
+    $PYTHON "$REPO_DIR/src/avachain/build_zarr_chunked.py" \
+        --pro-dir "$NO_REINIT_DIR/output" \
+        --zarr-out "$NO_REINIT_DIR/output/slope_snowpack.zarr"
+    echo "    → $NO_REINIT_DIR/output/slope_snowpack.zarr"
+fi
 
 # ─── 2. With-reinit: phase 1 → reinit → phase 2 ──────────────────────────────
 echo ""
@@ -154,40 +168,63 @@ run_snowpack "$WITH_REINIT_DIR" "$BDATE" "${EVENT_DATE}T18:00"
 
 echo ""
 echo "=== [4/5] Applying reinit at $EVENT_DATE ==="
-# reinitialize_snowpack.py reads restart .sno from --sno-dir, modifies them
-# in-place, and writes backup .sno.bak files alongside each modified file.
-#
-# It uses the post-event UAS survey HS (date_after) as the scour target when
-# station dHS between event and survey is < 5 cm (clean window); otherwise
-# falls back to modeled slab_thickness.
-$PYTHON "$REPO_DIR/src/avachain/reinitialize_snowpack.py" \
-    --project-dir "$REPO_DIR" \
-    --date-before  "$DATE_BEFORE" \
-    --date-after   "$DATE_AFTER" \
-    --event-date   "$EVENT_DATE" \
-    --snapshot-date "$EVENT_DATE" \
-    --sno-dir      "$WITH_REINIT_DIR/output" \
-    --release-geojson "$RELEASE_GEOJSON" \
-    --no-backup
+_reinit_sentinel="$WITH_REINIT_DIR/output/.reinit_done"
+if [[ -f "$_reinit_sentinel" ]]; then
+    echo "    → already applied, skipping"
+else
+    # reinitialize_snowpack.py reads restart .sno from --sno-dir, modifies them
+    # in-place. Uses post-event UAS survey HS (date_after) as scour target when
+    # station dHS < 5 cm (clean window); otherwise falls back to slab_thickness.
+    $PYTHON "$REPO_DIR/src/avachain/reinitialize_snowpack.py" \
+        --project-dir "$REPO_DIR" \
+        --date-before  "$DATE_BEFORE" \
+        --date-after   "$DATE_AFTER" \
+        --event-date   "$EVENT_DATE" \
+        --snapshot-date "$EVENT_DATE" \
+        --sno-dir      "$WITH_REINIT_DIR/output" \
+        --release-geojson "$RELEASE_GEOJSON" \
+        --no-backup
+    touch "$_reinit_sentinel"
+fi
 
 echo ""
 echo "=== [5/5] With-reinit phase 2: event date → end ==="
-# Phase 2 picks up from the reinit'd .sno files (restart path in run_snowpack)
-run_snowpack "$WITH_REINIT_DIR" "${EVENT_DATE}T18:00" "$EDATE"
+_phase2_sentinel="$WITH_REINIT_DIR/output/.phase2_done"
+if [[ -f "$_phase2_sentinel" ]]; then
+    echo "    → already completed, skipping"
+else
+    # force=1 bypasses the FINISHED-log check so phase-1 logs don't block phase 2.
+    run_snowpack "$WITH_REINIT_DIR" "${EVENT_DATE}T18:00" "$EDATE" 1
+    touch "$_phase2_sentinel"
+fi
 
 echo ""
 echo "=== Building with-reinit Zarr ==="
-# Phase 2 .pro files cover event_date→end; phase 1 .pro files cover start→event_date.
-# SNOWPACK appends to .pro on restart, so each cluster's .pro has the full season.
-$PYTHON "$REPO_DIR/src/avachain/build_zarr_chunked.py" \
-    --pro-dir "$WITH_REINIT_DIR/output" \
-    --zarr-out "$WITH_REINIT_DIR/output/slope_snowpack.zarr"
-echo "    → $WITH_REINIT_DIR/output/slope_snowpack.zarr"
+_wr_zarr="$WITH_REINIT_DIR/output/slope_snowpack.zarr"
+# zarr v3 uses zarr.json; v2 uses .zgroup — pick whichever exists
+_zarr_meta=""
+[[ -f "$_wr_zarr/zarr.json" ]] && _zarr_meta="$_wr_zarr/zarr.json"
+[[ -f "$_wr_zarr/.zgroup"   ]] && _zarr_meta="$_wr_zarr/.zgroup"
+_newest_pro=""
+[[ -n "$_zarr_meta" ]] && _newest_pro=$(find "$WITH_REINIT_DIR/output" -name "*.pro" -newer "$_zarr_meta" 2>/dev/null | head -1)
+if [[ -d "$_wr_zarr" && -n "$_zarr_meta" && -z "$_newest_pro" ]]; then
+    echo "    → up to date, skipping"
+else
+    # Phase 2 .pro files cover event_date→end; phase 1 covers start→event_date.
+    # SNOWPACK appends to .pro on restart, so each cluster's .pro has the full season.
+    # Remove any stale zarr first so build_zarr_cache doesn't skip batches based
+    # on location names that were written from phase-1-only .pro files.
+    [[ -d "$_wr_zarr" ]] && rm -rf "$_wr_zarr"
+    $PYTHON "$REPO_DIR/src/avachain/build_zarr_chunked.py" \
+        --pro-dir "$WITH_REINIT_DIR/output" \
+        --zarr-out "$_wr_zarr"
+    echo "    → $_wr_zarr"
+fi
 
 # ─── 3. Comparison plots ──────────────────────────────────────────────────────
 echo ""
 echo "=== Generating comparison plots ==="
-$PYTHON "$REPO_DIR/src/avachain/compare_reinit_runs.py" \
+$PYTHON "$REPO_DIR/scripts/compare_reinit_runs.py" \
     --zarr-no-reinit   "$NO_REINIT_DIR/output/slope_snowpack.zarr" \
     --zarr-with-reinit "$WITH_REINIT_DIR/output/slope_snowpack.zarr" \
     --smet-dir         "$SMET_DIR" \
@@ -195,7 +232,8 @@ $PYTHON "$REPO_DIR/src/avachain/compare_reinit_runs.py" \
     --release-geojson  "$RELEASE_GEOJSON" \
     --crown-geojson    "$REPO_DIR/data/boundaries/avalanche_release_area_top.geojson" \
     --event-date       "$EVENT_DATE" \
-    --out-dir          "$REPO_DIR/outputs/plots/comparison_v2"
+    --out-dir          "$REPO_DIR/outputs/plots/comparison_v2" \
+    --days-after       60 \
 
 echo ""
 echo "============================================"
