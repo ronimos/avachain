@@ -15,7 +15,7 @@ export LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}:/home/caic/caic/rtsys/snowpack/src/s
 
 REPO_DIR=/home/ron/snowpack_model_feeder
 SLOPE_DIR=${SLOPE_DIR:-/home/ron/snowpack_model_feeder/snowpack/little_prof}
-SMET_DIR=${SMET_DIR:-$REPO_DIR/outputs/smet}
+SMET_DIR=${SMET_DIR:-$SLOPE_DIR/input/smet}
 SNOW_IN_DIR=$SLOPE_DIR/input/snow
 OUTPUT_DIR=$SLOPE_DIR/output
 MASTER_CFG=$REPO_DIR/slopes/little_prof/config/master_config.ini

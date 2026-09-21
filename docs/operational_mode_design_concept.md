@@ -12,7 +12,7 @@ The pipeline operates in three modes depending on what data is available:
 
 **Daily forward mode** — between UAS surveys, the system runs daily using weather station data to evolve the snowpack stratigraphy. Spatial HS distribution stays frozen at the last survey; only the internal structure (sintering, temperature gradient metamorphism, new snow loading) evolves. This is the baseline operational state.
 
-**NWP forecast mode** — extends the daily pipeline 72 hours into the future using numerical weather prediction data. Produces rolling hazard forecasts at T+0, T+1, and T+2 for mitigation planning. Forecasts converge toward reality as the target date approaches and NWP is replaced by observed data.
+**NWP forecast mode** — extends the daily pipeline 48 hours into the future using numerical weather prediction data. Produces rolling hazard forecasts at T+0, T+1, and T+2 for mitigation planning. Forecasts converge toward reality as the target date approaches and NWP is replaced by observed data.
 
 **Survey correction mode** — when a new UAS survey arrives, the system back-corrects the gap-filled HS with observed spatial transport, reruns SNOWPACK from the previous survey date, and regenerates all downstream products.
 
@@ -78,48 +78,68 @@ The daily forward mode captures stratigraphy evolution (a buried WL weakening ov
 
 ### 3.1 Purpose
 
-Extend the pipeline 72 hours into the future to provide lead time for mitigation decisions. The forecasters see "instability building at Little Professor, Sk38 crosses critical threshold tomorrow afternoon, D2 release probability peaks at T+2 with incoming storm" — actionable information for staging crews, closing roads, or pre-positioning equipment.
+Extend the pipeline 48 hours into the future to provide lead time for mitigation decisions. The forecasters see "instability building at Little Professor, Sk38 crosses critical threshold tomorrow afternoon, D2 release probability peaks at T+2 with incoming storm" — actionable information for staging crews, closing roads, or pre-positioning equipment.
 
-### 3.2 Workflow
+### 3.2 Anchor `.sno` — the survey-grounded restart
 
-Each day (after the daily forward mode completes):
+Each NWP cycle must start SNOWPACK from a snowpack state that is grounded in real observations, not in a prior forecast. This is achieved via an **anchor `.sno` file** (`${cid}_anchor.sno`) that represents the cluster's best-known physical state at the time of the last observation-corrected run.
 
-1. **Ingest NWP forecast** — pull the latest 72-hour forecast from WRF (2 km, hourly) or NBM (2 km, hourly) Extract T, precipitation, wind speed/direction, RH, radiation at the study site coordinates.
+**Before each NWP SNOWPACK run**, each cluster's `input/snow/${cid}.sno` is restored from its `_anchor.sno`. SNOWPACK then re-simulates from the anchor `ProfileDate` through `T_stable + 48h` using the current SMET (observed forcing from the anchor date to T_stable, then WRF forecast to T_stable + 48h). This ensures the full 48h forecast window reflects the latest WRF data, not accumulated forecast state from previous cycles.
 
-2. **Downscale NWP to site** — at minimum, apply lapse-rate correction for temperature and orographic enhancement for precipitation. Wind fields from NWP are coarse (1–3 km) — for forecast mode, station wind + NWP trend may be sufficient. Full WindNinja re-downscaling adds accuracy but also compute time.
+**The anchor is written after any run that incorporates real observations:**
 
-3. **Convert to SMET format** — append NWP-derived hourly records to cluster SMET files after the last observed timestamp. These rows are flagged as forecast (not observed) so they can be replaced when real data arrives.
+- **Survey run** — after SNOWPACK reruns with HS-corrected forcing, save each `output/${cid}_${cid}.sno` as `output/${cid}_anchor.sno`. This is the highest-quality anchor: it incorporates both observed spatial HS and station met forcing.
+- **Reinit run** — after the post-event SNOWPACK pass, save the scoure-adjusted `_res.sno` as `_anchor.sno` for all affected clusters. The post-reinit state is the ground truth for those clusters going forward.
 
-4. **Run SNOWPACK to T+72h** — incremental from the current restart files through the forecast period.
+Between surveys, the anchor remains fixed. The NWP cycle re-simulates from that fixed anchor date each time. At target daily survey cadence, the anchor is ≤24h old and SNOWPACK runs ≤72h per cycle (24h catch-up + 48h forecast). At current 3–7 day survey spacing, SNOWPACK runs 5–9 days per cycle — still fast given parallelism across clusters.
 
-5. **Extract snapshots at T+0, T+1, T+2** — three stability states, each representing the predicted snowpack at 18:00 UTC on that day.
+### 3.3 Workflow
 
-6. **Generate scenarios at each snapshot** — trigger selection, BFS release polygons, depth rasters. Size factor ranges widen with lead time to reflect forecast uncertainty:
+Each NWP cycle (every 6h when a fresh WRF file is available):
+
+1. **Ingest observed met** (`smet_append.py`) — append the latest hourly station records to all cluster SMET files. SMET now spans season start → ~now with observed data.
+
+2. **Determine T_stable** — the last 6h WRF tick ≤ now in the WRF SMET file. This is the boundary between observed and forecast forcing.
+
+3. **Truncate + extend SMETs** (`nwp_ingest.py`) — truncate each cluster SMET to T_stable (removes data past the clean observed boundary), then append WRF-derived hourly rows from T_stable+1h to T_stable+48h. WRF rows are: 6h → 1h resampled (linear for scalar fields, circular for wind direction, step-hold for precipitation), lapse-rate corrected per cluster altitude, and flagged with `# NWP_FORECAST CAIC_WRF` for identification. HS is written as -999 (SNOWPACK keeps the previous simulated value; see §3.5).
+
+4. **Restore anchor `.sno`** — copy each `output/${cid}_anchor.sno` to `input/snow/${cid}.sno`. This resets the restart point to the last observation-corrected state.
+
+5. **Run SNOWPACK to T_stable+48h** — from the anchor `ProfileDate` through T_stable+48h. The first portion (anchor → T_stable) uses observed met forcing; the second portion (T_stable → T_stable+48h) uses WRF forecast forcing.
+
+6. **Extract snapshots at T+0, T+24h, T+48h** — three stability states from the Zarr output.
+
+7. **Generate scenarios at each snapshot** — trigger selection, BFS release polygons, depth rasters. Size factor ranges widen with lead time to reflect forecast uncertainty:
 
    | Lead time | Size factors | Rationale |
    |-----------|-------------|-----------|
    | T+0 | 0.85, 1.00, 1.15 | Mostly observed forcing, tight bounds |
-   | T+1 | 0.70, 0.85, 1.00, 1.15, 1.30 | Mixed observed + NWP |
-   | T+2 | 0.55, 0.70, 0.85, 1.00, 1.15, 1.30, 1.45 | NWP-dominated, wide bounds |
+   | T+24h | 0.70, 0.85, 1.00, 1.15, 1.30 | Mixed observed + NWP |
+   | T+48h | 0.55, 0.70, 0.85, 1.00, 1.15, 1.30, 1.45 | NWP-dominated, wide bounds |
 
-7. **Run com1DFA** at each snapshot → three sets of runout envelopes with progressively wider uncertainty.
+8. **Run com1DFA** at each snapshot → three sets of runout envelopes with progressively wider uncertainty.
 
-8. **Archive forecast** — save all three snapshots for later verification of forecast skill.
+9. **Archive forecast** — save all three snapshots for later verification of forecast skill.
 
-### 3.3 Rolling convergence
+### 3.4 Rolling convergence
 
-Each day, the forecast refreshes:
+Each 6h NWP cycle, the forecast refreshes:
 
-| Target date | Yesterday's forecast | Today's forecast | Improvement |
-|-------------|---------------------|-----------------|-------------|
-| Tomorrow | T+2 (48h NWP) | T+1 (24h observed + 24h NWP) | 24h of real data replaces NWP |
-| Today | T+1 (24h NWP) | T+0 (mostly observed) | NWP replaced by station data |
+| Target date | Previous cycle | Current cycle | Improvement |
+|-------------|---------------|---------------|-------------|
+| T+48h | NWP-only | NWP-only, updated WRF | Better NWP input |
+| T+24h | ~NWP | 6h more observed + NWP | Observed data replaces NWP near-term |
+| T+0 | Mostly observed | Fully observed | NWP fully replaced |
 
-The forecasters see runout envelopes narrowing as the target date approaches. "Could reach the road" (T+2, wide envelope) tightens to "won't reach the road" or "close it now" (T+0, tight envelope). This convergence is the operationally useful signal — it tells you how much to trust the forecast.
+The forecasters see runout envelopes narrowing as the target date approaches. "Could reach the road" (T+48h, wide envelope) tightens to "won't reach the road" or "close it now" (T+0, tight envelope). This convergence is the operationally useful signal — it tells you how much to trust the forecast.
 
-### 3.4 Forecast pruning
+### 3.5 HS in forecast rows
 
-When new observed data arrives (hourly station update), the NWP-derived rows in the SMET files are replaced with real observations. The SNOWPACK restart files are updated, and the forecast branch from that timestamp forward is regenerated with the latest NWP. This is the same back-correction pattern as the survey correction mode (§4), but at hourly granularity.
+WRF provides precipitation (`MS_Snow`, kg/m²/h) but not a direct snow depth field. In NWP rows, `HS` is written as -999 (SNOWPACK nodata). SNOWPACK source (`Snowpack.cc:1500`) confirms that when `hs == nodata`, the previous simulated `mH` is kept — the model accumulates new snow freely from `MS_Snow` without any measured HS override. No change to `master_config.ini` is needed.
+
+### 3.6 Forecast pruning
+
+When new observed data arrives (hourly station update), the NWP-derived rows in the SMET files (identified by the `# NWP_FORECAST CAIC_WRF` flag) are truncated at T_stable and replaced with the fresh WRF forecast on the next cycle. This is handled automatically by `nwp_ingest.py`'s truncate-then-append logic and does not require a separate pruning pass.
 
 ---
 
@@ -141,9 +161,11 @@ A new UAS survey arrives. This reveals the actual spatial snow depth change sinc
 
 5. **Rerun SNOWPACK** — incremental from the previous survey date. Uses the corrected SMET forcing. Only clusters whose HS changed meaningfully (> threshold) need rerunning — use the `CLUSTERS_FILE` filter in `run_snowpack.sh`.
 
-6. **Update Zarr** — append new timesteps or overwrite the corrected period.
+6. **Save anchor `.sno`** — copy each `output/${cid}_${cid}.sno` to `output/${cid}_anchor.sno`. This becomes the new restart point for all subsequent NWP forecast cycles until the next survey or reinit event (see §3.2).
 
-7. **Rerun analysis + scenarios** — extract features and generate scenarios at the latest snapshot.
+7. **Update Zarr** — append new timesteps or overwrite the corrected period.
+
+8. **Rerun analysis + scenarios** — extract features and generate scenarios at the latest snapshot.
 
 ### 4.3 What changes vs. what stays
 
@@ -173,6 +195,7 @@ The reinit step scours release cluster `.sno` files by removing layers from the 
 1. **Pass 1:** SNOWPACK from season start (or last restart) to event date
 2. **Reinit:** scour release cluster `.sno` files
 3. **Pass 2:** SNOWPACK from event date to current date (scoured clusters only)
+4. **Save anchor `.sno`** — copy each scoure-adjusted `output/${cid}_${cid}.sno` to `output/${cid}_anchor.sno` for all reinit-affected clusters. The post-avalanche snowpack state supersedes the last survey anchor for those clusters (see §3.2).
 
 ### 5.3 Multiple events per season
 
@@ -262,8 +285,9 @@ In all other cases, incremental splitting is preferred over full re-clustering.
 |-----------|-----------|-----------|-----------|
 | `hs_YYYY-MM-DD.npy` | `step_resample` | Never | One-time per survey |
 | `cluster_map.npy/tif` | `step_cluster` | Cluster splitting | Start of season + splits |
-| `cluster_XXXX.smet` | `step_smet` | Daily append | Daily |
+| `cluster_XXXX.smet` | `step_smet` | Daily append + NWP extend | Daily + every 6h |
 | `cluster_XXXX_cluster_XXXX.sno` | SNOWPACK | Daily increment / reinit scour | Daily + events |
+| `cluster_XXXX_anchor.sno` | Survey / reinit run | Each survey or reinit event | Per survey/event |
 | `cluster_XXXX_cluster_XXXX.pro` | SNOWPACK | Daily append | Daily |
 | `slope_snowpack.zarr` | `build_zarr` | Daily append | Daily |
 | `*_features_*.csv` | `step_analyze` | Daily refresh | Daily |
