@@ -176,6 +176,41 @@ def scour_sno(sno_data: dict,
     return result
 
 
+def sanitize_sno_dir(sno_dir: Path, dry_run: bool = False) -> int:
+    """Strip zero-thickness layers from all cluster .sno files in sno_dir.
+
+    SNOWPACK writes restart files with Layer_Thick = 0 when a layer has fully
+    compacted or melted.  Reading such a file in a subsequent run causes a
+    divide-by-zero SIGFPE.  This pass removes those degenerate layers and
+    updates nSnowLayerData / HS_Last / ErosionLevel accordingly.
+
+    Returns the count of files that were modified.
+    """
+    import copy
+    n_fixed = 0
+    for sno_path in sorted(sno_dir.glob("cluster_*.sno")):
+        sno_data = read_sno(str(sno_path))
+        layers = sno_data['layers']
+        clean = [l for l in layers if float(l['Layer_Thick']) > 1e-7]
+        if len(clean) == len(layers):
+            continue
+
+        result = copy.deepcopy(sno_data)
+        result['layers'] = clean
+        new_hs = sum(float(l['Layer_Thick']) for l in clean)
+        _update_header_line(result, 'nSnowLayerData', str(len(clean)))
+        _update_header_line(result, 'HS_Last', f"{new_hs:.6f}")
+        _update_header_line(result, 'ErosionLevel', str(max(0, len(clean) - 1)))
+
+        n_removed = len(layers) - len(clean)
+        print(f"  sanitize {sno_path.name}: {n_removed} zero-layer(s) removed, "
+              f"nSnowLayerData {len(layers)}→{len(clean)}")
+        if not dry_run:
+            write_sno(result, str(sno_path))
+        n_fixed += 1
+    return n_fixed
+
+
 def _update_header_line(sno_data, key, new_value):
     """Update a header value in both the parsed dict and raw lines."""
     sno_data['header'][key] = new_value
@@ -525,6 +560,13 @@ def run_reinit(cfg,
         with open(str(stats_path), 'w') as f:
             json.dump(stats, f, indent=2)
         print(f"  Stats saved: {stats_path}")
+
+    # Strip zero-thickness layers from all .sno files — prevents SIGFPE on
+    # restart when SNOWPACK wrote a layer that compacted to zero thickness.
+    n_sanitized = sanitize_sno_dir(sno_dir, dry_run=dry_run)
+    if n_sanitized:
+        print(f"  Sanitized {n_sanitized} .sno file(s) "
+              f"(zero-thickness layers removed)")
 
     if not dry_run:
         print(f"\nNext step: rerun SNOWPACK from {event_date} "
