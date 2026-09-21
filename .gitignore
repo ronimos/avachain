@@ -40,16 +40,17 @@ data/weather/*.csv
 outputs/
 results/
 
-# Snowpack runtime data (large, lives outside repo in /data/snowpack/)
-# The snowpack/ dir only remains in repo during transition; once data is
-# moved to /data/snowpack/, this whole dir can be removed from the tree.
-snowpack/little_prof/output/
-snowpack/little_prof/input/
-snowpack/little_prof/windninja/
-snowpack/little_prof/temp/
+# Snowpack runtime data — per-slope input/output dirs (large, derived)
+snowpack/*/output/
+snowpack/*/input/
+snowpack/*/windninja/
+snowpack/*/temp/
 
-# Slope-specific large assets (windninja libs, not source)
+# Slope-specific large assets
 slopes/*/windninja/
+
+# Claude Code internal files
+claude-code-pilot/
 
 # Raw SNOWPACK file types (never commit these regardless of location)
 *.smet
@@ -68,6 +69,10 @@ config.json
 models/
 checkpoints/
 windninja/
+windninja
 src/avachain/windninja/
 Miniforge3-Linux-x86_64.sh
 ffmpeg*/
+
+# ISSW reinit comparison runs (large SNOWPACK output, not source-controlled)
+snowpack/*/comparison/
