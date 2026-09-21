@@ -1007,9 +1007,14 @@ def main():
                              'instead of Meloche-derived geometry. '
                              'Validates flow model independently of '
                              'release area estimation.')
+    parser.add_argument('--toml', default=None,
+                        help="Path to slope_config.toml; overrides --project-dir when provided")
 
     args = parser.parse_args()
-    cfg  = ProjectConfig(project_dir=args.project_dir)
+    if args.toml:
+        cfg = ProjectConfig.from_toml(args.toml)
+    else:
+        cfg  = ProjectConfig(project_dir=args.project_dir)
     cfg.ensure_dirs()
 
     # Fill None args from config defaults

@@ -143,7 +143,29 @@ BASE_STATION = StationConfig(
 )
 
 
-def load_and_convert(csv_path: str, tz_output: str = "UTC") -> pd.DataFrame:
+def station_config_from_cfg(cfg, role: str = "summit") -> StationConfig:
+    """Build a StationConfig from a ProjectConfig for the given role ('summit' or 'base')."""
+    if role == "summit":
+        return StationConfig(
+            station_id=cfg.summit_id or SUMMIT_STATION.station_id,
+            station_name=cfg.summit_id or SUMMIT_STATION.station_name,
+            latitude=cfg.summit_lat or SUMMIT_STATION.latitude,
+            longitude=cfg.summit_lon or SUMMIT_STATION.longitude,
+            altitude_m=cfg.summit_alt_m or SUMMIT_STATION.altitude_m,
+        )
+    if role == "base":
+        return StationConfig(
+            station_id=cfg.base_id or BASE_STATION.station_id,
+            station_name=cfg.base_id or BASE_STATION.station_name,
+            latitude=cfg.base_lat or BASE_STATION.latitude,
+            longitude=cfg.base_lon or BASE_STATION.longitude,
+            altitude_m=cfg.base_alt_m or BASE_STATION.altitude_m,
+        )
+    raise ValueError(f"Unknown station role: {role!r}  (expected 'summit' or 'base')")
+
+
+def load_and_convert(csv_path: str, tz_output: str = "UTC",
+                     station: Optional[StationConfig] = None) -> pd.DataFrame:
     """
     Load CAIC weather CSV and convert to SI/metric units.
     
@@ -156,8 +178,9 @@ def load_and_convert(csv_path: str, tz_output: str = "UTC") -> pd.DataFrame:
     -------
     DataFrame with columns: TA (°C), RH (%), VW (m/s), DW (°), ISWR (W/m²), HS (cm)
     """
+    st = station or SUMMIT_STATION
     df = pd.read_csv(csv_path, parse_dates=["time"], index_col="time")
-    
+
     out = pd.DataFrame(index=df.index)
     out["TA"] = tenths_f_to_celsius(df["temp"])
     out["RH"] = df["rh"].astype(float)
@@ -165,13 +188,13 @@ def load_and_convert(csv_path: str, tz_output: str = "UTC") -> pd.DataFrame:
     out["DW"] = df["wdir"].astype(float)
     out["ISWR"] = tenths_wm2_to_wm2(df["swin"])
     out["HS"] = tenths_inch_to_cm(df["depth"])
-    
+
     # Estimate ILWR from TA, RH, ISWR
     out["ILWR"] = estimate_ilwr(
         out["TA"], out["RH"], out["ISWR"],
-        altitude_m=SUMMIT_STATION.altitude_m,
-        latitude=SUMMIT_STATION.latitude,
-        longitude=SUMMIT_STATION.longitude,
+        altitude_m=st.altitude_m,
+        latitude=st.latitude,
+        longitude=st.longitude,
         timestamps=out.index
     )
     

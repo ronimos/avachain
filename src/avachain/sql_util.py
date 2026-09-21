@@ -32,6 +32,22 @@ WEATHER_STATIONS = {
     },
 }
 
+
+def stations_from_cfg(cfg) -> dict:
+    """Build a WEATHER_STATIONS-format dict from a ProjectConfig.
+
+    Each station dict has 'id' (SQL staname) and 'cols' (columns to pull).
+    Column lists come from the [[stations]] entries in slope_config.toml,
+    which are stored in cfg.stations.
+    """
+    result = {}
+    for s in getattr(cfg, "stations", []):
+        result[s.get("name", s["sql_id"])] = {
+            "id":   s["sql_id"],
+            "cols": s.get("sql_columns", ["*"]),
+        }
+    return result or WEATHER_STATIONS
+
 ROOT_PATH = Path(__file__).parents[2]
 DATA_DIR = ROOT_PATH / "data"
 
@@ -124,7 +140,10 @@ def parse_args():
                         help="Directory to save output files")
     parser.add_argument("-s", "--start-time", help="Start time for data retrieval",
                         default="2025-09-01 00:00:00")
-    
+    parser.add_argument("--project-dir", default=None,
+                        help="Project directory; auto-detects slope_config.toml for station list")
+    parser.add_argument("--slope-name", default=None,
+                        help="Slope name (used with --project-dir)")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -138,7 +157,19 @@ if __name__ == "__main__":
             exit(1)
     logger.info("Starting weather data extraction process.")
 
-    for name, info in WEATHER_STATIONS.items():
+    # Resolve station list from slope_config.toml when project-dir is given
+    active_stations = WEATHER_STATIONS
+    if args.project_dir and args.slope_name:
+        _toml = Path(args.project_dir) / "slopes" / args.slope_name / "slope_config.toml"
+        if _toml.exists():
+            import sys as _sys
+            _sys.path.insert(0, str(Path(args.project_dir) / "src" / "avachain"))
+            from config import ProjectConfig as _PC
+            _cfg = _PC.from_toml(_toml)
+            active_stations = stations_from_cfg(_cfg)
+            logger.info(f"Using stations from {_toml.name}: {list(active_stations.keys())}")
+
+    for name, info in active_stations.items():
         logger.info(f"Processing station: {name}")
         df = get_weather_from_sql_db(st_id=info["id"], start_time=start_time)
         

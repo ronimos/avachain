@@ -1305,10 +1305,15 @@ def main():
     parser.add_argument('--all-events', action='store_true',
                         help="Reinit all corrected events from avalanche_events.json "
                              "(ignores --event-date/--date-before/--date-after)")
+    parser.add_argument('--toml', default=None,
+                        help="Path to slope_config.toml; overrides --project-dir when provided")
 
     args = parser.parse_args()
 
-    cfg = ProjectConfig(project_dir=Path(args.project_dir))
+    if args.toml:
+        cfg = ProjectConfig.from_toml(args.toml)
+    else:
+        cfg = ProjectConfig(project_dir=Path(args.project_dir))
 
     if args.step == 'all':
         for step_name in ALL_STEPS:

@@ -33,7 +33,8 @@ import pandas as pd
 
 
 # --- Station registry ---
-# Add / edit entries here when new stations come online.
+# Default stations for little_prof.  For other slopes the pipeline passes
+# stations built via stations_from_cfg(cfg) instead of this module-level dict.
 STATIONS = {
     "CAABT": {
         "name":    "Abasin Top",
@@ -48,6 +49,20 @@ STATIONS = {
         "elev_m":  3530,
     },
 }
+
+
+def stations_from_cfg(cfg) -> dict:
+    """Build a STATIONS-format dict from a ProjectConfig."""
+    return {
+        cfg.summit_id: {"name": cfg.summit_id,
+                        "lat":    cfg.summit_lat,
+                        "lon":    cfg.summit_lon,
+                        "elev_m": cfg.summit_alt_m},
+        cfg.base_id:   {"name": cfg.base_id,
+                        "lat":    cfg.base_lat,
+                        "lon":    cfg.base_lon,
+                        "elev_m": cfg.base_alt_m},
+    }
 
 # Expected columns in the cache (SMET-compatible names + timestamp).
 # Unit conventions match smet_writer.py — conversions happen at ingest.
@@ -148,9 +163,13 @@ def fetch_and_cache(station_id: str,
     return n
 
 
-def fetch_all(since: pd.Timestamp | None = None, dry_run: bool = False) -> dict[str, int]:
+def fetch_all(stations: dict | None = None,
+              since: pd.Timestamp | None = None,
+              dry_run: bool = False) -> dict[str, int]:
+    """Fetch all stations.  Pass stations=stations_from_cfg(cfg) for a non-default slope."""
+    active = stations if stations is not None else STATIONS
     return {sid: fetch_and_cache(sid, since=since, dry_run=dry_run)
-            for sid in STATIONS}
+            for sid in active}
 
 
 # ---------------------------------------------------------------------------
@@ -160,20 +179,34 @@ def fetch_all(since: pd.Timestamp | None = None, dry_run: bool = False) -> dict[
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Fetch and cache AWS station data for the daily pipeline")
-    parser.add_argument("--station", choices=list(STATIONS), default=None,
-                        help="Single station ID (default: all)")
+    parser.add_argument("--station", default=None,
+                        help="Single station ID (default: all stations for the slope)")
     parser.add_argument("--since", default=None,
                         help="Force refetch from this date (YYYY-MM-DD)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would be fetched without writing")
+    parser.add_argument("--project-dir", default=None,
+                        help="Project directory; resolves slope_config.toml automatically")
+    parser.add_argument("--slope-name", default=None,
+                        help="Slope name (used with --project-dir to select config)")
     args = parser.parse_args()
+
+    # Resolve station registry from config if a slope is specified
+    active_stations = STATIONS
+    if args.project_dir and args.slope_name:
+        from pathlib import Path as _Path
+        from config import ProjectConfig
+        toml_path = _Path(args.project_dir) / "slopes" / args.slope_name / "slope_config.toml"
+        if toml_path.exists():
+            cfg = ProjectConfig.from_toml(toml_path)
+            active_stations = stations_from_cfg(cfg)
 
     since_ts = pd.Timestamp(args.since, tz="UTC") if args.since else None
 
     if args.station:
         fetch_and_cache(args.station, since=since_ts, dry_run=args.dry_run)
     else:
-        counts = fetch_all(since=since_ts, dry_run=args.dry_run)
+        counts = fetch_all(stations=active_stations, since=since_ts, dry_run=args.dry_run)
         total = sum(counts.values())
         print(f"\n  Total new rows cached: {total}")
 

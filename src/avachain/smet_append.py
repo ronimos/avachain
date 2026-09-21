@@ -112,14 +112,16 @@ def _format_smet_row(ts: pd.Timestamp, row: dict, fields: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 def _load_met_for_period(since: pd.Timestamp,
-                         until: pd.Timestamp) -> pd.DataFrame:
+                         until: pd.Timestamp,
+                         station_id: str | None = None) -> pd.DataFrame:
     """Load met records from the AWS cache for [since, until].
 
     Returns a DataFrame indexed by UTC timestamp with columns matching
     the SMET fields. Gaps are filled with -999 (SNOWPACK nodata) rather
     than interpolated — SNOWPACK handles short gaps internally.
     """
-    cache = WEATHER_CACHE_DIR / f"{PRIMARY_STATION}.parquet"
+    sid = station_id or PRIMARY_STATION
+    cache = WEATHER_CACHE_DIR / f"{sid}.parquet"
     if not cache.exists():
         print(f"    WARNING: weather cache not found at {cache} — "
               f"run aws_ingest.py first")
@@ -137,7 +139,8 @@ def _load_met_for_period(since: pd.Timestamp,
 
 def append_cluster_smet(smet_path: Path,
                         until: pd.Timestamp,
-                        dry_run: bool = False) -> int:
+                        dry_run: bool = False,
+                        station_id: str | None = None) -> int:
     """Append new met rows to one cluster's SMET file.
 
     Returns the number of rows appended (0 if already current or dry-run).
@@ -155,7 +158,7 @@ def append_cluster_smet(smet_path: Path,
         print(f"    WARNING: could not parse fields from {smet_path.name}")
         return 0
 
-    met = _load_met_for_period(last_ts, until)
+    met = _load_met_for_period(last_ts, until, station_id=station_id)
     if met.empty:
         return 0
 
@@ -184,7 +187,8 @@ def append_cluster_smet(smet_path: Path,
 
 def append_all(smet_dir: Path,
                until: pd.Timestamp | None = None,
-               dry_run: bool = False) -> dict[str, int]:
+               dry_run: bool = False,
+               station_id: str | None = None) -> dict[str, int]:
     """Append new rows to all SMET files in smet_dir."""
     if until is None:
         until = pd.Timestamp("now", tz="UTC").floor("h")
@@ -198,7 +202,7 @@ def append_all(smet_dir: Path,
     updated = 0
     counts = {}
     for p in smet_files:
-        n = append_cluster_smet(p, until=until, dry_run=dry_run)
+        n = append_cluster_smet(p, until=until, dry_run=dry_run, station_id=station_id)
         counts[p.stem] = n
         total += n
         if n:
@@ -225,10 +229,25 @@ def main() -> None:
                              "default: current hour UTC")
     parser.add_argument("--dry-run", action="store_true",
                         help="Report gaps without writing")
+    parser.add_argument("--project-dir", default=None,
+                        help="Project directory; resolves slope_config.toml for station ID")
+    parser.add_argument("--slope-name", default=None,
+                        help="Slope name (used with --project-dir)")
     args = parser.parse_args()
 
     until = (pd.Timestamp(args.until, tz="UTC") if args.until
              else pd.Timestamp("now", tz="UTC").floor("h"))
+
+    # Resolve primary station from config when slope is specified
+    active_station_id = None
+    if args.project_dir and args.slope_name:
+        _toml = Path(args.project_dir) / "slopes" / args.slope_name / "slope_config.toml"
+        if _toml.exists():
+            import sys as _sys
+            _sys.path.insert(0, str(Path(args.project_dir) / "src" / "avachain"))
+            from config import ProjectConfig as _PC
+            _cfg = _PC.from_toml(_toml)
+            active_station_id = _cfg.summit_id or None
 
     if args.cluster is not None:
         pattern = f"cluster_{args.cluster:04d}_cluster_{args.cluster:04d}.smet"
@@ -240,10 +259,12 @@ def main() -> None:
                 raise SystemExit(f"No SMET file found for cluster {args.cluster} "
                                  f"in {args.smet_dir}")
             p = candidates[0]
-        n = append_cluster_smet(p, until=until, dry_run=args.dry_run)
+        n = append_cluster_smet(p, until=until, dry_run=args.dry_run,
+                                station_id=active_station_id)
         print(f"  {p.name}: {n} rows {'would be ' if args.dry_run else ''}appended")
     else:
-        append_all(args.smet_dir, until=until, dry_run=args.dry_run)
+        append_all(args.smet_dir, until=until, dry_run=args.dry_run,
+                   station_id=active_station_id)
 
 
 if __name__ == "__main__":

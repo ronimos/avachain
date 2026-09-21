@@ -17,7 +17,7 @@ import pandas as pd
 import rasterio
 
 from config import ProjectConfig
-from smet_writer import load_and_convert
+from smet_writer import load_and_convert, station_config_from_cfg
 
 
 # =====================================================================
@@ -137,7 +137,8 @@ def load_transport_meta(cfg: ProjectConfig) -> list:
 
 def load_weather(cfg: ProjectConfig) -> pd.DataFrame:
     """Load and convert weather CSV to SI units with UTC timestamps."""
-    wx = load_and_convert(str(cfg.weather_csv), tz_output="UTC")
+    wx = load_and_convert(str(cfg.weather_csv), tz_output="UTC",
+                          station=station_config_from_cfg(cfg, "summit"))
     print(f"Weather: {wx.index[0]} → {wx.index[-1]}, {len(wx)} hours")
     return wx
 

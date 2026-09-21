@@ -16,9 +16,38 @@ probability envelopes.
 # Full rebuild (new DEM, first setup, or major config change)
 ./run_full_pipeline.sh
 
-# Operational update (after a new UAS survey)
-./run_operational.sh --snapshot 2026-01-17
+# Operational update after a new UAS survey (Little Professor)
+./run_little_prof.sh --snapshot 2026-01-17
+
+# List all configured slopes
+python install.py --list
 ```
+
+---
+
+## Multi-slope deployment
+
+Each slope is described by a `slope_config.toml` file.  The `install.py` script
+reads it to create the directory structure, find the closest WRF forecast grid
+cell, generate SNOWPACK configs, and write the slope-specific run scripts.
+
+```bash
+# 1. Copy the template and fill in your slope's paths and station IDs
+cp slopes/template/slope_config.toml slopes/<your_slope>/slope_config.toml
+$EDITOR slopes/<your_slope>/slope_config.toml
+
+# 2. Run the installer
+python install.py --slope <your_slope>
+
+# 3. Drop DEM, template.sno, boundary files, and first survey (see docs below)
+
+# 4. Run the full pipeline once
+./run_<your_slope>.sh --full   # or step by step — see docs/new_slope_setup.md
+```
+
+**Full guide:** [`docs/new_slope_setup.md`](docs/new_slope_setup.md)
+
+---
 
 ---
 
@@ -299,6 +328,7 @@ shapely, scipy, matplotlib, dask, zarr, folium.
 
 | Document | Description |
 |----------|-------------|
+| `docs/new_slope_setup.md` | Step-by-step guide for adding and running a new slope |
 | `docs/release_area_geometry.md` | Release area method: BFS model, probabilistic model, validation |
 | `docs/clustering_methods.md` | Clustering algorithm, quality metrics, group comparison |
 | `docs/TODO.md` | Prioritized task list |

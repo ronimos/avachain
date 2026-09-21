@@ -1,7 +1,8 @@
 """
 Project configuration for distributed SNOWPACK forcing generation.
 
-Edit paths and station metadata to match your setup.
+For multi-slope deployments, use ProjectConfig.from_toml() instead of editing
+this file directly.  See slopes/template/slope_config.toml for the format.
 """
 
 from dataclasses import dataclass, field
@@ -28,6 +29,24 @@ class ProjectConfig:
     # keep working until the data is physically moved to /data/snowpack/.
     slope_name: str = "little_prof"
     slope_dir: Path = Path("snowpack/little_prof")
+
+    # --- Station list (full dicts from [[stations]] in slope_config.toml) ---
+    # Used by sql_util.stations_from_cfg() to know which SQL columns to fetch.
+    # Each entry: {role, sql_id, name, lat, lon, elev_m, sql_columns}
+    stations: list = field(default_factory=lambda: [
+        {"role": "summit", "sql_id": "CAABT", "name": "A-Basin SA-Summit",
+         "lat": 39.6424, "lon": -105.8718, "elev_m": 3798.3,
+         "sql_columns": ["swin", "temp", "dewp", "rh", "wspd", "wdir",
+                         "gust", "mxtemp24h", "mntemp24h"]},
+        {"role": "base", "sql_id": "CAABM", "name": "A-Basin SA-Base",
+         "lat": 39.6424, "lon": -105.8718, "elev_m": 3554.0,
+         "sql_columns": ["pcpac", "depth", "snow24h"]},
+    ])
+
+    # --- WRF forecast forcing ---
+    # Closest WRF grid cell; populated by install.py from the [wrf] TOML section.
+    wrf_smet_file: Optional[Path] = None   # aspect-matched .smet file for this slope
+    wrf_smet_dir:  Optional[Path] = None   # grid-cell directory (all aspect variants)
     release_geojson: Path = Path("data/boundaries/avalanche_release_area.geojson")
 
     # --- Scenario defaults ---
@@ -100,7 +119,12 @@ class ProjectConfig:
 
     @property
     def boundaries_dir(self) -> Path:
-        return self.project_dir / "data" / "boundaries"
+        return self.boundary_kml.parent
+
+    @property
+    def weather_cache_dir(self) -> Path:
+        """Shared weather-station parquet cache — not slope-namespaced."""
+        return self.project_dir / "outputs" / "weather"
 
     @property
     def avalanche_events_path(self) -> Path:
@@ -200,4 +224,51 @@ class ProjectConfig:
                   self.smet_dir, self.grids_dir, self.resampled_dir,
                   self.scenarios_dir, self.models_dir, self.logs_dir]:
             d.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def from_toml(cls, toml_path: "str | Path") -> "ProjectConfig":
+        """Load a ProjectConfig from a slope_config.toml file."""
+        import tomllib
+        with open(toml_path, "rb") as f:
+            data = tomllib.load(f)
+
+        paths     = data.get("paths", {})
+        slope     = data.get("slope", {})
+        scenarios = data.get("scenarios", {})
+        wrf       = data.get("wrf", {})
+        stations  = {s["role"]: s for s in data.get("stations", [])}
+        summit    = stations.get("summit", {})
+        base      = stations.get("base", {})
+
+        slope_name = slope.get("name", "slope")
+
+        return cls(
+            project_dir=Path(paths.get("project_dir", ".")),
+            dem_path=Path(paths.get("dem", "data/dem/dem.tif")),
+            survey_dir=Path(paths.get("survey_dir", "data/surveys")),
+            weather_csv=Path(paths.get("weather_csv", "data/weather/weather_data.csv")),
+            boundary_kml=Path(paths.get("boundary_kml", "data/boundaries/boundary.kml")),
+            start_zone_kml=Path(paths.get("start_zone_kml", "data/boundaries/start_zone.kml")),
+            release_geojson=Path(paths.get("release_geojson",
+                                           "data/boundaries/avalanche_release_area.geojson")),
+            output_dir=Path(paths.get("output_dir", "outputs")),
+            windninja_library_dir=Path(paths.get("windninja_library_dir", "windninja/library")),
+            slope_name=slope_name,
+            slope_dir=Path(paths.get("slope_dir", f"snowpack/{slope_name}")),
+            summit_id=summit.get("sql_id", ""),
+            summit_lat=float(summit.get("lat", 0.0)),
+            summit_lon=float(summit.get("lon", 0.0)),
+            summit_alt_m=float(summit.get("elev_m", 0.0)),
+            base_id=base.get("sql_id", ""),
+            base_lat=float(base.get("lat", 0.0)),
+            base_lon=float(base.get("lon", 0.0)),
+            base_alt_m=float(base.get("elev_m", 0.0)),
+            n_triggers=int(scenarios.get("n_triggers", 5)),
+            size_factors=list(scenarios.get("size_factors", [0.70, 0.85, 1.00, 1.15, 1.30])),
+            depth_percentiles=list(scenarios.get("depth_percentiles", [10, 50, 90])),
+            stauchwall_deg=float(scenarios.get("stauchwall_deg", 28.0)),
+            stations=data.get("stations", []),
+            wrf_smet_file=Path(wrf["wrf_smet_file"]) if wrf.get("wrf_smet_file") else None,
+            wrf_smet_dir= Path(wrf["wrf_smet_dir"])  if wrf.get("wrf_smet_dir")  else None,
+        )
             
