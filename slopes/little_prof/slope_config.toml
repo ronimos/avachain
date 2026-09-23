@@ -1,13 +1,14 @@
 # slope_config.toml — Little Professor slope
 
 [slope]
-name         = "little_prof"
-display_name = "Little Professor"
-aspect_deg   = 67.5
-elevation_m  = 3700
-latitude     = 39.63
-longitude    = -105.87
-notes        = "NE-facing slope above treeline; primary study slope for CDOT/ISSW 2026"
+name             = "little_prof"
+display_name     = "Little Professor"
+aspect_deg       = 67.5
+slope_angle_deg  = 38.0
+elevation_m      = 3700
+latitude         = 39.63
+longitude        = -105.87
+notes            = "NE-facing slope above treeline; primary study slope for CDOT/ISSW 2026"
 
 [paths]
 project_dir           = "/home/snowpath/avachain"
@@ -24,7 +25,8 @@ slope_dir             = "snowpack/little_prof"
 [snowpack]
 binary     = "/home/caic/caic/rtsys/snowpack/exe/snowpack"
 lib_dir    = "/home/caic/caic/rtsys/snowpack/src/snowpack/lib"
-season_end = "2026-03-31"
+season_start      = "2025-10-01"
+season_end        = "2026-03-31"
 max_parallel_jobs = 30
 
 [[stations]]

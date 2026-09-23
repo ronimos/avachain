@@ -912,6 +912,52 @@ def _render_run_operational(cfg: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# template.sno
+# ---------------------------------------------------------------------------
+
+_TEMPLATE_SNO = """\
+SMET 1.1 ASCII
+[HEADER]
+station_id       = WRFPT
+station_name     = WRFNAME
+latitude         = WRFLAT
+longitude        = WRFLON
+altitude         = WRFELEV
+nodata           = -999
+tz               = 0
+source           = CAIC
+ProfileDate      = {profile_date}
+HS_Last          = 0.0000
+SlopeAngle       = {slope_angle}
+SlopeAzi         = {slope_azi}
+nSoilLayerData   = 0
+nSnowLayerData   = 0
+SoilAlbedo       = 0.09
+BareSoil_z0      = 0.200
+CanopyHeight     = 0.00
+CanopyLeafAreaIndex = 0.00
+CanopyDirectThroughfall = 1.00
+WindScalingFactor = 1.00
+ErosionLevel     = 0
+TimeCountDeltaHS = 0.000000
+fields           = timestamp Layer_Thick  T  Vol_Frac_I  Vol_Frac_W  Vol_Frac_V  Vol_Frac_S Rho_S Conduc_S HeatCapac_S  rg  rb  dd  sp  mk mass_hoar ne CDot metamo
+[DATA]
+"""
+
+
+def _render_template_sno(cfg: dict) -> str:
+    slope = cfg["slope"]
+    sp    = cfg.get("snowpack", {})
+    season_start = sp.get("season_start", "")
+    profile_date = f"{season_start}T12:00" if season_start else "YYYY-MM-DDT12:00"
+    return _TEMPLATE_SNO.format(
+        profile_date = profile_date,
+        slope_angle  = f"{slope.get('slope_angle_deg', 0.0):.1f}",
+        slope_azi    = f"{slope.get('aspect_deg', 0.0):.1f}",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 
@@ -922,6 +968,10 @@ def _validate(cfg: dict) -> list[str]:
         warnings.append(f"SNOWPACK binary not found: {sp['binary']}")
     if sp.get("season_end", "YYYY-MM-DD") == "YYYY-MM-DD":
         warnings.append("snowpack.season_end is not set — edit the TOML before running SNOWPACK")
+    if sp.get("season_start", "YYYY-MM-DD") in ("YYYY-MM-DD", ""):
+        warnings.append("snowpack.season_start is not set — template.sno ProfileDate will be a placeholder")
+    if not cfg["slope"].get("slope_angle_deg"):
+        warnings.append("slope.slope_angle_deg is not set — template.sno SlopeAngle will be 0.0")
     stations = {s["role"]: s for s in cfg.get("stations", [])}
     for role in ("summit", "base"):
         if role not in stations:
@@ -1013,7 +1063,10 @@ Examples:
     cfg          = _load_toml(toml_path)
     slope_name   = cfg["slope"]["name"]
     display_name = cfg["slope"].get("display_name", slope_name)
-    project_dir  = Path(cfg["paths"]["project_dir"])
+    # Always use install.py's own location as the project root so the script
+    # works correctly regardless of what project_dir is set to in the TOML.
+    project_dir  = repo_root
+    cfg["paths"]["project_dir"] = str(project_dir)
 
     print(f"\n=== Installing slope: {display_name} ({slope_name}) ===\n")
 
@@ -1058,6 +1111,17 @@ Examples:
         print(f"Wrote {ini_path.relative_to(project_dir)}")
     print()
 
+    # --- template.sno ---
+    paths        = cfg["paths"]
+    slope_dir    = project_dir / paths.get("slope_dir", f"snowpack/{slope_name}")
+    template_sno = slope_dir / "input" / "snow" / "template.sno"
+    if template_sno.exists():
+        print(f"Skipping template.sno (already exists — delete to regenerate)")
+    else:
+        template_sno.write_text(_render_template_sno(cfg))
+        print(f"Wrote {template_sno.relative_to(project_dir)}")
+    print()
+
     # --- run_snowpack.sh ---
     snowpack_script = project_dir / "slopes" / slope_name / "run_snowpack.sh"
     print(f"Writing {snowpack_script.relative_to(project_dir)} ...")
@@ -1079,8 +1143,7 @@ Examples:
     print("Next steps:")
     print(f"  1. Drop DEM          → {cfg['paths'].get('dem', f'data/{slope_name}/dem/')}")
     print(f"  2. Drop first survey → {cfg['paths'].get('survey_dir', f'data/{slope_name}/surveys/')}/")
-    print(f"  3. Drop template.sno → "
-          f"{cfg['paths'].get('slope_dir', f'snowpack/{slope_name}')}/input/snow/")
+    print(f"  3. Run full pipeline → ./run_full_pipeline.sh")
     print()
     # If this looks like an existing installation being re-run with a newly
     # namespaced output_dir, print the one-time migration commands.
@@ -1105,6 +1168,7 @@ Examples:
     print()
     print("Generated files:")
     print(f"  {ini_path}")
+    print(f"  {template_sno}")
     print(f"  {snowpack_script}")
     print(f"  {operational_script}")
     print("=" * 60)
