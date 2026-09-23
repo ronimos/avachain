@@ -623,7 +623,7 @@ def plot_meloche_comparison(meloche_df: pd.DataFrame, plots_dir: Path,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--project-dir',
-                        default='/home/ron/snowpack_model_feeder')
+                        default=None)
     parser.add_argument('--pro-dir',
                         default='/home/ron/snowpack/little_prof/output')
     parser.add_argument('--zarr-path',

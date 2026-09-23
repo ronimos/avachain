@@ -930,7 +930,7 @@ def _validate(cfg: dict) -> list[str]:
             warnings.append(f"No [[stations]] entry with role = \"{role}\"")
         elif not stations[role].get("sql_id"):
             warnings.append(f"stations[{role}].sql_id is empty")
-    if cfg["paths"].get("project_dir") in ("/path/to/snowpack_model_feeder", ""):
+    if cfg["paths"].get("project_dir") in ("/path/to/snowpack_model_feeder", "/path/to/avachain", ""):
         warnings.append("paths.project_dir still has the template placeholder value")
     output_dir = cfg["paths"].get("output_dir", "")
     if output_dir in ("outputs", ""):

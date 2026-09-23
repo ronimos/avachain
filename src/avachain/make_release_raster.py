@@ -15,6 +15,7 @@ Usage:
 """
 import argparse
 import json
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -23,7 +24,7 @@ import numpy as np
 import rasterio
 import xarray as xr
 
-PROJECT_DIR = Path("/home/ron/snowpack_model_feeder")
+PROJECT_DIR = Path(os.environ.get("PROJECT_DIR", ".")).resolve()
 ZARR_PATH   = Path("/home/ron/snowpack/little_prof/output/slope_snowpack.zarr")
 OUT_DIR     = PROJECT_DIR / "outputs/scenarios/jan18_release"
 
