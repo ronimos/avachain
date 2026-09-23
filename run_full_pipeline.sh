@@ -35,7 +35,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-PROJECT_DIR=/home/ron/snowpack_model_feeder
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SLOPE_SCRIPTS=$PROJECT_DIR/slopes/little_prof
 SLOPE_DIR=${SLOPE_DIR:-$PROJECT_DIR/snowpack/little_prof}
 PIPELINE="python $PROJECT_DIR/src/avachain/forcing_pipeline.py"

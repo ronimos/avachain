@@ -14,8 +14,9 @@
 [slope]
 name         = "template"        # short identifier, no spaces; used for directory names
 display_name = "My Slope"        # human-readable label for plots and reports
-aspect_deg   = 0.0               # predominant aspect, degrees clockwise from north (0 = N, 90 = E)
-elevation_m  = 3000              # representative elevation of the release zone (m)
+aspect_deg       = 0.0           # predominant aspect, degrees clockwise from north (0 = N, 90 = E)
+slope_angle_deg  = 0.0           # average slope angle of the release zone (degrees)
+elevation_m      = 3000          # representative elevation of the release zone (m)
 latitude     = 0.0               # approximate centre latitude (decimal degrees, positive north)
 longitude    = 0.0               # approximate centre longitude (decimal degrees, negative west)
 notes        = ""                # optional free-text notes
@@ -25,7 +26,7 @@ notes        = ""                # optional free-text notes
 # All paths except project_dir are resolved relative to project_dir.
 # ---------------------------------------------------------------------------
 [paths]
-project_dir          = "/home/ron/snowpack_model_feeder"     # absolute path to repo root
+project_dir          = "/path/to/avachain"                   # absolute path to repo root
 dem                  = "data/template/dem/dem.tif"
 survey_dir           = "data/template/surveys"
 weather_csv          = "data/template/weather/weather_data.csv"
@@ -40,9 +41,10 @@ slope_dir            = "snowpack/template"
 # [snowpack] — SNOWPACK model settings
 # ---------------------------------------------------------------------------
 [snowpack]
-binary     = "/home/caic/caic/rtsys/snowpack/exe/snowpack"
-lib_dir    = "/home/caic/caic/rtsys/snowpack/src/snowpack/lib"
-season_end = "YYYY-MM-DD"                       # SNOWPACK runs stop at this date (e.g. "2026-03-31")
+binary            = "/home/caic/caic/rtsys/snowpack/exe/snowpack"
+lib_dir           = "/home/caic/caic/rtsys/snowpack/src/snowpack/lib"
+season_start      = "YYYY-MM-DD"               # SNOWPACK season start date; sets ProfileDate in template.sno
+season_end        = "YYYY-MM-DD"               # SNOWPACK runs stop at this date (e.g. "2026-03-31")
 max_parallel_jobs = 30                          # max simultaneous SNOWPACK processes
 
 # ---------------------------------------------------------------------------

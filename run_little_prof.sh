@@ -23,9 +23,9 @@
 
 set -euo pipefail
 
-PROJECT_DIR=/home/ron/snowpack_model_feeder
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SLOPE_SCRIPTS=$PROJECT_DIR/slopes/little_prof
-SLOPE_DIR=${SLOPE_DIR:-/home/ron/snowpack_model_feeder/snowpack/little_prof}
+SLOPE_DIR=${SLOPE_DIR:-$PROJECT_DIR/snowpack/little_prof}
 TOML=$PROJECT_DIR/slopes/little_prof/slope_config.toml
 PIPELINE="python $PROJECT_DIR/src/avachain/forcing_pipeline.py --toml $TOML"
 ANALYSIS="python $PROJECT_DIR/src/avachain/analysis_pipeline.py --toml $TOML"
@@ -160,9 +160,7 @@ echo ">>> Step 2d: NWP forecast extension"
 step2d_start=$SECONDS
 NWP_EDATE=""
 if [[ $NO_NWP -eq 0 ]]; then
-    # Extend cluster SMETs with 48h WRF forecast (gracefully skips if /ssd not mounted)
     $NWP --lead-hours 48 || echo "    WARNING: nwp_ingest failed — continuing without NWP extension"
-    # Compute T_stable and T_stable+48h in one Python call
     _ts_output=$(python3 -c "
 import sys; sys.path.insert(0, '$PROJECT_DIR/src/avachain')
 from nwp_ingest import get_stable_ts
@@ -202,8 +200,6 @@ if [[ $REINIT -eq 1 ]]; then
             print((datetime.strptime('$EVENT_DATE','%Y-%m-%d')-timedelta(1)).strftime('%Y-%m-%d'))")
     fi
 
-    # Start from the last survey-grounded anchor so the pre-event simulation
-    # isn't contaminated by a prior NWP cycle's forecast state.
     echo "    Restoring anchor .sno (survey-grounded state) for pass 1"
     restore_anchor_sno
 
@@ -237,9 +233,6 @@ if [[ $REINIT -eq 1 ]]; then
     save_anchor_sno
 else
     if [[ -n "$STABLE_TS" && $NO_NWP -eq 0 ]]; then
-        # Two-pass: observed pass to T_stable → save anchor → forecast pass to T_stable+48h.
-        # The anchor captures the survey-grounded state before any WRF forcing is applied,
-        # so each 6h NWP cycle can re-simulate a consistent 48h forecast from real observations.
         echo "    Observed pass: → $STABLE_TS"
         bash "$SLOPE_SCRIPTS/run_snowpack.sh" "" "$STABLE_TS"
         echo ""
@@ -286,9 +279,9 @@ echo "  Step 2b (cluster_update):  $((step2b_elapsed / 60))m $((step2b_elapsed %
 echo "  Step 2c (smet):            $((step2c_elapsed / 60))m $((step2c_elapsed % 60))s"
 echo "  Step 2d (nwp_ingest):      $((step2d_elapsed / 60))m $((step2d_elapsed % 60))s"
 echo "  Step 3  (SNOWPACK):        $((step3_elapsed / 60))m $((step3_elapsed % 60))s"
-[[ $REINIT -eq 1 ]] && echo "    (two-pass: run → reinit → rerun)"
+[[ $REINIT -eq 1 ]] && echo "    (three-pass: run → reinit → rerun + anchor save)"
 echo "  Step 4  (analysis):        $((step4_elapsed / 60))m $((step4_elapsed % 60))s"
 echo ""
-echo "  Scenarios: $PROJECT_DIR/outputs/scenarios/"
+echo "  Scenarios: $PROJECT_DIR/outputs/little_prof/scenarios/"
 echo "  Log:       $LOGFILE"
 echo "============================================================"
