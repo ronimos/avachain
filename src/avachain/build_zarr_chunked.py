@@ -19,11 +19,8 @@ from snowpack_io import build_zarr_cache
 def main():
     parser = argparse.ArgumentParser(
         description="Build Zarr cache from .pro files")
-    parser.add_argument('--pro-dir',
-                        default='/home/snowpath/avachain/snowpack/little_prof/output')
-    parser.add_argument('--zarr-out',
-                        default='/home/snowpath/avachain/snowpack/little_prof/output/'
-                                'slope_snowpack.zarr')
+    parser.add_argument('--pro-dir',   default=None)
+    parser.add_argument('--zarr-out',  default=None)
     parser.add_argument('--batch-size', type=int, default=100)
     parser.add_argument('--workers',    type=int, default=31)
     parser.add_argument('--max-layers', type=int, default=338)

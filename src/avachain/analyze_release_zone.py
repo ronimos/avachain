@@ -624,11 +624,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--project-dir',
                         default=None)
-    parser.add_argument('--pro-dir',
-                        default='/home/ron/snowpack/little_prof/output')
-    parser.add_argument('--zarr-path',
-                        default='/home/ron/snowpack/little_prof/output/'
-                                'slope_snowpack.zarr')
+    parser.add_argument('--pro-dir',    default=None)
+    parser.add_argument('--zarr-path',  default=None)
     parser.add_argument('--release-geojson', default=None)
     parser.add_argument('--min-depth',  type=float, default=30.0)
     parser.add_argument('--snapshot-date', default='2026-01-18',

@@ -81,9 +81,7 @@ def values_for_polygon(cluster_raster, geom, raster_shape, raster_transform,
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--zarr',
-        default='/home/ron/snowpack_model_feeder/snowpack/little_prof/output/'
-                'slope_snowpack.zarr')
+    p.add_argument('--zarr', default=None)
     p.add_argument('--cluster-raster', required=True)
     p.add_argument('--release-area', required=True)
     p.add_argument('--skied-non-release', required=True)
