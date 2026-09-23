@@ -1054,6 +1054,8 @@ Examples:
                         help="List all configured slopes and exit")
     parser.add_argument("--skip-wrf", action="store_true",
                         help="Skip WRF zone discovery (useful when /ssd is not mounted)")
+    parser.add_argument("--force", action="store_true",
+                        help="Overwrite master_config.ini and template.sno even if they exist")
     args = parser.parse_args()
 
     repo_root = Path(__file__).parent
@@ -1117,9 +1119,8 @@ Examples:
 
     # --- master_config.ini ---
     ini_path = project_dir / "slopes" / slope_name / "config" / "master_config.ini"
-    # Don't overwrite an existing customised ini
-    if ini_path.exists():
-        print(f"Skipping master_config.ini (already exists at {ini_path})")
+    if ini_path.exists() and not args.force:
+        print(f"Skipping master_config.ini (already exists — use --force to overwrite)")
     else:
         ini_path.write_text(_render_master_ini(cfg))
         print(f"Wrote {ini_path.relative_to(project_dir)}")
@@ -1129,8 +1130,8 @@ Examples:
     paths        = cfg["paths"]
     slope_dir    = project_dir / paths.get("slope_dir", f"snowpack/{slope_name}")
     template_sno = slope_dir / "input" / "snow" / "template.sno"
-    if template_sno.exists():
-        print(f"Skipping template.sno (already exists — delete to regenerate)")
+    if template_sno.exists() and not args.force:
+        print(f"Skipping template.sno (already exists — use --force to overwrite)")
     else:
         template_sno.write_text(_render_template_sno(cfg))
         print(f"Wrote {template_sno.relative_to(project_dir)}")
