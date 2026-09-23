@@ -623,11 +623,11 @@ def plot_meloche_comparison(meloche_df: pd.DataFrame, plots_dir: Path,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--project-dir',
-                        default='/home/ron/snowpack_model_feeder')
+                        default='/home/snowpath/avachain')
     parser.add_argument('--pro-dir',
-                        default='/home/ron/snowpack/little_prof/output')
+                        default='/home/snowpath/avachain/snowpack/little_prof/output')
     parser.add_argument('--zarr-path',
-                        default='/home/ron/snowpack/little_prof/output/'
+                        default='/home/snowpath/avachain/snowpack/little_prof/output/'
                                 'slope_snowpack.zarr')
     parser.add_argument('--release-geojson', default=None)
     parser.add_argument('--min-depth',  type=float, default=30.0)

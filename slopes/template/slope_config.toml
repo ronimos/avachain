@@ -25,7 +25,7 @@ notes        = ""                # optional free-text notes
 # All paths except project_dir are resolved relative to project_dir.
 # ---------------------------------------------------------------------------
 [paths]
-project_dir          = "/home/ron/snowpack_model_feeder"     # absolute path to repo root
+project_dir          = "/path/to/avachain"                   # absolute path to repo root
 dem                  = "data/template/dem/dem.tif"
 survey_dir           = "data/template/surveys"
 weather_csv          = "data/template/weather/weather_data.csv"

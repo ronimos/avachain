@@ -166,8 +166,8 @@ _RUN_SNOWPACK_TEMPLATE = """\
 SNOWPACK_BIN={snowpack_bin}
 export LD_LIBRARY_PATH=${{LD_LIBRARY_PATH:-}}:{snowpack_lib}
 
-REPO_DIR={project_dir}
-SLOPE_DIR=${{SLOPE_DIR:-{slope_dir}}}
+REPO_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")/../.." && pwd)"
+SLOPE_DIR=${{SLOPE_DIR:-$REPO_DIR/{slope_dir_rel}}}
 SMET_DIR=${{SMET_DIR:-$REPO_DIR/outputs/smet}}
 SNOW_IN_DIR=$SLOPE_DIR/input/snow
 OUTPUT_DIR=$SLOPE_DIR/output
@@ -338,9 +338,9 @@ _RUN_OPERATIONAL_TEMPLATE = """\
 
 set -euo pipefail
 
-PROJECT_DIR={project_dir}
+PROJECT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 SLOPE_SCRIPTS=$PROJECT_DIR/slopes/{slope_name}
-SLOPE_DIR=${{SLOPE_DIR:-{slope_dir}}}
+SLOPE_DIR=${{SLOPE_DIR:-$PROJECT_DIR/{slope_dir_rel}}}
 TOML=$PROJECT_DIR/slopes/{slope_name}/slope_config.toml
 PIPELINE="python $PROJECT_DIR/src/avachain/forcing_pipeline.py --toml $TOML"
 ANALYSIS="python $PROJECT_DIR/src/avachain/analysis_pipeline.py --toml $TOML"
@@ -880,12 +880,11 @@ def _render_run_snowpack(cfg: dict) -> str:
     sp         = cfg.get("snowpack", {})
     project_dir = paths["project_dir"]
     slope_name  = slope["name"]
-    slope_dir   = str(Path(project_dir) / paths.get("slope_dir", f"snowpack/{slope_name}"))
+    slope_dir_rel = paths.get("slope_dir", f"snowpack/{slope_name}")
     return _RUN_SNOWPACK_TEMPLATE.format(
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,
-        project_dir   = project_dir,
-        slope_dir     = slope_dir,
+        slope_dir_rel = slope_dir_rel,
         snowpack_bin  = sp.get("binary", "/path/to/snowpack"),
         snowpack_lib  = sp.get("lib_dir", ""),
         season_end    = sp.get("season_end", "YYYY-MM-DD"),
@@ -899,14 +898,13 @@ def _render_run_operational(cfg: dict) -> str:
     sc          = cfg.get("scenarios", {})
     project_dir = paths["project_dir"]
     slope_name  = slope["name"]
-    slope_dir   = str(Path(project_dir) / paths.get("slope_dir", f"snowpack/{slope_name}"))
+    slope_dir_rel = paths.get("slope_dir", f"snowpack/{slope_name}")
     size_factors = sc.get("size_factors", [0.70, 0.85, 1.00, 1.15, 1.30])
     depth_pcts   = sc.get("depth_percentiles", [10, 50, 90])
     return _RUN_OPERATIONAL_TEMPLATE.format(
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,
-        project_dir   = project_dir,
-        slope_dir     = slope_dir,
+        slope_dir_rel = slope_dir_rel,
         n_triggers    = sc.get("n_triggers", 5),
         size_factors  = " ".join(str(x) for x in size_factors),
         depth_pcts    = " ".join(str(x) for x in depth_pcts),
@@ -930,7 +928,7 @@ def _validate(cfg: dict) -> list[str]:
             warnings.append(f"No [[stations]] entry with role = \"{role}\"")
         elif not stations[role].get("sql_id"):
             warnings.append(f"stations[{role}].sql_id is empty")
-    if cfg["paths"].get("project_dir") in ("/path/to/snowpack_model_feeder", ""):
+    if cfg["paths"].get("project_dir") in ("/path/to/snowpack_model_feeder", "/path/to/avachain", ""):
         warnings.append("paths.project_dir still has the template placeholder value")
     output_dir = cfg["paths"].get("output_dir", "")
     if output_dir in ("outputs", ""):

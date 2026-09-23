@@ -830,7 +830,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="Tune avalanche boundary detection on Jan 14-20 survey pair")
     parser.add_argument('--project-dir',
-                        default='/home/ron/snowpack_model_feeder')
+                        default='/home/snowpath/avachain')
     parser.add_argument('--canny-sigma',   type=float, default=2.0)
     parser.add_argument('--canny-low',     type=float, default=0.05)
     parser.add_argument('--canny-high',    type=float, default=0.08)
