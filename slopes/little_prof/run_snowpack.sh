@@ -15,7 +15,7 @@ export LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}:/home/caic/caic/rtsys/snowpack/src/s
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SLOPE_DIR=${SLOPE_DIR:-$REPO_DIR/snowpack/little_prof}
-SMET_DIR=${SMET_DIR:-$SLOPE_DIR/input/smet}
+SMET_DIR=${SMET_DIR:-$REPO_DIR/outputs/smet}
 SNOW_IN_DIR=$SLOPE_DIR/input/snow
 OUTPUT_DIR=$SLOPE_DIR/output
 MASTER_CFG=$REPO_DIR/slopes/little_prof/config/master_config.ini
