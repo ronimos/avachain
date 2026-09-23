@@ -769,6 +769,18 @@ def _find_best_wrf(cfg: dict) -> dict | None:
     }
 
 
+def _update_project_dir_in_toml(toml_path: Path, project_dir: Path) -> None:
+    """Write the resolved project_dir back into the [paths] section of the TOML."""
+    text = toml_path.read_text()
+    text = re.sub(
+        r'^(project_dir\s*=\s*)"[^"]*"',
+        rf'\g<1>"{project_dir}"',
+        text,
+        flags=re.MULTILINE,
+    )
+    toml_path.write_text(text)
+
+
 def _update_wrf_in_toml(toml_path: Path, wrf: dict) -> None:
     """Write WRF selection results back into the [wrf] section of the TOML."""
     text = toml_path.read_text()
@@ -1064,9 +1076,11 @@ Examples:
     slope_name   = cfg["slope"]["name"]
     display_name = cfg["slope"].get("display_name", slope_name)
     # Always use install.py's own location as the project root so the script
-    # works correctly regardless of what project_dir is set to in the TOML.
+    # works correctly regardless of where the repo is cloned. Write it back
+    # to the TOML so the Python pipeline always has the correct path at runtime.
     project_dir  = repo_root
     cfg["paths"]["project_dir"] = str(project_dir)
+    _update_project_dir_in_toml(toml_path, project_dir)
 
     print(f"\n=== Installing slope: {display_name} ({slope_name}) ===\n")
 

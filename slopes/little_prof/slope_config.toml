@@ -3,7 +3,7 @@
 [slope]
 name             = "little_prof"
 display_name     = "Little Professor"
-aspect_deg       = 67.5
+aspect_deg       = 90.0
 slope_angle_deg  = 38.0
 elevation_m      = 3700
 latitude         = 39.63
@@ -11,7 +11,7 @@ longitude        = -105.87
 notes            = "NE-facing slope above treeline; primary study slope for CDOT/ISSW 2026"
 
 [paths]
-project_dir           = "/home/snowpath/avachain"
+project_dir           = "/home/ron/avachain"
 dem                   = "data/dem/251110_Professor_Ground-DSM_aligned.tiff"
 survey_dir            = "data/surveys"
 weather_csv           = "data/weather/weather_data.csv"
