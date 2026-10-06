@@ -11,8 +11,11 @@ This replaces the survey-mode behaviour of step_smet (which rewrites all
 
 Between UAS surveys the spatial HS distribution stays frozen at the last
 survey — only the meteorological forcing columns (TA, RH, VW, DW, ISWR,
-ILWR, PSUM) update. HS in the SMET is held at the last-observed value for
-each cluster until a new survey corrects it.
+ILWR, PSUM) update. HS evolves from the last-observed cluster value using
+station ΔHS: positive increments (snowfall) are added uniformly; negative
+increments (settlement/melt) are applied as a proportional ratio, preserving
+the cluster's relative rank within the snowpack. This mirrors
+spatial_model.gap_fill_station_only() for the scalar (single-cluster) case.
 
 Design doc: docs/operational_mode_design_concept.md §2.1 and §6.1
 
@@ -23,9 +26,6 @@ Usage:
     python smet_append.py --dry-run            # report gaps without writing
 
 Called by run_daily.sh after aws_ingest.py confirms new data is available.
-
-TODO: wire the real per-cluster HS freeze logic once the gap-fill module
-      exposes a `current_hs_for_cluster(cluster_id, as_of)` helper.
 """
 
 from __future__ import annotations
@@ -83,6 +83,70 @@ def _read_smet_fields(smet_path: Path) -> list[str]:
     return []
 
 
+def _read_smet_last_hs(smet_path: Path) -> float | None:
+    """Return the last valid HS value (metres) written in a SMET file."""
+    fields = _read_smet_fields(smet_path)
+    if "HS" not in fields:
+        return None
+    hs_idx = fields.index("HS")
+    last_hs = None
+    in_data = False
+    with open(smet_path) as f:
+        for line in f:
+            line = line.strip()
+            if line == "[DATA]":
+                in_data = True
+                continue
+            if in_data and line and not line.startswith("#"):
+                parts = line.split()
+                if len(parts) > hs_idx:
+                    try:
+                        val = float(parts[hs_idx])
+                        if val >= 0:  # -999 nodata is negative
+                            last_hs = val
+                    except ValueError:
+                        pass
+    return last_hs
+
+
+def _propagate_hs_station_only(hs_start: float,
+                                stn_hs: pd.Series) -> pd.Series:
+    """
+    Propagate a cluster's HS forward using station ΔHS only.
+
+    Mirrors spatial_model.gap_fill_station_only() for the scalar case:
+    - Positive ΔHS (snowfall): add uniformly to cluster HS.
+    - Negative ΔHS (settlement/melt): proportional scaling, preserving
+      the cluster's relative rank within the snowpack.
+
+    stn_hs must include the anchor row at last_ts as its first element so
+    the first delta can be computed. Returns a Series indexed identically
+    to stn_hs.
+    """
+    stn_vals = stn_hs.values
+    current = float(hs_start)
+    result = []
+
+    for i in range(len(stn_vals)):
+        if i == 0:
+            result.append(current)
+            continue
+        stn_prev = stn_vals[i - 1]
+        stn_curr = stn_vals[i]
+        if np.isnan(stn_prev) or np.isnan(stn_curr):
+            result.append(current)
+            continue
+        dhs = stn_curr - stn_prev
+        if dhs >= 0:
+            current = max(current + dhs, 0.0)
+        else:
+            if stn_prev > 1e-6:
+                current = max(current * max(stn_curr / stn_prev, 0.0), 0.0)
+        result.append(current)
+
+    return pd.Series(result, index=stn_hs.index)
+
+
 def _format_smet_row(ts: pd.Timestamp, row: dict, fields: list[str]) -> str:
     """Format one hourly row as a SMET data line."""
     parts = []
@@ -113,12 +177,12 @@ def _format_smet_row(ts: pd.Timestamp, row: dict, fields: list[str]) -> str:
 
 def _load_met_for_period(since: pd.Timestamp,
                          until: pd.Timestamp,
-                         station_id: str | None = None) -> pd.DataFrame:
-    """Load met records from the AWS cache for [since, until].
+                         station_id: str | None = None,
+                         include_anchor: bool = False) -> pd.DataFrame:
+    """Load met records from the AWS cache for (since, until].
 
-    Returns a DataFrame indexed by UTC timestamp with columns matching
-    the SMET fields. Gaps are filled with -999 (SNOWPACK nodata) rather
-    than interpolated — SNOWPACK handles short gaps internally.
+    When include_anchor=True the row at exactly `since` is included so
+    callers can compute the first ΔHS delta against the anchor station value.
     """
     sid = station_id or PRIMARY_STATION
     cache = WEATHER_CACHE_DIR / f"{sid}.parquet"
@@ -129,7 +193,10 @@ def _load_met_for_period(since: pd.Timestamp,
 
     df = pd.read_parquet(cache)
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-    mask = (df["timestamp"] > since) & (df["timestamp"] <= until)
+    if include_anchor:
+        mask = (df["timestamp"] >= since) & (df["timestamp"] <= until)
+    else:
+        mask = (df["timestamp"] > since) & (df["timestamp"] <= until)
     return df[mask].set_index("timestamp").sort_index()
 
 
@@ -158,7 +225,11 @@ def append_cluster_smet(smet_path: Path,
         print(f"    WARNING: could not parse fields from {smet_path.name}")
         return 0
 
-    met = _load_met_for_period(last_ts, until, station_id=station_id)
+    # Load met including the anchor row at last_ts so we can compute the
+    # first ΔHS delta against the station value at that timestamp.
+    met_full = _load_met_for_period(last_ts, until, station_id=station_id,
+                                    include_anchor=True)
+    met = met_full[met_full.index > last_ts]
     if met.empty:
         return 0
 
@@ -167,16 +238,21 @@ def append_cluster_smet(smet_path: Path,
               f"({last_ts} → {until})")
         return 0
 
-    # HS stays frozen at the last-observed cluster value between surveys.
-    # TODO: replace np.nan with gap_fill.current_hs_for_cluster(cluster_id, last_ts)
-    # once that helper is implemented.
-    frozen_hs = np.nan
+    # Propagate cluster HS forward using station ΔHS (mirrors
+    # spatial_model.gap_fill_station_only for the scalar case).
+    # Falls back to the frozen last value when station HS is unavailable.
+    last_hs = _read_smet_last_hs(smet_path)
+    if last_hs is not None and "HS" in met_full.columns:
+        hs_series = _propagate_hs_station_only(last_hs, met_full["HS"])
+        hs_lookup = hs_series[hs_series.index > last_ts].to_dict()
+    else:
+        hs_lookup = {ts: last_hs for ts in met.index}
 
     lines = []
     for ts, row in met.iterrows():
         row_dict = row.to_dict()
         if "HS" in fields:
-            row_dict["HS"] = frozen_hs
+            row_dict["HS"] = hs_lookup.get(ts, last_hs)
         lines.append(_format_smet_row(ts, row_dict, fields))
 
     with open(smet_path, "a") as f:
