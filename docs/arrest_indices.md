@@ -223,46 +223,47 @@ Jan 18 slab is ~3× thicker and ~30% denser than the JGR calibration. The WL is 
 ### Arrest length comparison
 
 Figures from `outputs/little_prof/plots/arrest_indices_2026-01-18.png`.
+Numbers from `scripts/plot_arrest_indices_jan18.py` (enriched from regenerated CSV, Oct 6 pipeline run, 5176 clusters).
 
-**Eq. 20 (brittle slab, C = 0.045, δ = 1)**
+**Summary table — medians per group**
 
-Using the full gravitational shear τg = ρgh sin ψ (corrected from the friction-adjusted formula used previously):
+| Metric | Release | Adjacent | Reference |
+|---|---|---|---|
+| R0 = G_c(τp0)/G_slab | 0.4 | 0.5 | 0.6 |
+| τp* (kPa, δ=1) | 2.84 | 2.25 | 2.31 |
+| A_ca Eq.20, C=0.045 (m) | 61.9 | 70.1 | 141.3 |
+| A_ca energy, δ=1 (m) | 8.5 | 0.0 | 0.0 |
+| A_ca energy, δ=0 (m) | 62.5 | 29.8 | 47.8 |
 
-| Group | A_ca (m) median | A_ca range (m) |
-|---|---|---|
-| Release | ~36 | 10–200 |
-| Adjacent | ~60 | 10–500 |
+**R0 ordering:** release (0.4) < adjacent (0.5) < reference (0.6), consistent with R_FIT = 0.48. Release zone median R0 is below the arrest threshold — WL cannot arrest the crack at the trigger point. Dashed line at R_FIT = 0.48 in panel (a) separates the bulk of the release distribution from reference.
 
-Release zone has shorter arrest lengths than adjacent — correct direction. Medians will update from the regenerated CSV once the pipeline completes.
+**Eq. 20:** release (61.9 m) < adjacent (70.1 m) — correct direction; crack needs to travel farther to arrest in lower-gradient (adjacent) terrain.
 
-**Energy cap (δ = 1, default)**
+**Energy cap (δ = 1, default):**
+τp* (2.84 kPa for release) falls slightly above τp0 (≈ 2.6 kPa), so release clusters have finite A_ca_energy ≈ 8.5 m. Adjacent clusters have τp* < τp0 → A_ca_energy = 0 (crack would arrest immediately there). Ordering is release > adjacent ✓.
 
-With δ = 1 and the Jan 18 slab (thick h = 1.63 m, soft WL K_wl = 2.67 MPa/m), τp* ≈ 2.45 kPa falls below the observed τp0 = 2.61 kPa for most release clusters. This means R0 > R_FIT for the majority of clusters: the crack is in a non-arrest regime from the start. A_ca_energy saturates at zero.
+**Energy cap (δ = 0, JGR calibration default):**
+δ = 0 spreads out all distributions. Release (62.5 m) > adjacent (29.8 m) ✓. Reference sits between at 47.8 m.
 
-**Energy cap (δ = 0, JGR calibration default)**
-
-With δ = 0, τp* ≈ 3.47 kPa, which exceeds τp0 in all groups. A_ca_energy is finite and discriminates:
-
-| Group | A_ca_energy δ=0 (m) median |
-|---|---|
-| Release | ~28 |
-| Adjacent | ~48 |
-
-The δ sensitivity reveals a real ambiguity: for the Jan 18 slab geometry, δ = 0 gives useful discrimination while δ = 1 collapses A_ca_energy to zero. The JGR paper calibrated on δ = 0 runs (Fig. 8); the JBC δ = 1 run is a single out-of-sample point. For depth hoar (little post-peak softening), δ = 0 is the better-supported default.
+The δ sensitivity remains important: δ = 1 gives very small A_ca (8.5 m) for release and zero for adjacent — nearly indiscriminate. δ = 0 shows a cleaner 2× spread. The JGR paper calibrated on δ = 0 runs; for depth hoar (little post-peak softening), δ = 0 is better-supported.
 
 ### Comparison of frameworks
 
 | | Eq. 20 (brittle) | Energy cap |
 |---|---|---|
-| **A_ca median, release** | ~36 m | 0 m (δ=1); ~28 m (δ=0) |
-| **A_ca median, adjacent** | ~60 m | 0 m (δ=1); ~48 m (δ=0) |
-| **Release < adjacent?** | ✓ | ✓ (δ=0 only) |
-| **Sensitive to δ?** | Moderate (through (1+δ)^−½) | Strong: δ=1 makes τp* < τp0 |
+| **A_ca median, release** | 61.9 m | 8.5 m (δ=1); 62.5 m (δ=0) |
+| **A_ca median, adjacent** | 70.1 m | 0.0 m (δ=1); 29.8 m (δ=0) |
+| **Release > adjacent?** | ✓ (narrow) | ✓ δ=1 (narrow); ✓ δ=0 (2×) |
+| **R0 ordering** | n/a | release (0.4) < adj (0.5) < ref (0.6) ✓ |
+| **Best IoU (threshold sweep)** | 0.353 @ 129 m | 0.240 δ=1; 0.256 δ=0 |
+| **Best recall at best IoU** | 0.815 | 0.713 δ=1; 0.666 δ=0 |
+| **Sensitive to δ?** | Moderate (through (1+δ)^−½) | Strong: changes which group has A_ca = 0 |
 | **Sensitive to h?** | Moderate (through L_t, Λ) | Strong: G_slab ∝ h |
 | **Key discriminant** | θ, Λ, σt/τg ratio | R0 = G_c(τp0)/G_slab |
-| **Jan 18 IoU** | see `scripts/plot_arrest_indices_jan18.py` | see same script |
 
-R0 is the cleanest single-number discriminant that does not require θ. A cluster with R0 < R_FIT (0.48) means the WL at that point cannot absorb the slab energy — crack propagates.
+Eq. 20 outperforms the energy cap on this event: IoU 0.353 vs 0.240–0.256. R0 gives lower IoU (0.192) but correctly orders all three groups. The energy cap's A_ca_energy_d0 gives the next-best IoU (0.256) and its R0 interpretation provides a simple threshold-free discriminant.
+
+R0 is the cleanest single-number discriminant that does not require θ. A cluster with R0 < R_FIT (0.48) means the WL at that point cannot absorb the slab energy — crack propagates. The Jan 18 release zone has median R0 = 0.4 (below threshold) while adjacent = 0.5 (above threshold), consistent with the observed release boundary.
 
 ### IoU evaluation
 
