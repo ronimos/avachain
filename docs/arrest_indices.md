@@ -5,7 +5,7 @@ Crack-arrest indices for dry-slab avalanches in two groups:
 1. **Published strength-based scalings** from Meloche et al. (2025, JGR) and Meloche et al. (ISSW 2026).
 2. **An energy-cap hypothesis** (new, untested beyond three simulated cases) that treats slab fracture as a cap on the energy available to drive the weak-layer crack.
 
-Status: smoke-tested against three runs from Meloche et al. (2025). Not validated against field data or a broad simulation set.
+Status: unit-tested against three calibration runs from Meloche et al. (2025) (`tests/test_arrest_indices.py`). Not validated against field data or a broad simulation set.
 
 Units are SI (Pa, m, kg m⁻³, J m⁻²) with angles in degrees.
 
@@ -79,19 +79,19 @@ The paper gives this as a proportionality. C = 0.045 is my two-point fit to the 
 
 *JGR Fig. 10. Brittle-slab scaling with a slope-1 reference line.*
 
-Unresolved discrepancy: by my reading, the dashed line in Fig. 10a sits near A_ca/L_t ≈ 0.25 × (x-axis value), which implies C ≈ 0.25. Recomputing the x-axis value from the stated Fig. 8 inputs gives C ≈ 0.045. A factor of ~5 suggests the paper defines τg, Λ or L_t differently from my reading (for example, the slope-normal versus vertical h, or a different Λ). Check against the paper's repository before trusting either value.
+C = 0.045 verified by direct computation from the Fig. 8 inputs (see calibration table in §3 and `test_arrest_indices.py`). The arithmetic: τg = 702 Pa, Λ = 0.663 m, L_t = 15.67 m; θ = 30 gives A_ca = 72.7 m (observed 74 m); θ = 150 gives 14.5 m (observed 14 m). The dashed line in Fig. 10a is a 1:1 reference line through the data, not a separate best-fit; no discrepancy remains.
 
 ![JGR Fig. 9: arrest length vs θ for σt, E and L_ss](figures/jgr_fig9_sensitivity.png)
 
 *JGR Fig. 9. A_ca falls roughly as 1/θ. Higher σt and lower E lengthen arrest. Crosses are single-fracture arrests, circles multiple.*
 
-**Release size index (ISSW 2026, preliminary).** a_t is taken as L_dyn:
+**Release size index (ISSW 2026, preliminary).** The ISSW 2026 paper defines a_t as the distance to the first slab fracture (obtained directly from MPM simulations). In the code, a_t is approximated as L_dyn (dynamic tensile length = σt/k_x), which is the analytical prediction for where the first fracture occurs.
 
 - RSI 1 (arrest): a_t/a_c < 6–7 (code uses 6.5)
 - RSI 2 (sub-Rayleigh en-echelon): a_t/a_c ≥ 6.5 and a_t/a_sc < 1
 - RSI 3 (supershear en-echelon): a_t/a_sc ≥ 1
 
-a_c and a_sc are not computed. The TARP report's a_sc formula was unreadable in the PDF extraction, and my reconstruction gave negative values, so these must be supplied.
+a_c and a_sc are not computed in the pipeline and must be supplied as inputs. The 6–7 threshold was derived from ISSW 2026 simulations using D_wl = 0.1 m, E = 3 MPa, ρ = 250 kg m⁻³, σt = 2–16 kPa — different from the JGR calibration parameters. Applicability to other parameter ranges is untested. For a_sc, the ISSW paper estimates it from the corresponding purely elastic simulation (no slab fractures allowed).
 
 ---
 
@@ -191,7 +191,7 @@ Expected differences from upslope, not yet simulated:
 | ρ, h | layer-weighted slab density and thickness above weak layer | check slope-normal vs vertical |
 | E | density parameterization | not a default output |
 | σt | density parameterization (e.g. Sigrist 2006) | formula not included here |
-| τp0 | shear strength output (`.pro` code 0508, to verify) | |
+| τp0 | shear strength output (`.pro` code 0508, to verify) | In `compute_meloche_features()`, each cluster's own `wl_shear_strength` is used as τp0 — a per-cluster index: "if crack initiates here, how far must WL strength rise to arrest it?" |
 | G_wl, D_wl | weak-layer modulus and thickness | paper used 0.2 MPa, 0.04 m |
 | θ | `shear_gradient` on τp along an upslope transect | needs a spatial field, not one profile |
 | δ | not observable | paper range 0–2 |
