@@ -100,14 +100,19 @@ class TestMeloche2025Calibration:
         )
 
     def test_tau_p_star_similar_for_fig8a_and_fig8b(self):
-        # Both runs use the same sigma_t, h, E, K_wl, delta=0 → same tau_p*
+        # Both runs share sigma_t, h, E, K_wl, delta=0 → tau_p* is identical by construction
         # (threshold-strength property: arrest happens at nearly constant WL strength)
         a = _ev(**_FIG8A)['tau_p_star']
         b = _ev(**_FIG8B)['tau_p_star']
-        assert abs(a - b) <= 200.0, (
+        assert abs(a - b) <= 100.0, (
             f"Fig8a tau_p_star={a:.0f} Pa, Fig8b tau_p_star={b:.0f} Pa; "
-            f"expected within 200 Pa"
+            f"expected within 100 Pa"
         )
+
+    def test_tau_p_star_value_fig8a(self):
+        # Arithmetic: K_wl=5e6, G_slab≈2.047 J/m², tau_p*=sqrt(2*5e6*0.48*2.047)≈3135 Pa
+        out = _ev(**_FIG8A)
+        assert out['tau_p_star'] == pytest.approx(3135.0, abs=50.0)
 
     def test_sustained_true_above_friction_angle(self):
         out = _ev(**_FIG8A)
