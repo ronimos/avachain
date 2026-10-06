@@ -27,6 +27,12 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import xarray as xr
+from arrest_indices import evaluate as _ai_evaluate
+
+# Slab/weak-layer material constants shared across profile_features and
+# compute_meloche_features (Reiweger et al. 2010; Gaume et al. 2018)
+G_WL = 0.2e6    # weak-layer shear modulus (Pa)
+NU   = 0.3      # slab Poisson's ratio
 
 # SNOWPACK grain type codes (first digit = grain class)
 WL_TYPES   = set(range(400, 500)) | set(range(500, 600))  # FC (4xx), DH (5xx)
@@ -240,7 +246,7 @@ def profile_features(ds_t_loc, min_depth_cm: float) -> dict:
         return {}
 
     result = {'hs': hs}
-    nu = 0.3   # Poisson's ratio (fixed, Gaume et al. 2018)
+    nu = NU
 
     slab_m, wl_m, interface_z = split_wl_slab(gt, z)
 
@@ -355,9 +361,8 @@ def profile_features(ds_t_loc, min_depth_cm: float) -> dict:
         E_slab  = (rho / 300.0)**2.5 * 4.0e6             # Pa
         # Slab tensile strength — ~5 kPa at ρ=300 kg/m³ (Meloche 2-10 kPa range)
         sigma_t = (rho / 300.0)**1.4 * 5.0e3             # Pa
-        G_wl    = 0.2e6                                   # Pa (Reiweger et al. 2010)
-        E_prime = E_slab / (1.0 - nu**2)                 # apparent Young's modulus
-        K_wl    = G_wl / D_wl_m                          # WL stiffness (Pa/m)
+        E_prime = E_slab / (1.0 - nu**2)
+        K_wl    = G_WL / D_wl_m
         Lambda  = float(np.sqrt(E_prime * h_m / K_wl))  # characteristic elastic length (m)
         result['E_slab']  = E_slab
         result['sigma_t'] = sigma_t
@@ -603,32 +608,49 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
                              'slope_angle': psi_deg})
             continue
 
-        # Dimensionless numbers (Eqs. 19, 20)
-        denom   = theta * Lambda * np.sqrt(1.0 + DELTA)
-        Pi1     = tau_g / denom                           # elastic number
-        Pi2     = Pi1 * np.sqrt(sigma_t / tau_g)         # brittle number
+        D_wl_val = row.get('wl_thickness', np.nan)
+        if np.isnan(D_wl_val) or D_wl_val <= 0:
+            D_wl_val = 0.04   # fallback to Meloche et al. paper default
+        tau_p0_val = row.get('wl_shear_strength', np.nan)
 
-        # Quasi-static tensile length (normalisation for brittle Aca)
-        L_t     = sigma_t / (rho * G_GRAV * sin_psi *
-                              (1.0 - np.tan(phi_rad)/np.tan(psi_rad)))
+        ai = _ai_evaluate(
+            rho=rho, h=h_m, psi_deg=psi_deg, E=E_slab,
+            sigma_t=sigma_t, D_wl=D_wl_val, G_wl=G_WL,
+            theta=theta, nu=NU, phi_deg=PHI_DEG, delta=DELTA,
+            tau_p0=tau_p0_val if not np.isnan(tau_p0_val) else None,
+        )
 
-        # Crack arrest length estimates (proportionality from Eqs. 19, 20)
-        # Proportionality constant ≈ 1 from Figure 7/10 (1:1 line in log scale)
+        tau_g_ai   = ai['tau_g']
+        Lambda_ai  = ai['Lambda']
+        L_t_ai     = ai.get('L_t', np.nan)
+        A_ca_ai    = ai.get('A_ca', np.nan)
+        G_slab     = ai.get('G_slab', np.nan)
+        tau_p_star = ai.get('tau_p_star', np.nan)
+        R0         = ai.get('R0', np.nan)
+        A_ca_energy = ai.get('A_ca_energy', np.nan)
+
+        # Dimensionless numbers (Meloche et al. 2025 Eqs. 19, 20)
+        denom        = theta * Lambda_ai * np.sqrt(1.0 + DELTA)
+        Pi1          = tau_g_ai / denom
+        Pi2          = Pi1 * np.sqrt(sigma_t / tau_g_ai)
         A_ca_elastic = L_SS * Pi1**(1.5)
-        A_ca_brittle = L_t  * Pi1 * np.sqrt(sigma_t / tau_g)
 
         rows_out.append({
             'cluster_id':    cid,
             'slope_angle':   psi_deg,
-            'tau_g':         tau_g,
+            'tau_g':         tau_g_ai,
             'theta':         theta,
             'Pi1_elastic':   Pi1,
             'Pi2_brittle':   Pi2,
-            'Lambda':        Lambda,
-            'L_t':           L_t,
+            'Lambda':        Lambda_ai,
+            'L_t':           L_t_ai,
             'A_ca_elastic':  A_ca_elastic,
-            'A_ca_brittle':  A_ca_brittle,
+            'A_ca_brittle':  A_ca_ai,
             'rc_wl':         row.get('rc_wl', np.nan),
+            'G_slab':        G_slab,
+            'tau_p_star':    tau_p_star,
+            'R0':            R0,
+            'A_ca_energy':   A_ca_energy,
         })
 
     if not rows_out:
