@@ -577,15 +577,12 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
             rows_out.append({'cluster_id': cid})
             continue
 
-        # Gravitational shear stress (driving stress)
-        tau_g = rho * G_GRAV * h_m * sin_psi * (1.0 - np.tan(phi_rad)/np.tan(psi_rad))
-        tau_g = max(tau_g, 0.1)   # avoid negative/zero on flat terrain
-
-        # Scaling law breaks down when driving stress approaches zero
-        # (slope near friction angle). Flag these clusters explicitly.
+        # Validity guard: use full gravitational shear (not friction-adjusted) to match
+        # the tau_g definition in arrest_indices.evaluate() and the paper.
+        tau_g_guard = rho * G_GRAV * h_m * sin_psi
         tau_g_min_valid = 50.0   # Pa — empirical minimum for D2+ events
-        if tau_g < tau_g_min_valid:
-            rows_out.append({'cluster_id': cid, 'tau_g': tau_g,
+        if tau_g_guard < tau_g_min_valid:
+            rows_out.append({'cluster_id': cid, 'tau_g': tau_g_guard,
                              'slope_angle': psi_deg,
                              'note': 'tau_g below valid range for scaling law'})
             continue
@@ -604,7 +601,7 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
         theta = float(np.mean(theta_vals)) if theta_vals else np.nan
 
         if np.isnan(theta) or theta < 1e-6:
-            rows_out.append({'cluster_id': cid, 'tau_g': tau_g, 'theta': theta,
+            rows_out.append({'cluster_id': cid, 'tau_g': tau_g_guard, 'theta': theta,
                              'slope_angle': psi_deg})
             continue
 

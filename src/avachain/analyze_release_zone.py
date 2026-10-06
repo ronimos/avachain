@@ -643,7 +643,11 @@ def main():
                              'all_start_zone_features and meloche_features_all CSVs.')
     args = parser.parse_args()
 
-    cfg = ProjectConfig(project_dir=Path(args.project_dir))
+    toml_path = Path(args.project_dir) / "slope_config.toml"
+    if toml_path.exists():
+        cfg = ProjectConfig.from_toml(str(toml_path))
+    else:
+        cfg = ProjectConfig(project_dir=Path(args.project_dir))
 
     with rasterio.open(str(cfg.resampled_dir / "dem_1m.tif")) as src:
         dem       = src.read(1).astype(np.float32)
@@ -685,7 +689,7 @@ def main():
     print(f"Cluster IDs saved: {group_ids_path}")
 
     print("Loading SNOWPACK dataset (Zarr store is large — may take 30-60s)...")
-    zarr_path = Path(args.zarr_path)
+    zarr_path = Path(args.zarr_path) if args.zarr_path else cfg.zarr_path
     if zarr_path.exists():
         _raw = xr.open_zarr(str(zarr_path))
         # Deduplicate time index — can arise from batched append

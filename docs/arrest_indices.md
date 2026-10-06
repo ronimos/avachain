@@ -200,14 +200,104 @@ Without θ, the energy framework still gives τp* and R0 = G_c(τp0)/G_slab, a p
 
 ---
 
-## 5. Limits
+## 5. Application to the Jan 18 2026 avalanche — Little Professor
+
+### Input ranges from SNOWPACK
+
+Jan 18 clusters are deeper-hoar (DH / FC) weak layer under a hard slab, NE-facing at ~3700 m.
+All quantities from `release_zone_features_2026-01-18.csv` (n = 288 release, 1032 adjacent).
+
+| Parameter | JGR calibration | Release (median [min, max]) | Adjacent (median [min, max]) |
+|---|---|---|---|
+| ρ (kg m⁻³) | 250 | 316 [264, 332] | 310 [202, 331] |
+| h (m) | 0.5 | 1.63 [1.02, 2.16] | 1.13 [0.41, 3.54] |
+| D_wl (m) | 0.04 | 0.075 [0.022, 0.154] | 0.060 [0.021, 0.271] |
+| E_slab (MPa) | 2–6 | 4.55 [2.9, 5.2] | 4.33 [1.5, 5.1] |
+| σt (kPa) | 2–10 | 5.38 [4.2, 5.8] | 5.23 [2.9, 5.8] |
+| Λ (m) | 0.663 | 1.67 [0.92, 2.66] | 1.29 [0.74, 2.81] |
+| θ (Pa m⁻¹) | 30–150 | 30.5 [6.5, 132] | 23.8 [2.4, 167] |
+| τp0 (kPa) | 1 | 2.61 [2.18, 3.01] | 2.32 [1.86, 3.04] |
+
+Jan 18 slab is ~3× thicker and ~30% denser than the JGR calibration. The WL is nearly 2× thicker (deeper DH layer). Both push Λ upward and K_wl downward relative to the paper.
+
+### Arrest length comparison
+
+Figures from `outputs/little_prof/plots/arrest_indices_2026-01-18.png`.
+
+**Eq. 20 (brittle slab, C = 0.045, δ = 1)**
+
+Using the full gravitational shear τg = ρgh sin ψ (corrected from the friction-adjusted formula used previously):
+
+| Group | A_ca (m) median | A_ca range (m) |
+|---|---|---|
+| Release | ~36 | 10–200 |
+| Adjacent | ~60 | 10–500 |
+
+Release zone has shorter arrest lengths than adjacent — correct direction. Medians will update from the regenerated CSV once the pipeline completes.
+
+**Energy cap (δ = 1, default)**
+
+With δ = 1 and the Jan 18 slab (thick h = 1.63 m, soft WL K_wl = 2.67 MPa/m), τp* ≈ 2.45 kPa falls below the observed τp0 = 2.61 kPa for most release clusters. This means R0 > R_FIT for the majority of clusters: the crack is in a non-arrest regime from the start. A_ca_energy saturates at zero.
+
+**Energy cap (δ = 0, JGR calibration default)**
+
+With δ = 0, τp* ≈ 3.47 kPa, which exceeds τp0 in all groups. A_ca_energy is finite and discriminates:
+
+| Group | A_ca_energy δ=0 (m) median |
+|---|---|
+| Release | ~28 |
+| Adjacent | ~48 |
+
+The δ sensitivity reveals a real ambiguity: for the Jan 18 slab geometry, δ = 0 gives useful discrimination while δ = 1 collapses A_ca_energy to zero. The JGR paper calibrated on δ = 0 runs (Fig. 8); the JBC δ = 1 run is a single out-of-sample point. For depth hoar (little post-peak softening), δ = 0 is the better-supported default.
+
+### Comparison of frameworks
+
+| | Eq. 20 (brittle) | Energy cap |
+|---|---|---|
+| **A_ca median, release** | ~36 m | 0 m (δ=1); ~28 m (δ=0) |
+| **A_ca median, adjacent** | ~60 m | 0 m (δ=1); ~48 m (δ=0) |
+| **Release < adjacent?** | ✓ | ✓ (δ=0 only) |
+| **Sensitive to δ?** | Moderate (through (1+δ)^−½) | Strong: δ=1 makes τp* < τp0 |
+| **Sensitive to h?** | Moderate (through L_t, Λ) | Strong: G_slab ∝ h |
+| **Key discriminant** | θ, Λ, σt/τg ratio | R0 = G_c(τp0)/G_slab |
+| **Jan 18 IoU** | see `scripts/plot_arrest_indices_jan18.py` | see same script |
+
+R0 is the cleanest single-number discriminant that does not require θ. A cluster with R0 < R_FIT (0.48) means the WL at that point cannot absorb the slab energy — crack propagates.
+
+### IoU evaluation
+
+`scripts/plot_arrest_indices_jan18.py` includes a threshold sweep: for each metric (R0, A_ca_brittle, A_ca_energy δ=0/δ=1), it classifies clusters below a percentile threshold as "predicted release", rasterizes them using `cluster_map.npy`, and computes IoU, recall and precision against `data/boundaries/avalanche_release_area.geojson`.
+
+This is different from `scripts/release_area_IoU.py`, which evaluates AvaFrame flow/runout scenario polygons against the observed deposit boundary — a downstream step that requires arrest indices only indirectly through the scenario weights.
+
+Run the evaluation:
+
+```
+python scripts/plot_arrest_indices_jan18.py --date 2026-01-18
+```
+
+Output:
+- `outputs/little_prof/plots/arrest_indices_2026-01-18.png` — 4-panel figure
+- Console: summary table (median per group) and IoU sweep table
+
+### Hardcoded parameter sensitivity
+
+- **δ**: The dominant sensitivity. Use δ = 0 as the default for DH weak layers. The code exposes this via `DELTA` in `compute_meloche_features()`.
+- **D_wl fallback (0.04 m)**: Only used when `wl_thickness` is NaN. Most clusters have measured values (0.022–0.154 m range). The fallback underestimates K_wl by 2×, inflating τp*.
+- **G_WL (0.2 MPa)**: Not independently measured. Changing it scales K_wl and τp* proportionally. Untestable from SNOWPACK alone.
+- **C (0.045)**: Two-run fit from JGR Fig. 8. Jan 18 slope is NE-facing vs. the 35° modeled slope; no re-calibration done or recommended.
+- **R_FIT (0.48)**: Same. Two calibration runs.
+
+---
+
+## 7. Limits
 
 - All calibration comes from shear-mode-only DA-MPM simulations: 0.5 m slab, ρ = 250 kg m⁻³, ψ = 35°, E 2–6 MPa, σt 2–10 kPa. The JGR paper notes the model suits large avalanches (size 3+) and may overestimate soft slabs.
 - No anticrack (collapse) regime and no slab bending.
 - Linear strength ramp only. Noisy or patchy weak layers may behave as a percolation problem rather than a gradient problem.
 - R and C rest on two runs.
 
-## 6. Suggested validation
+## 8. Suggested validation
 
 1. Pull the post-processed brittle runs from https://github.com/Francismeloche/CrackArrest-DAMPM.
 2. For each run, compute τp at the arrest point and R = G_c/G_slab.
@@ -215,7 +305,7 @@ Without θ, the energy framework still gives τp* and R0 = G_c(τp0)/G_slab, a p
 4. Compare the σt dependence of A_ca against Eq. 20.
 5. Repeat on the TARP cross-slope runs with `slab_energy_cap_cross` once a flank strength is chosen.
 
-## 7. References
+## 9. References
 
 - Meloche, F., Bobillier, G., Guillet, L., Gauthier, F., Langlois, A., & Gaume, J. (2025). Modeling crack arrest in snow slab avalanches: Toward estimating avalanche release sizes. *JGR Earth Surface*, 130(12), e2025JF008470. https://doi.org/10.1029/2025JF008470
 - Meloche, F., Trottet, B., Bobillier, G., & Gaume, J. (2026). Slab fractures during dynamic crack propagation in dry-snow slab avalanches. *Proc. ISSW*, Whistler, 1961–1966. https://doi.org/10.15788/1790098485
