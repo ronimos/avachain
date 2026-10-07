@@ -135,31 +135,35 @@ evidence for every item in the "Feature-CSV pipeline audit" section below).
   with the JGR paper attributing lateral arrest to WL heterogeneity.
   **Unblocks:** the dead `--mode3-scale` flag (see Feature-CSV audit section).
 
-- [ ] **Mode III crack-speed cap — the next cross-slope mechanism to implement.**
-  Priority follow-up to the Λ_III item above, because Λ alone probably cannot do
-  the job: a constant Λ_III/Λ_II ratio provably leaves the BFS boundary
-  unchanged (see the measured caveat above). The remaining candidate mechanism
-  from methods §3 is the propagation-speed limit.
-  **Physics:** mode III (antiplane) cracks cannot exceed the shear wave speed
-  `c_s` (Broberg 1989), whereas upslope mode II cracks run supershear at
-  ~1.6 `c_s`. Since the dynamic tension gradient is
-  `k_x = k_f · c_p²/(c_p² + ȧ²)`, a lower crack speed means the slab builds
-  tension *faster* per unit advance cross-slope, which changes where the first
-  flank fracture occurs and caps the energy flux into the lateral crack tip.
-  **Hook already exists:** `arrest_indices.dynamic_factor(E, rho, nu,
-  speed_ratio=1.6)` parameterises ȧ as a multiple of `c_s`; mode III would pass
-  `speed_ratio <= 1.0`. `tensile_length()` then gives a cross-slope `L_dyn`
-  distinct from the along-slope one. Nothing in the propagation path consumes
-  either yet — `propagate_crack` has no speed or dynamic-gradient term at all.
-  **Counter-consideration:** because G < E′, an equal-strength slab has a
-  *larger* energy cap cross-slope (`G_slab,III = τ_flank²h/2G`), which pushes the
-  other way. If the speed cap dominates, lateral arrest is governed by the speed
-  limit plus weak-layer heterogeneity rather than slab fracture — consistent with
-  the JGR paper attributing lateral arrest to WL heterogeneity.
-  **Blocked by:** nothing for the speed cap itself (`c_s`, `c_p` and
-  `dynamic_factor` are all implemented and unit-tested). Needs a decision on how
-  a directional `L_dyn` should enter the arrest test, plus a flank strength
-  `τ_flank` for `slab_energy_cap_cross` — no parameterisation exists for that.
+- [ ] **Mode III crack-speed cap — IMPLEMENTED in the standalone repo, port here.**
+  Done 2026-10-06 in `~/avalanche-release-areas`; mirror when convenient.
+  `arrest_indices.mode3_length_ratio()` gives
+  `L_dyn,III/L_dyn,II = k_x,II/k_x,III = 0.712` at ν=0.3 (E and ρ cancel; the
+  ratio depends only on ν and the two speed ratios). `evaluate()` now also
+  returns `k_x_cross`, `L_dyn_cross`, `mode3_length_ratio`, and
+  `compute_meloche_features` emits `L_dyn`, `L_dyn_cross`,
+  `mode3_length_ratio`. `propagate_crack` composes it with the Gaume width as a
+  minimum: `d_lat = min(gaume_width, A_ca·0.712)·size_factor`. Behind
+  `config.USE_MODE3_SPEED_CAP` (default on); off is bit-for-bit identical to
+  pre-cap. 8 new unit tests.
+  **Measured on Jan 18:** unlike Λ_III this is *not* scale-invariant — it is an
+  absolute distance cap, so it does change results. Binds on 2 of 5 triggers
+  (the other 3 were already Gaume-limited below it): median area
+  6 405 → 5 389 m², ratio 0.92 → 0.78, best IoU unchanged 0.667, mean IoU
+  0.567 → 0.561.
+  **So it makes the aggregate fit slightly worse, and that is expected.** Only
+  the *restrictive* half of mode III is coded: because G < E′ an equal-strength
+  slab has a *larger* energy cap cross-slope (G_slab,III = τ_flank²h/2G vs
+  σt²h/2E′), which pushes the other way, but it needs a flank strength τ_flank
+  with no parameterisation. Left on because Broberg's limit holds independently
+  of this event — do not tune it against Jan 18.
+  **Next, in priority order:** (1) find or assume a τ_flank parameterisation so
+  `slab_energy_cap_cross` can supply the permissive half; (2) revisit the
+  uncalibrated `TAU_G_ABS_FLOOR` (350 Pa) and the Λ/thickness discontinuity
+  factors, the likely reason the model under-predicts area before the cap is
+  even applied; (3) if the JGR attribution of lateral arrest to weak-layer
+  heterogeneity is right, neither Λ_III nor the speed cap is the dominant
+  control and the missing ingredient is spatial τp variability on the flanks.
 
 - [ ] **Downslope arrest: direct τ_g < τ_p criterion** — replace 28° slope proxy with direct comparison of distributed τ_g and τ_p from SNOWPACK. Makes stauchwall arrest parameter-free and physically explicit. τ_g and τ_p are both already computed.
 
