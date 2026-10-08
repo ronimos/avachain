@@ -123,7 +123,7 @@ def _load_groups(cfg, dem, transform, snapshot_date=None):
         cluster_map, release_mask, start_zone_mask, dem, domain_mask)
 
     groups_path.write_text(
-        json.dumps({k: list(v) for k, v in groups.items()}, indent=2))
+        json.dumps({k: [int(c) for c in v] for k, v in groups.items()}, indent=2))
     print(f"  Groups saved: { {k: len(v) for k, v in groups.items()} }")
     return groups
 
@@ -190,17 +190,29 @@ def _load_observed_release_polygon(cfg, snapshot_date=None):
     polys  = [shape(feat['geometry']) for feat in gj['features']]
     merged = unary_union(polys)
 
-    t = Transformer.from_crs('EPSG:4326', 'EPSG:32613', always_xy=True)
+    import re as _re
+    src_epsg = 4326
+    crs_node = gj.get('crs', {}).get('properties', {}).get('name', '')
+    _m = _re.search(r'EPSG:+(\d+)', crs_node, _re.IGNORECASE)
+    if _m:
+        src_epsg = int(_m.group(1))
 
-    def _reproj(poly):
-        from shapely.geometry import Polygon, MultiPolygon
-        def ring(r): return [t.transform(x, y) for x, y in r.coords]
-        if poly.geom_type == 'Polygon':
-            return Polygon(ring(poly.exterior),
-                           [ring(i) for i in poly.interiors])
-        return MultiPolygon([_reproj(p) for p in poly.geoms])
+    dst_epsg = 32613
+    if src_epsg != dst_epsg:
+        t = Transformer.from_crs(f'EPSG:{src_epsg}', f'EPSG:{dst_epsg}', always_xy=True)
 
-    utm_poly = _reproj(merged)
+        def _reproj(poly):
+            from shapely.geometry import Polygon, MultiPolygon
+            def ring(r): return [t.transform(x, y) for x, y in r.coords]
+            if poly.geom_type == 'Polygon':
+                return Polygon(ring(poly.exterior),
+                               [ring(i) for i in poly.interiors])
+            return MultiPolygon([_reproj(p) for p in poly.geoms])
+
+        utm_poly = _reproj(merged)
+    else:
+        utm_poly = merged
+
     if utm_poly.geom_type == 'MultiPolygon':
         utm_poly = max(utm_poly.geoms, key=lambda p: p.area)
 
@@ -369,11 +381,22 @@ def _build_scour_depth_map(ds, cluster_map, snap_features, snap_ts):
     scour_map   = {}
     n_ok = n_fail = n_missing = 0
 
-    for cid in domain_cids:
+    # Pre-compute the snapshot time index and load all variables at that time
+    # step into memory once — avoids per-cluster lazy zarr reads (which incur
+    # dask scheduler overhead 6500+ times and make this loop very slow).
+    tidx_sd  = int(np.argmin(np.abs(ds.coords['time'].values - snap_ts)))
+    sq_dims  = [d for d in ('slope', 'realization') if d in ds.dims]
+    import warnings as _warnings
+    with _warnings.catch_warnings():
+        _warnings.simplefilter('ignore')
+        ds_snap = ds.isel(time=tidx_sd).compute()
+    if sq_dims:
+        ds_snap = ds_snap.squeeze(sq_dims)
+
+    def _process_cluster(cid):
         loc_str = loc_index.get(cid)
         if loc_str is None:
-            n_missing += 1
-            continue
+            return cid, None, 'missing'
 
         slab_thick_m = None
         if cid in snap_features.index and 'slab_thickness' in snap_features.columns:
@@ -388,18 +411,28 @@ def _build_scour_depth_map(ds, cluster_map, snap_features, snap_ts):
                 pass
 
         try:
-            tidx = int(np.argmin(np.abs(ds.coords['time'].values - snap_ts)))
-            ds_t = ds.sel(location=loc_str).isel(time=tidx)
+            ds_t = ds_snap.sel(location=loc_str)
             sq   = [d for d in ('slope', 'realization') if d in ds_t.dims]
             if sq:
                 ds_t = ds_t.squeeze(sq)
             depth_m, _, _ = _scour_depth_for_cluster(ds_t, slab_thick_m)
             if depth_m is not None and depth_m > 0:
-                scour_map[cid] = depth_m
-                n_ok += 1
-            else:
-                n_fail += 1
+                return cid, depth_m, 'ok'
+            return cid, None, 'fail'
         except Exception:
+            return cid, None, 'fail'
+
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+    with _TPE(max_workers=min(16, len(domain_cids))) as _pool:
+        _results = list(_pool.map(_process_cluster, domain_cids))
+
+    for cid, depth, status in _results:
+        if status == 'missing':
+            n_missing += 1
+        elif status == 'ok':
+            scour_map[cid] = depth
+            n_ok += 1
+        else:
             n_fail += 1
 
     print(f"  Scour depth map: {n_ok} clusters mapped, "
