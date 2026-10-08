@@ -61,6 +61,11 @@ claude-code-pilot/
 !data/weather/refill.smet
 !data/weather/refill.sno
 
+# Reference papers — multi-MB PDFs, read locally, never committed. Note one of
+# them is a PDF misnamed .md, so a bare *.pdf rule is not enough: ignore the
+# whole directory.
+papers/
+
 # Misc large binaries
 *.tif
 *.tiff
