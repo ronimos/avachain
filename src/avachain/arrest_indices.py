@@ -106,6 +106,499 @@ def shear_gradient(x, tau_p):
 
 
 # ---------------------------------------------------------------------------
+# Slab material parameterizations by density
+# ---------------------------------------------------------------------------
+RHO_REF      = 300.0
+E_RHO_SCALE  = 4.0e6
+E_RHO_EXP    = 2.5
+ST_RHO_SCALE = 5.0e3
+ST_RHO_EXP   = 1.4
+VH2016_SCALE = 0.93    # van Herwijnen et al. (2016) J. Glaciol. 62(236), Eq. 8
+VH2016_EXP   = 2.8
+
+
+def slab_modulus_project_fit(rho, scale=E_RHO_SCALE, exp=E_RHO_EXP,
+                             rho_ref=RHO_REF):
+    """E(rho) = scale (rho/rho_ref)^exp; 4 MPa at rho = 300, exp 2.5.
+
+    SOURCE: this project, not a publication. A hand-fit chosen to pass through
+    ~2/4/6 MPa at rho = 200/300/350, i.e. through the *range* van Herwijnen
+    et al. (2016) report, not through their regression. It sits a factor
+    1.6-2.2 below that regression over rho = 150-400, and gives 2.54 MPa at
+    rho = 250 where Meloche et al. (2025) ran their calibration at E = 4 MPa.
+    """
+    return (np.asarray(rho, dtype=float) / rho_ref) ** exp * scale
+
+
+def slab_modulus_vanherwijnen2016(rho, scale=VH2016_SCALE, exp=VH2016_EXP):
+    """E(rho) = 0.93 rho^2.8 Pa.
+
+    SOURCE: van Herwijnen, Gaume, Bair, Reuter, Birkeland & Schweizer (2016),
+    J. Glaciol. 62(236), 997-1007, Eq. 8; fitted to PST field measurements over
+    roughly rho = 100-350 kg m-3 (Spearman r = 0.69, NRMSE 13%). Gives 4.82 MPa
+    at rho = 250, close to the 4 MPa Meloche et al. (2025) used in the runs that
+    C_FIT was calibrated against.
+    """
+    return scale * np.asarray(rho, dtype=float) ** exp
+
+
+E_RELATIONS = {'vanherwijnen2016': slab_modulus_vanherwijnen2016,
+               'project_fit': slab_modulus_project_fit}
+E_DEFAULT = 'vanherwijnen2016'
+
+
+def slab_modulus(rho, relation=E_DEFAULT):
+    """E(rho) from a named relation; see E_RELATIONS."""
+    try:
+        return E_RELATIONS[relation](rho)
+    except KeyError:
+        raise ValueError(f"unknown E relation {relation!r}; "
+                         f"available: {sorted(E_RELATIONS)}") from None
+
+
+def slab_tensile_strength(rho, scale=ST_RHO_SCALE, exp=ST_RHO_EXP, rho_ref=RHO_REF):
+    """sigma_t,RG(rho) = scale (rho/rho_ref)^exp, for rounded grains.
+
+    SOURCE: this project, not a publication. ~5 kPa at rho = 300, inside the
+    2-10 kPa swept by Meloche et al. (2025); the exponent 1.4 is a hand-fit.
+    Neither paper publishes a sigma_t(rho) regression.
+    """
+    return (np.asarray(rho, dtype=float) / rho_ref) ** exp * scale
+
+
+# ---------------------------------------------------------------------------
+# Layered-slab aggregation for Eq. 20
+# ---------------------------------------------------------------------------
+# a: faceted snow is about half as strong in tension as rounded snow at equal
+# density (Jamieson & Johnston 1990). Applied continuously through f so that
+# neighbouring grid cells cannot step across a grain-type boundary.
+FACET_STRENGTH_FACTOR = 0.5
+
+
+def facetedness(sphericity, dendricity, sp_ref=None):
+    """f in [0, 1]: 1 - sphericity for non-dendritic layers, 0 otherwise.
+
+    sp_ref anchors f to a reference sphericity, f = (sp_ref - sp)/sp_ref, so
+    that snow at sp_ref keeps the unmodified sigma_t,RG. sp_ref=None is the
+    unanchored form, under which rounded grains (sphericity ~0.86 in our
+    profiles) still carry f ~0.14 and lose ~7% of sigma_t.
+    """
+    sp = np.asarray(sphericity, dtype=float)
+    dd = np.asarray(dendricity, dtype=float)
+    f = (1.0 - sp) if sp_ref is None else (sp_ref - sp) / sp_ref
+    f = np.where(dd == 0.0, f, 0.0)
+    return np.clip(np.where(np.isfinite(f), f, 0.0), 0.0, 1.0)
+
+
+def layer_tensile_strength(rho, f, a=FACET_STRENGTH_FACTOR, **kw):
+    """sigma_t,i = sigma_t,RG(rho_i) * (1 - a f_i)."""
+    return slab_tensile_strength(rho, **kw) * (1.0 - a * np.asarray(f, dtype=float))
+
+
+def _weights(dz):
+    dz = np.asarray(dz, dtype=float)
+    tot = np.sum(dz)
+    if not np.isfinite(tot) or tot <= 0:
+        return None, np.nan
+    return dz, float(tot)
+
+
+def effective_modulus(E_i, dz_i):
+    """Iso-strain slope-parallel stiffness: E_eff = sum(E_i h_i) / h."""
+    dz, tot = _weights(dz_i)
+    if dz is None:
+        return np.nan
+    return float(np.sum(np.asarray(E_i, dtype=float) * dz) / tot)
+
+
+def tensile_strength_mean(sigma_t_i, dz_i):
+    """Load-redistribution bound: sum(sigma_t_i h_i) / h."""
+    dz, tot = _weights(dz_i)
+    if dz is None:
+        return np.nan
+    return float(np.sum(np.asarray(sigma_t_i, dtype=float) * dz) / tot)
+
+
+def tensile_strength_weakest_link(sigma_t_i, E_i, dz_i):
+    """Weakest-link bound: E_eff * min_i(sigma_t_i / E_i), and the argmin index.
+
+    The slab is taken to fail when the lowest-failure-strain layer reaches its
+    own strength, with every layer at the common iso-strain value. This is
+    never above tensile_strength_mean: writing the mean as
+    sum((sigma_t_i/E_i) E_i h_i)/h >= min(sigma_t_i/E_i) * E_eff, with equality
+    only when sigma_t_i/E_i is the same in every layer.
+    """
+    st = np.asarray(sigma_t_i, dtype=float)
+    E = np.asarray(E_i, dtype=float)
+    dz, _ = _weights(dz_i)
+    if dz is None:
+        return np.nan, -1
+    with np.errstate(divide="ignore", invalid="ignore"):
+        eps = np.where(E > 0, st / E, np.inf)
+    if not np.any(np.isfinite(eps)):
+        return np.nan, -1
+    idx = int(np.nanargmin(np.where(np.isfinite(eps), eps, np.inf)))
+    return float(effective_modulus(E, dz) * eps[idx]), idx
+
+
+# --- Edge-crack (ligament) estimate: HYPOTHESIS, not a published criterion ---
+# Treats the controlling layer's own thickness as a crack of length a in a slab
+# of thickness h loaded in slope-parallel tension, and returns the nominal slab
+# stress at which K_I reaches K_Ic. A faceted layer is not a traction-free
+# crack, so this is an upper bound on its weakening effect at best.
+#
+# K_Ic has NO sourced density parameterization for snow slabs in tension: the
+# accessible literature (van Herwijnen et al. 2016; Sigrist & Schweizer 2007;
+# Sigrist 2006) measures WEAK-LAYER energy release rates, not slab K_Ic, and
+# Meloche et al. (2025, 2026) give neither. So K_Ic is a required argument with
+# no default, and USE_LIGAMENT_BOUND stays off until one is supplied.
+USE_LIGAMENT_BOUND = False
+
+RHO_ICE = 917.0
+DMAX_FACTOR = 1.0   # d_max = DMAX_FACTOR * grain size (both in m)
+
+
+def k_ic_kirchner2000(rho, d_max=None):
+    """K_Ic = 7.84 (rho/917)^2.3 kPa m^0.5 -> Pa m^0.5. d_max unused.
+
+    Kirchner et al. (2000), Phil. Mag. A 80(5). Valid 100-540 kg/m3.
+
+    TREAT AS A LOWER BOUND ON K_Ic. These are *apparent* toughnesses from small
+    cantilever beams, so they carry the small-specimen size effect: the
+    measured value rises with specimen size, and a slab-scale crack is far
+    larger than the beams. It gives 600 Pa m^0.5 at rho = 300, roughly half
+    Schweizer et al. (2004) Eq. 8 at d_max = 1 mm and below the bottom of the
+    1-4 kPa m^0.5 range Borstad & McClung (2013) report.
+    """
+    return 7.84e3 * (np.asarray(rho, dtype=float) / RHO_ICE) ** 2.3
+
+
+def k_ic_schweizer2004(rho, d_max=None):
+    """K_Ic = A4 (rho/917)^2 / sqrt(d_max), A4 = 350 Pa m, d_max in m.
+
+    Schweizer, Michot & Kirchner (2004), Ann. Glaciol. 38, 1-8, Eq. 8, which
+    the paper gives as superseding its own Eqs. 5 and 6 (two (rho/rho_ice)^2.0
+    fits with prefactors 13.0 and 21.6 kPa m^0.5 for different snow types) by
+    folding in the d_max^(-1/2) dependence. Valid 80-300 kg/m3 (series A-F).
+
+    d_max is a LENGTH IN METRES. Note our zarr `grain_size` is already in m
+    (median 5.9e-4), unlike raw SNOWPACK .pro output which is in mm.
+
+    rho = 300, d_max = 1 mm -> 1.18 kPa m^0.5.
+    """
+    rho = np.asarray(rho, dtype=float)
+    if d_max is None:
+        return np.full(rho.shape, np.nan)
+    d = np.asarray(d_max, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(d > 0, 350.0 * (rho / RHO_ICE) ** 2 / np.sqrt(d), np.nan)
+
+
+# Selectable K_Ic(rho) relations for intact slab snow in mode I, with the
+# density range each was fitted over. borstad2013 stays gated: it is bronze OA
+# at Wiley only, which refuses automated access, and OpenAlex reports no
+# repository copy, so its regression has not been sourced.
+K_IC_RELATIONS = {
+    'kirchner2000':  {'func': k_ic_kirchner2000,  'rho': (100.0, 540.0)},
+    'schweizer2004': {'func': k_ic_schweizer2004, 'rho': (80.0, 300.0)},
+}
+K_IC_PENDING = ('borstad2013',)
+K_IC_DEFAULT = 'schweizer2004'
+
+
+def _k_ic_spec(relation):
+    if relation in K_IC_PENDING:
+        raise NotImplementedError(
+            f"K_Ic relation {relation!r} is not implemented: its published "
+            "equation has not been sourced and quoted back for checking yet.")
+    try:
+        return K_IC_RELATIONS[relation]
+    except KeyError:
+        raise ValueError(
+            f"unknown K_Ic relation {relation!r}; "
+            f"available: {sorted(K_IC_RELATIONS)}") from None
+
+
+def k_ic_valid_range(relation=K_IC_DEFAULT):
+    """(rho_min, rho_max) the relation was fitted over."""
+    return _k_ic_spec(relation)['rho']
+
+
+def k_ic_n_clamped(rho, relation=K_IC_DEFAULT):
+    """How many finite rho values fall outside the relation's valid range."""
+    rho = np.asarray(rho, dtype=float)
+    lo, hi = k_ic_valid_range(relation)
+    return int(np.sum(np.isfinite(rho) & ((rho < lo) | (rho > hi))))
+
+
+def k_ic(rho, relation=K_IC_DEFAULT, d_max=None, clamp=True):
+    """K_Ic (Pa m^0.5) from a named density relation.
+
+    clamp=True (default) clamps rho into the relation's fitted range *for this
+    evaluation only*, rather than returning NaN, so that a single out-of-range
+    layer cannot poison a thickness-weighted ligament. Density is not modified
+    anywhere else. clamp=False restores the NaN-outside-range behaviour.
+    Use k_ic_n_clamped() to report how many layers were clamped.
+    """
+    spec = _k_ic_spec(relation)
+    rho = np.asarray(rho, dtype=float)
+    lo, hi = spec['rho']
+    if clamp:
+        rho_eval = np.clip(rho, lo, hi)
+        return spec['func'](rho_eval, d_max)
+    K = spec['func'](rho, d_max)
+    return np.where((rho >= lo) & (rho <= hi), K, np.nan)
+
+
+def characteristic_length(K_Ic, sigma_t):
+    """l_ch = (K_Ic / sigma_t)^2 (m)."""
+    K_Ic = np.asarray(K_Ic, dtype=float)
+    sigma_t = np.asarray(sigma_t, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(sigma_t > 0, (K_Ic / sigma_t) ** 2, np.nan)
+
+
+def sent_geometry_factor(s):
+    """F(a/h) for a single-edge-notch plate in tension (Tada et al.), s <= 0.6."""
+    s = np.asarray(s, dtype=float)
+    F = (1.122 - 0.231 * s + 10.550 * s**2
+         - 21.710 * s**3 + 30.382 * s**4)
+    return np.where((s >= 0.0) & (s <= 0.6), F, np.nan)
+
+
+def embedded_geometry_factor(s):
+    """F for a centre crack of length 2a in width 2b, s = a/b (Feddersen secant)."""
+    s = np.asarray(s, dtype=float)
+    F = np.sqrt(1.0 / np.cos(np.pi * s / 2.0))
+    return np.where((s >= 0.0) & (s < 0.95), F, np.nan)
+
+
+def _geometry_factor(a, h, embedded):
+    return float(embedded_geometry_factor((a / 2.0) / (h / 2.0)) if embedded
+                 else sent_geometry_factor(a / h))
+
+
+def intrinsic_crack_length(K_Ic, sigma_t_lig, h, a=None, embedded=False,
+                           self_consistent=False, tol=1e-12, max_iter=50):
+    """El Haddad a0 = (1/pi) (K_Ic / (F sigma_t_lig))^2.
+
+    Default: F is evaluated at the actual crack length, F(a/h), the same factor
+    sigma_c uses. That makes the a -> 0 limit recover sigma_t_lig exactly and
+    needs no iteration.
+
+    self_consistent=True instead evaluates F at a0/h and solves by fixed-point
+    iteration. Kept as an option; it makes a0 a property of the material and
+    geometry alone, but then sigma_c(a -> 0) only tends to
+    sigma_t_lig * F(a0/h)/F(0).
+    """
+    if not (np.isfinite(K_Ic) and np.isfinite(sigma_t_lig) and np.isfinite(h)) \
+            or K_Ic <= 0 or sigma_t_lig <= 0 or h <= 0:
+        return np.nan
+
+    if not self_consistent:
+        if a is None:
+            raise ValueError("a is required unless self_consistent=True")
+        F = _geometry_factor(float(a), h, embedded)
+        if not np.isfinite(F) or F <= 0:
+            return np.nan
+        a0 = (K_Ic / (F * sigma_t_lig)) ** 2 / np.pi
+        return float(a0) if np.isfinite(a0) and a0 < h else np.nan
+
+    F = _geometry_factor(0.0, h, embedded)
+    a0 = np.nan
+    for _ in range(max_iter):
+        if not np.isfinite(F) or F <= 0:
+            return np.nan
+        a0_new = (K_Ic / (F * sigma_t_lig)) ** 2 / np.pi
+        if not np.isfinite(a0_new) or a0_new >= h:
+            return np.nan
+        if np.isfinite(a0) and abs(a0_new - a0) <= tol * max(a0_new, 1e-12):
+            return float(a0_new)
+        a0 = a0_new
+        F = _geometry_factor(a0, h, embedded)
+    return float(a0) if np.isfinite(a0) else np.nan
+
+
+def edge_crack_strength(K_Ic, a, h, embedded=False, sigma_t_lig=None,
+                        model='elhaddad', self_consistent_a0=False):
+    """Nominal slab stress at which a crack of length a in thickness h runs.
+
+    LEFM:        sigma_c = K_Ic / (F(a/h) sqrt(pi a))
+    El Haddad:   sigma_c = K_Ic / (F(a/h) sqrt(pi (a + a0)))
+
+    The El Haddad short-crack correction keeps sigma_c finite as a -> 0, where
+    it tends to sigma_t_lig instead of diverging, and collapses onto LEFM for
+    a >> a0. It needs the ligament tensile strength; without sigma_t_lig, or
+    with model='lefm', the plain LEFM form is returned.
+    """
+    a = float(a)
+    h = float(h)
+    if not (np.isfinite(a) and np.isfinite(h)) or a <= 0 or h <= 0 or a >= h:
+        return np.nan
+    if embedded:
+        F = float(embedded_geometry_factor((a / 2.0) / (h / 2.0)))
+        a_eff = a / 2.0
+    else:
+        F = float(sent_geometry_factor(a / h))
+        a_eff = a
+    if not np.isfinite(F) or F <= 0:
+        return np.nan
+
+    a0 = 0.0
+    if model == 'elhaddad' and sigma_t_lig is not None:
+        a0 = intrinsic_crack_length(K_Ic, sigma_t_lig, h, a=a,
+                                    embedded=embedded,
+                                    self_consistent=self_consistent_a0)
+        if not np.isfinite(a0):
+            return np.nan
+    elif model not in ('elhaddad', 'lefm'):
+        raise ValueError(f"unknown model {model!r}; use 'elhaddad' or 'lefm'")
+    return float(K_Ic / (np.sqrt(np.pi * (a_eff + a0)) * F))
+
+
+def ligament_bound(rho_intact, dz_intact, st_intact, a, h, embedded,
+                   relation=K_IC_DEFAULT, d_max_intact=None,
+                   dmax_factor=DMAX_FACTOR, model='elhaddad',
+                   self_consistent_a0=False):
+    """Ligament edge-crack bound from the intact layers. Returns a dict.
+
+    K_Ic and sigma_t are thickness-weighted over the intact layers (the slab
+    minus the controlling layer, which is treated as the crack of length a).
+    d_max_intact is a per-layer length in m; it is scaled by dmax_factor.
+    """
+    out = {'sigma_t_ligament': np.nan, 'K_Ic_ligament': np.nan,
+           'sigma_t_lig_intact': np.nan, 'a0_ligament': np.nan,
+           'l_ch_ligament': np.nan, 'n_rho_clamped': 0}
+    if len(dz_intact) == 0:
+        return out
+    d_max = None if d_max_intact is None else \
+        dmax_factor * np.asarray(d_max_intact, dtype=float)
+    out['n_rho_clamped'] = k_ic_n_clamped(rho_intact, relation)
+    K_lig = tensile_strength_mean(
+        k_ic(rho_intact, relation, d_max=d_max, clamp=True), dz_intact)
+    st_lig = tensile_strength_mean(st_intact, dz_intact)
+    out['K_Ic_ligament'] = K_lig
+    out['sigma_t_lig_intact'] = st_lig
+    if not (np.isfinite(K_lig) and np.isfinite(st_lig)):
+        return out
+    out['l_ch_ligament'] = float(characteristic_length(K_lig, st_lig))
+    out['a0_ligament'] = intrinsic_crack_length(
+        K_lig, st_lig, h, a=a, embedded=embedded,
+        self_consistent=self_consistent_a0)
+    out['sigma_t_ligament'] = edge_crack_strength(
+        K_lig, a, h, embedded=embedded, sigma_t_lig=st_lig, model=model,
+        self_consistent_a0=self_consistent_a0)
+    return out
+
+
+def aggregate_slab(rho_i, dz_i, sphericity_i, dendricity_i,
+                   a=FACET_STRENGTH_FACTOR, sp_ref=None,
+                   depth_i=None, K_Ic=None, h=None,
+                   k_ic_relation=None, ligament_model='elhaddad',
+                   grain_size_i=None, dmax_factor=DMAX_FACTOR,
+                   e_relation=E_DEFAULT, e_relations_extra=(),
+                   k_ic_variants=(), self_consistent_a0=False):
+    """Layered-slab aggregation for Eq. 20. Returns a dict of scalars.
+
+    E_eff, sigma_t_mean, sigma_t_wl and the index/depth/thickness of the layer
+    that controls the weakest-link bound.
+
+    Ligament bound: pass k_ic_relation (named K_Ic(rho) relation) or K_Ic (a
+    constant, Pa m^0.5). The controlling layer is treated as the crack; K_Ic
+    and sigma_t for the ligament are thickness-weighted over the *intact*
+    layers, i.e. the slab with the controlling layer removed.
+
+    e_relation picks the E(rho) relation; e_relations_extra is a list of extra
+    names emitted as E_eff__<name>. k_ic_variants is a list of
+    (label, relation, dmax_factor) emitted as <key>__<label>, in addition to
+    the unsuffixed bound from k_ic_relation.
+    """
+    rho = np.asarray(rho_i, dtype=float)
+    dz = np.asarray(dz_i, dtype=float)
+    ok = np.isfinite(rho) & np.isfinite(dz) & (dz > 0) & (rho > 0)
+    out = {k: np.nan for k in ('E_eff', 'sigma_t_mean', 'sigma_t_wl',
+                               'f_mean_weighted', 'wl_ctrl_index',
+                               'wl_ctrl_depth', 'wl_ctrl_thickness',
+                               'sigma_t_ligament', 'K_Ic_ligament',
+                               'sigma_t_lig_intact', 'a0_ligament',
+                               'l_ch_ligament')}
+    out['n_rho_clamped'] = 0
+    out['n_slab_layers'] = int(ok.sum())
+    if ok.sum() == 0:
+        return out
+
+    rho, dz = rho[ok], dz[ok]
+    gsz = (None if grain_size_i is None
+           else np.asarray(grain_size_i, dtype=float)[ok])
+    f = facetedness(np.asarray(sphericity_i, dtype=float)[ok],
+                    np.asarray(dendricity_i, dtype=float)[ok], sp_ref)
+    E = slab_modulus(rho, e_relation)
+    st = layer_tensile_strength(rho, f, a)
+
+    out['E_eff'] = effective_modulus(E, dz)
+    for name in e_relations_extra:
+        out[f'E_eff__{name}'] = effective_modulus(slab_modulus(rho, name), dz)
+    out['sigma_t_mean'] = tensile_strength_mean(st, dz)
+    out['f_mean_weighted'] = tensile_strength_mean(f, dz)
+    st_wl, idx = tensile_strength_weakest_link(st, E, dz)
+    out['sigma_t_wl'] = st_wl
+    if idx < 0:
+        return out
+
+    out['wl_ctrl_index'] = int(np.where(ok)[0][idx])
+    out['wl_ctrl_thickness'] = float(dz[idx])
+    if depth_i is not None:
+        out['wl_ctrl_depth'] = float(np.asarray(depth_i, dtype=float)[ok][idx])
+
+    if K_Ic is None and k_ic_relation is None and not k_ic_variants:
+        return out
+
+    h_slab = float(np.sum(dz)) if h is None else float(h)
+    d = out['wl_ctrl_depth']
+    # Surface-connected if the controlling layer touches either slab face.
+    edge = (not np.isfinite(d)) or (d - dz[idx] <= 0.0) or (d >= h_slab - 1e-9)
+
+    # Ligament = the slab minus the controlling layer, so the crack-tip
+    # material is the surrounding snow rather than the faceted layer being
+    # treated as the crack.
+    intact = np.ones(len(dz), dtype=bool)
+    intact[idx] = False
+    if not intact.any():
+        return out
+    a_crack = float(dz[idx])
+    gsz_in = None if gsz is None else gsz[intact]
+
+    if K_Ic is not None and k_ic_relation is None:
+        # Constant K_Ic override: no density relation, so nothing to clamp.
+        st_lig = tensile_strength_mean(st[intact], dz[intact])
+        out['K_Ic_ligament'] = float(K_Ic)
+        out['sigma_t_lig_intact'] = st_lig
+        if np.isfinite(st_lig):
+            out['l_ch_ligament'] = float(characteristic_length(K_Ic, st_lig))
+            out['a0_ligament'] = intrinsic_crack_length(
+                K_Ic, st_lig, h_slab, a=a_crack, embedded=not edge,
+                self_consistent=self_consistent_a0)
+            out['sigma_t_ligament'] = edge_crack_strength(
+                K_Ic, a_crack, h_slab, embedded=not edge, sigma_t_lig=st_lig,
+                model=ligament_model, self_consistent_a0=self_consistent_a0)
+    elif k_ic_relation is not None:
+        out.update(ligament_bound(
+            rho[intact], dz[intact], st[intact], a_crack, h_slab, not edge,
+            relation=k_ic_relation, d_max_intact=gsz_in,
+            dmax_factor=dmax_factor, model=ligament_model,
+            self_consistent_a0=self_consistent_a0))
+
+    for label, relation, dmf in k_ic_variants:
+        v = ligament_bound(
+            rho[intact], dz[intact], st[intact], a_crack, h_slab, not edge,
+            relation=relation, d_max_intact=gsz_in, dmax_factor=dmf,
+            model=ligament_model, self_consistent_a0=self_consistent_a0)
+        for k, val in v.items():
+            out[f'{k}__{label}'] = val
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Energy-cap framework (hypothesis)
 # ---------------------------------------------------------------------------
 R_FIT = 0.48  # fitted from Meloche et al. 2025 Fig. 8 (two runs); see arrest_indices.md
