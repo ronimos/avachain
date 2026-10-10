@@ -63,6 +63,56 @@ LIGAMENT_VARIANTS = (
     ('schweizer2004_d2', 'schweizer2004', 2.0),
 )
 
+# How θ is estimated from the per-cluster τp field. θ is a property of the LAG
+# it is measured at, not of the snowpack.
+#   'knn'        mean |Δτp|/d over the K_NEIGHBORS nearest cluster centroids.
+#                Reproduces every pre-2026-10-09 CSV and published number.
+#   'plane_fit'  local least-squares plane through τp over all centroids within
+#                THETA_FIT_RADIUS_M, θ = |∇τp|. Estimates the slope-scale ramp
+#                that Meloche's θ represents, instead of the local noise.
+#
+# Measured on Jan 18: start-zone clusters are 3.0 m across and the k = 6
+# neighbourhood averages 3.3 m, so 'knn' samples θ inside the 0.5-10 m band the
+# paper treats as local noise. The τp variogram gives θ(d) = 3.87 + 72/d Pa/m,
+# i.e. at 3.3 m θ is 15% slope-scale trend and 85% local noise. A_ca ∝ 1/θ, so
+# the two estimators differ by ~3.3x in A_ca (median θ 25.19 vs 7.28 Pa/m).
+#
+# Default 'plane_fit' since 2026-10-09, argued from the calibration scale, not
+# the fit: Meloche's θ is the gradient of a linear ramp over L_ss, so the
+# estimator's neighbourhood should be L_ss, not whatever the cluster spacing
+# happens to be. Do NOT pick the estimator by Jan 18 IoU — changing θ moves Π₁,
+# hence the trigger ranking and the whole filter chain.
+#
+# Open caveat: under 'plane_fit' 97.2% of Jan 18 start-zone clusters fall below
+# Meloche's 20 Pa/m validity floor, against 36.2% under 'knn'. That is the
+# strongest objection to the θ-based arrest route as a whole, and it is NOT an
+# argument for reverting — 'knn' only looked compliant because it was measuring
+# noise. See ~/avalanche-release-areas/docs/release_area_methods.md §5.
+L_SS                     = 20.0   # m; steady-state propagation length, Meloche et al. (2025)
+THETA_ESTIMATOR          = 'plane_fit'   # 'knn' | 'plane_fit'
+# The radius IS L_ss, and that identity is the argument for the default: θ is
+# the gradient of a ramp over L_ss, so the neighbourhood must be L_ss.
+THETA_FIT_RADIUS_M       = L_SS
+THETA_FIT_MIN_NEIGHBOURS = 8      # minimum centroids in radius, else θ = NaN
+THETA_MIN                = 1e-6   # Pa/m; below this there is no usable gradient
+
+# Validity range of the arrest scaling laws in θ, from Meloche et al. (2025).
+# The only quantitative propagation thresholds the paper gives:
+#   p.12 "Shear strength gradients of more than 20 Pa m-1 were needed to obtain
+#         crack arrest within the PST simulated length."
+#   p.13 runs with θ < 20 Pa/m were REMOVED from their analysis (no arrest).
+#   p.10 "When the shear strength gradient is larger than around 5,000 Pa m-1,
+#         the gradient is too large, causing crack arrest after L_ss."
+# Recorded, not enforced.
+THETA_VALID_MIN = 20.0      # Pa/m
+THETA_VALID_MAX = 5000.0    # Pa/m
+
+# Crack-speed ratios for the mode II / mode III dynamic tension gradient; the
+# source of truth is arrest_indices. Mode III cannot exceed c_s (Broberg 1989)
+# where mode II runs supershear at ~1.6 c_s.
+MODE2_SPEED_RATIO = _ai.MODE2_SPEED_RATIO
+MODE3_SPEED_RATIO = _ai.MODE3_SPEED_RATIO
+
 # SNOWPACK grain type codes (first digit = grain class)
 WL_TYPES   = set(range(400, 500)) | set(range(500, 600))  # FC (4xx), DH (5xx)
 SLAB_TYPES = set(range(200, 300)) | set(range(300, 400))  # DF (2xx), RG (3xx)
@@ -583,9 +633,104 @@ def extract_group_timeseries(ds, group_ids: set,
 # Meloche et al. (2025) crack arrest parameters
 # -----------------------------------------------------------------------
 
+def theta_knn(tau_p_arr, indices, distances, px_m) -> np.ndarray:
+    """θ (Pa/m) as the mean |Δτp|/d over each cluster's k nearest centroids.
+
+    `indices`/`distances` come from a k-NN query on *pixel* centroids with the
+    cluster itself in column 0, so column 0 is dropped and `px_m` converts the
+    separations to metres. Without that conversion θ is Pa per *pixel*, which
+    only coincides with Pa/m on a 1 m grid.
+
+    This samples θ at whatever lag the cluster spacing happens to be — 3.3 m on
+    Jan 18, where θ is 85% local noise. See `theta_plane_fit`.
+    """
+    tau_p_arr = np.asarray(tau_p_arr, float)
+    out = np.full(len(tau_p_arr), np.nan)
+    for i in range(len(tau_p_arr)):
+        tau_i = tau_p_arr[i]
+        if np.isnan(tau_i):
+            continue
+        vals = []
+        for j, d in zip(indices[i][1:], distances[i][1:] * px_m):
+            if d < 1e-6:
+                continue
+            tau_j = tau_p_arr[j]
+            if not np.isnan(tau_j):
+                vals.append(abs(tau_i - tau_j) / d)
+        if vals:
+            out[i] = float(np.mean(vals))
+    return out
+
+
+def theta_plane_fit(east_m, north_m, tau_p_arr,
+                    radius_m: float = None,
+                    min_neighbours: int = None) -> tuple:
+    """θ (Pa/m) as |∇τp| from a local least-squares plane through τp.
+
+    Fits τp ≈ a·E + b·N + c over every cluster centroid within `radius_m` and
+    returns (theta, grad_east, grad_north) with theta = hypot(a, b).
+
+    Averaging over a neighbourhood of radius ≈ L_ss suppresses the local noise
+    that dominates a short-lag difference estimator and leaves the slope-scale
+    ramp, which is the quantity Meloche et al.'s θ represents (their
+    heterogeneity is "a linear increase of the weak layer strength"). The
+    gradient vector is returned as well, so an along-slope/cross-slope split
+    becomes possible without a second estimator.
+
+    θ is NaN where fewer than `min_neighbours` centroids carry τp inside the
+    radius, or where they are too collinear to define a plane. On Jan 18 that
+    is 15.8% of start-zone clusters, which costs almost nothing end to end
+    because those clusters were already NaN for other reasons.
+
+    `radius_m` / `min_neighbours` default to the module constants, read at call
+    time so a caller can override them by setting the module attribute.
+    """
+    if radius_m is None:
+        radius_m = THETA_FIT_RADIUS_M
+    if min_neighbours is None:
+        min_neighbours = THETA_FIT_MIN_NEIGHBOURS
+
+    east_m = np.asarray(east_m, float)
+    north_m = np.asarray(north_m, float)
+    tau_p_arr = np.asarray(tau_p_arr, float)
+    n = len(tau_p_arr)
+    theta = np.full(n, np.nan)
+    g_e = np.full(n, np.nan)
+    g_n = np.full(n, np.nan)
+
+    ok = ~np.isnan(tau_p_arr)
+    if ok.sum() < min_neighbours:
+        return theta, g_e, g_n
+
+    from sklearn.neighbors import NearestNeighbors
+    pts = np.column_stack([east_m[ok], north_m[ok]])
+    tau_ok = tau_p_arr[ok]
+    tree = NearestNeighbors(radius=radius_m, algorithm='ball_tree').fit(pts)
+    neigh = tree.radius_neighbors(np.column_stack([east_m, north_m]),
+                                  return_distance=False)
+
+    for i in range(n):
+        if np.isnan(tau_p_arr[i]):
+            continue
+        sel = neigh[i]
+        if len(sel) < min_neighbours:
+            continue
+        e = pts[sel, 0]
+        nn = pts[sel, 1]
+        A = np.column_stack([e - e.mean(), nn - nn.mean(), np.ones(len(sel))])
+        # rank < 3 means the neighbourhood is a point or a line: no plane.
+        coef, _, rank, _ = np.linalg.lstsq(A, tau_ok[sel], rcond=None)
+        if rank < 3:
+            continue
+        g_e[i], g_n[i] = float(coef[0]), float(coef[1])
+        theta[i] = float(np.hypot(coef[0], coef[1]))
+
+    return theta, g_e, g_n
+
+
 def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
                               dem: np.ndarray, transform,
-                              snap_ts) -> pd.DataFrame:
+                              snap_ts=None) -> pd.DataFrame:
     """
     Compute Meloche et al. (2025) spatial features requiring neighbor information.
 
@@ -603,19 +748,22 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
       δ  = 1   (softening coefficient, fixed — slope scale default)
       L_ss = 20 m (steady-state length, fixed — paper default)
 
+    θ is estimated by THETA_ESTIMATOR ('plane_fit' by default); `transform`
+    supplies the pixel size, so θ comes out in Pa/m on any grid resolution.
+
     Returns DataFrame indexed by cluster_id with Meloche features.
     """
     PHI_DEG = 27.0          # snow friction angle (degrees)
     DELTA   = 1.0           # softening coefficient
-    L_SS    = 20.0          # steady-state length (m)
     K_NEIGHBORS = 6         # nearest neighbors for θ computation
     G_GRAV  = 9.81          # m/s²
+    px_m    = abs(transform.a) if transform is not None else 1.0
 
     phi_rad = np.radians(PHI_DEG)
 
     # Compute slope angle per cluster from DEM
     fill_dem = np.where(np.isnan(dem), np.nanmean(dem), dem)
-    dy, dx   = np.gradient(fill_dem, 1.0)
+    dy, dx   = np.gradient(fill_dem, px_m)
     slope    = np.degrees(np.arctan(np.sqrt(dx**2 + dy**2)))
 
     # Compute cluster centroids in pixel space
@@ -655,8 +803,8 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
         return pd.DataFrame()
 
     cents = np.array([centroids[c] for c in cids_arr])  # (N, 2) pixel coords
-    # Convert pixel distance to meters (1m resolution DEM)
-    # cents are in pixels, pixel size = 1m
+    # px_m converts centroid separations to metres, so θ is Pa/m at any grid
+    # resolution rather than Pa per pixel.
     def _scalar(df, cid, col):
         """Safely extract a scalar from a possibly multi-row index."""
         if cid not in df.index:
@@ -675,6 +823,23 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
     nbrs = NearestNeighbors(n_neighbors=min(K_NEIGHBORS+1, len(cids_arr)),
                              algorithm='ball_tree').fit(cents)
     distances, indices = nbrs.kneighbors(cents)
+
+    # θ for every cluster up front, by the configured estimator. `cents` are
+    # pixel (row, col); row increases southward, so north = -row.
+    if THETA_ESTIMATOR == 'plane_fit':
+        theta_arr, theta_ge, theta_gn = theta_plane_fit(
+            east_m=cents[:, 1] * px_m, north_m=-cents[:, 0] * px_m,
+            tau_p_arr=tau_p_arr)
+    elif THETA_ESTIMATOR == 'knn':
+        theta_arr = theta_knn(tau_p_arr, indices, distances, px_m)
+        theta_ge = theta_gn = np.full(len(cids_arr), np.nan)
+    else:
+        raise ValueError(
+            f"THETA_ESTIMATOR must be 'knn' or 'plane_fit', "
+            f"got {THETA_ESTIMATOR!r}")
+    theta_by_cid = {int(c): theta_arr[i] for i, c in enumerate(cids_arr)}
+    theta_vec_by_cid = {int(c): (theta_ge[i], theta_gn[i])
+                        for i, c in enumerate(cids_arr)}
 
     rows_out = []
     for i, cid in enumerate(cids_arr):
@@ -712,20 +877,10 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
                              'note': 'tau_g below valid range for scaling law'})
             continue
 
-        # θ — mean WL shear strength gradient to k nearest neighbors
-        neighbor_idx = indices[i][1:]   # exclude self
-        neighbor_dist = distances[i][1:]
-        theta_vals = []
-        for j, d in zip(neighbor_idx, neighbor_dist):
-            if d < 1e-6:
-                continue
-            tau_j = tau_p_arr[j]
-            if not np.isnan(tau_j):
-                theta_vals.append(abs(tau_p - tau_j) / d)
+        # θ — WL shear strength gradient (Pa/m), by THETA_ESTIMATOR
+        theta = float(theta_by_cid.get(int(cid), np.nan))
 
-        theta = float(np.mean(theta_vals)) if theta_vals else np.nan
-
-        if np.isnan(theta) or theta < 1e-6:
+        if np.isnan(theta) or theta < THETA_MIN:
             rows_out.append({'cluster_id': cid, 'tau_g': tau_g_guard, 'theta': theta,
                              'slope_angle': psi_deg})
             continue
@@ -740,6 +895,8 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
             sigma_t=sigma_t, D_wl=D_wl_val, G_wl=G_WL,
             theta=theta, nu=NU, phi_deg=PHI_DEG, delta=DELTA,
             tau_p0=tau_p0_val if not np.isnan(tau_p0_val) else None,
+            speed_ratio_along=MODE2_SPEED_RATIO,
+            speed_ratio_cross=MODE3_SPEED_RATIO,
         )
 
         tau_g_ai   = ai['tau_g']
@@ -769,10 +926,26 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
             'slope_angle':   psi_deg,
             'tau_g':         tau_g_ai,
             'theta':         theta,
+            # NaN under the 'knn' estimator, which yields no gradient vector.
+            'theta_grad_east':  theta_vec_by_cid.get(int(cid), (np.nan,))[0],
+            'theta_grad_north': theta_vec_by_cid.get(int(cid), (np.nan, np.nan))[1],
+            # τp carried through so estimate_cross_slope_width can measure both
+            # halves of the Gaume ratio from the meloche frame alone.
+            'tau_p':         tau_p,
             'Pi1_elastic':   Pi1,
             'Pi2_brittle':   Pi2,
             'Lambda':        Lambda_ai,
+            # Mode III elastic length from the current (unpublished) derivation.
+            # Written so the data side is ready; propagation only reads it when
+            # release_geometry.USE_MODE3_LAMBDA is set.
+            'Lambda_cross':  ai.get('Lambda_cross', np.nan),
             'L_t':           L_t_ai,
+            # Distance to first slab fracture, along-slope (supershear) and
+            # cross-slope (mode III capped at c_s). The ratio is the
+            # crack-speed cap applied to lateral propagation.
+            'L_dyn':         ai.get('L_dyn',       np.nan),
+            'L_dyn_cross':   ai.get('L_dyn_cross', np.nan),
+            'mode3_length_ratio': ai.get('mode3_length_ratio', np.nan),
             'A_ca_elastic':  A_ca_elastic,
             'A_ca_brittle':  A_ca_ai,
             'rc_wl':         row.get('rc_wl', np.nan),

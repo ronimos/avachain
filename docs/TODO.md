@@ -1,6 +1,6 @@
 # Little Professor Pipeline — TODO
 
-**Updated:** 2026-10-06  
+**Updated:** 2026-10-10  
 **Context:** UAS → distributed SNOWPACK → release geometry → com1DFA runout probability
 
 See [`CSV_FEATURE_PIPELINE_ISSUES.md`](../CSV_FEATURE_PIPELINE_ISSUES.md) for the
@@ -88,6 +88,115 @@ evidence for every item in the "Feature-CSV pipeline audit" section below).
 
 ## Physical Model Improvements
 
+### Release-areas sync, 2026-10-10 — what landed here
+
+The standalone repo (`~/avalanche-release-areas`) had accumulated physics this
+repo did not have, including two direction bugs that were live in the production
+path. Ported in one pass; 280 tests pass here (`tests/` was 232).
+
+- [x] **Two terrain-direction bugs — both fixed here.** They confused map
+  direction with raster indexing, and **row increases southward**.
+  - `find_stauchwall` stepped `dr = sign(-cos(asp))`, `dc = sign(sin(asp))`.
+    `np.sign` is ±1 for any nonzero component, so only the four bearings
+    45/135/225/315 were reachable — a pure diagonal on **100.00%** of Jan 18
+    start-zone pixels, median **+13.9°** clockwise error, and the walk was a
+    straight ray that never followed terrain. Now carries sub-pixel position.
+    `transform` is still accepted (call sites pass it positionally) and unused.
+  - `estimate_cross_slope_width` picked "abeam" neighbours by raster row/col
+    (`abs(c_row - t_row) < 50 and abs(c_col - t_col) > 5`), which assumes a
+    north–south fall line. Selected neighbours sat a mean **30°** off the true
+    cross axis — one within 1.2° of the fall line — so `theta_cross` absorbed
+    the along-slope gradient. Now samples in the map frame within
+    ±`THETA_CROSS_SECTOR_DEG` of the cross axis, and needs `aspect_deg`: without
+    it the θ widening is skipped rather than taken along the raster axes.
+  - **The lesson generalises.** Any new code here that derives a direction must
+    be checked against the map frame, never assumed from the array axes.
+    `tests/test_terrain_direction.py` (34 tests, ported) covers both helpers
+    with planar-DEM fixtures at known bearings. Neither had coverage before.
+
+- [x] **The Gaume width ratio no longer depends on the CSV θ.**
+  `estimate_cross_slope_width` measures *both* halves itself via
+  `_sector_theta` — θ_along about the fall line, θ_cross about the cross axis —
+  from the same τp field in the same separation band. Pairing the CSV's
+  isotropic k-NN mean at a ~3.3 m lag with a directional mean at 5–50 m
+  inflates the ratio several-fold on its own, given θ(d) ≈ 3.87 + 72/d Pa/m.
+  The CSV θ survives only as a fallback numerator when no cluster lies in the
+  along-slope sector. Note the Gaume path is effectively **dormant** on Jan 18:
+  `d_lat = min(gaume_width, A_ca·0.712)` and the mode III speed cap binds.
+
+- [x] **θ estimator is selectable, default `plane_fit`** (`snowpack_analysis.py`).
+  θ is a property of the **lag it is measured at**, not of the snowpack. Our
+  clusters are ~3 m across and k=6 averages 3.3 m, inside the 0.5–10 m band
+  Meloche et al. treat as local noise (Appendix E). The τp variogram gives
+  θ(d) = 3.87 + 72/d Pa/m: at 3.3 m θ is **15% slope-scale trend, 85% local
+  noise**. `plane_fit` fits a local least-squares plane within
+  `THETA_FIT_RADIUS_M = L_SS` and takes |∇τp|; `knn` reproduces every
+  pre-2026-10-09 CSV. Median θ 25.19 (`knn`) vs 7.28 (`plane_fit`) Pa/m on
+  Jan 18, so A_ca × ~3.3. **The argument is the calibration scale, not the fit**
+  — Meloche's θ is the gradient of a ramp over L_ss, so the neighbourhood should
+  be L_ss. Do not pick it by IoU: θ moves Π₁, hence the whole filter chain.
+  Also emits `theta_grad_east` / `theta_grad_north` (NaN under `knn`), so a θ
+  split is available from the estimator itself.
+
+- [x] **`arrest_indices.py` is now identical to the standalone's** (modulo doc
+  paths). That brings `mode3_length_ratio`, `cp_over_cs`, `k_x_cross`,
+  `L_dyn_cross`, the named `C_FIT`, and **`SCH2004_EXP = 1.9`** — the exponent
+  as printed in Schweizer, Michot & Kirchner (2004) Eq. 8, verified against the
+  PDF. The old 2.0 was this project's rounding of the abstract's "about 2" and
+  runs 11% low at ρ = 300, 17% at ρ = 150; `SCH2004_EXP_ROUND` reproduces it.
+  This **cannot** move a release polygon — `k_ic()` reaches only the ligament
+  columns, which the BFS never reads — so it had to be decided from the source.
+
+**Operationally: existing meloche CSVs are stale.** θ changes, so Π₁, the
+trigger ranking and the whole filter chain change with it. Nothing moves until
+`compute_meloche_features` is re-run. Validated end-to-end in the standalone
+repo on Jan 18 (best IoU 0.677 at `--max-clusters 2000`, mean area/observed
+0.82 against the 0.83 mask-limited ceiling); **not yet re-run through this
+pipeline.** Do that before trusting any avachain release polygon.
+
+- [ ] **Re-run the Jan 18 analysis here and reconcile against the standalone.**
+  The two repos should now agree on geometry given the same CSVs. Any
+  divergence is a porting defect, so this is the acceptance test for the sync.
+
+- [ ] **Anisotropic BFS rings — to investigate (Ron's idea, 2026-10-09).** As
+  `propagate_release` adds rings to the flood-fill, grow roughly **1.6× further
+  along-slope than cross-slope** per ring, instead of growing isotropically and
+  only clipping afterwards with `d_up` / `d_down` / `d_lat`. The ratio is
+  already in the model as `MODE2_SPEED_RATIO`: mode II runs supershear at
+  ~1.6 c_s while mode III caps at c_s (Broberg 1989). If a ring represents one
+  increment of crack-front advance in *time*, the front should already be ~1.6×
+  further along-slope when it arrives — the anisotropy belongs in the growth,
+  not only in a terminal cap; at present the front shape is an artifact of
+  cluster geometry. Settle first whether this *replaces* the speed cap or
+  composes with it (both would double-count the same 1.6). Judge it against the
+  observed crown's aspect (major axis 119°, L/W 3.51), a sharper test than IoU,
+  and do not tune the ratio to this event.
+
+- [ ] **Trigger-set stability — the top-N ranking is decided by Sk38 ties.**
+  Places 3–5 turn on Sk38 agreeing to 2–3 significant figures, so the set is not
+  stable against θ. In the standalone's §6 2×2 the ranking moved 2858/1068 →
+  6191/5817; in one run an Sk38 tie at 0.75 put cluster 3020 in fifth place and
+  that scenario collapsed to 434 m² at IoU 0.061, dragging the mean on its own.
+  Any comparison must be read trigger-matched, and a tie-break less brittle
+  than raw Sk38 ordering would be worth having.
+
+- [ ] **θ validity is the strongest open objection to the whole arrest route.**
+  Under `plane_fit`, **97.2%** of Jan 18 start-zone clusters fall below
+  Meloche's `THETA_VALID_MIN` (20 Pa/m), against 36.2% under `knn`. Read
+  literally, the Jan 18 weak layer has no slope-scale ramp steep enough to
+  arrest within L_ss. This is **not** an argument for reverting to `knn`, which
+  only looked compliant because it was measuring noise. Recorded as
+  `THETA_VALID_MIN/MAX`, not enforced; enforcing it is an open modelling
+  decision that one event cannot settle.
+
+- [ ] **Adding a τp Gaussian random field is NOT the indicated next step** —
+  a reading of JGR Appendix E that earlier notes here got wrong. Appendix E is a
+  sensitivity analysis whose stated result is that local noise "mainly affects
+  the crack speed"; the paper's arrest-relevant heterogeneity *is* the linear
+  ramp. Our measured σ_local is 69 Pa against Appendix E's 500 Pa, and
+  superimposing that field would inject 55–169 Pa/m of spurious θ (2–7× the real
+  median), shrinking A_ca further in the wrong direction.
+
 - [ ] **Asymmetric gradient thresholds — premise is now out of date.** The
   constants were renamed and *already made asymmetric*:
   `release_geometry.py:798-801` has `LAMBDA_DROP_FACTOR = 0.20` /
@@ -107,12 +216,15 @@ evidence for every item in the "Feature-CSV pipeline audit" section below).
   modulus, `Λ_III = √(G h D_wl / G_wl)`, giving `Λ_III/Λ_II = √((1−ν)/2) ≈ 0.59`
   at ν = 0.3 — Ron's own derivation, not published. Nothing in the propagation
   path uses it: the BFS applies a single Λ in all directions.
-  **Prep done in the standalone repo** (`~/avalanche-release-areas`, mirror here
-  when convenient): the propagation code now splits arrest evaluation into
-  up/downslope vs cross-slope branches with separate `Lambda_along` /
-  `Lambda_cross` variables, both currently fed by the **same** mode II formula so
-  results are unchanged. When the real formula arrives, only
-  `elastic_length_cross()` changes.
+  **Prep done in both repos** (ported here 2026-10-10): arrest evaluation splits
+  into along-slope vs cross-slope branches and `release_geometry.directional_lambda(props, is_cross)`
+  is the single place the two diverge, with its own continuity thresholds
+  (`LAMBDA_CROSS_DROP_FACTOR` / `..._RISE_FACTOR`, currently equal to the
+  along-slope pair). `compute_meloche_features` emits `Lambda_cross`. Both
+  branches are still fed by the mode II formula, so results are unchanged. To
+  land the real formula: (1) update `arrest_indices.elastic_length_cross()`,
+  (2) set `release_geometry.USE_MODE3_LAMBDA = True`, (3) regenerate the meloche
+  CSV. Nothing else should need to change — if it does, the split has drifted.
   **Measured caveat — a constant Λ_III/Λ_II ratio changes nothing.** The Λ
   continuity gate tests the *relative* change (Λ_nbr − Λ_cur)/Λ_cur, which is
   invariant under uniform rescaling of Λ, and the only absolute threshold
@@ -135,17 +247,20 @@ evidence for every item in the "Feature-CSV pipeline audit" section below).
   with the JGR paper attributing lateral arrest to WL heterogeneity.
   **Unblocks:** the dead `--mode3-scale` flag (see Feature-CSV audit section).
 
-- [ ] **Mode III crack-speed cap — IMPLEMENTED in the standalone repo, port here.**
-  Done 2026-10-06 in `~/avalanche-release-areas`; mirror when convenient.
-  `arrest_indices.mode3_length_ratio()` gives
+- [x] **Mode III crack-speed cap — PORTED HERE 2026-10-10.**
+  Implemented 2026-10-06 in `~/avalanche-release-areas`, mirrored here with the
+  rest of the release-areas physics (see the port entry at the top of this
+  section). `arrest_indices.mode3_length_ratio()` gives
   `L_dyn,III/L_dyn,II = k_x,II/k_x,III = 0.712` at ν=0.3 (E and ρ cancel; the
   ratio depends only on ν and the two speed ratios). `evaluate()` now also
   returns `k_x_cross`, `L_dyn_cross`, `mode3_length_ratio`, and
   `compute_meloche_features` emits `L_dyn`, `L_dyn_cross`,
-  `mode3_length_ratio`. `propagate_crack` composes it with the Gaume width as a
-  minimum: `d_lat = min(gaume_width, A_ca·0.712)·size_factor`. Behind
-  `config.USE_MODE3_SPEED_CAP` (default on); off is bit-for-bit identical to
-  pre-cap. 8 new unit tests.
+  `mode3_length_ratio`. `propagate_release` composes it with the Gaume width as a
+  minimum: `d_lat = min(gaume_width, A_ca·0.712)·size_factor`, via
+  `release_geometry.mode3_speed_cap_ratio()`, which prefers the CSV column and
+  falls back to computing the ratio from ν so pre-column CSVs still get the cap.
+  Behind `release_geometry.USE_MODE3_SPEED_CAP` (default on); off is
+  bit-for-bit identical to pre-cap.
   **Measured on Jan 18:** unlike Λ_III this is *not* scale-invariant — it is an
   absolute distance cap, so it does change results. Binds on 2 of 5 triggers
   (the other 3 were already Gaume-limited below it): median area
@@ -207,15 +322,12 @@ quotes: [`CSV_FEATURE_PIPELINE_ISSUES.md`](../CSV_FEATURE_PIPELINE_ISSUES.md).
 
 CRS split is the highest-risk item and lives in **High Priority** above.
 
-- [ ] **`theta` is Pa per *pixel*, not Pa/m** — `compute_meloche_features()`
-  (`snowpack_analysis.py:461`) accepts `transform` and never uses it in the body
-  (461–650). The comment at `:533` says "Convert pixel distance to meters (1m
-  resolution DEM)" but `:599` divides by the raw ball-tree distance:
-  `theta_vals.append(abs(tau_p - tau_j) / d)`. Correct at 1 m, silently wrong at
-  any other resolution — and θ feeds `Pi1_elastic`, `Pi2_brittle`,
-  `A_ca_brittle`, `A_ca_energy`. **Fix:** multiply neighbour distances by
-  `abs(transform.a)`. One line; a no-op on current 1 m data, which makes it a
-  safe regression check.
+- [x] **`theta` is Pa per *pixel*, not Pa/m** — FIXED 2026-10-10 with the θ
+  estimator port. `compute_meloche_features()` now takes
+  `px_m = abs(transform.a)` and both estimators (`theta_knn`, `theta_plane_fit`)
+  work in metres; `np.gradient(fill_dem, px_m)` too. A no-op on the current 1 m
+  data, as predicted. Covered by
+  `tests/test_theta_estimators.py::test_px_m_scales_theta_inversely`.
 
 - [ ] **Drop `A_ca_elastic` — it is uncalibrated** —
   `snowpack_analysis.py:633` computes `A_ca_elastic = L_SS * Pi1**(1.5)`
@@ -223,17 +335,17 @@ CRS split is the highest-risk item and lives in **High Priority** above.
   with no published constant; this silently assumes the constant is 1. On Little
   Professor that yields a median of **7 800 m** and a max of **3.7 × 10⁶ m** in a
   shipped CSV. Nothing downstream reads it. **Fix:** remove the column; keep the
-  dimensionless `Pi1_elastic`, which carries the same information.
+  dimensionless `Pi1_elastic`, which carries the same information. The standalone
+  dropped it on 2026-10-09; the 2026-10-10 port deliberately left it in place
+  here, since removing a CSV column is a schema change rather than a physics fix.
 
-- [ ] **Add `tau_p` to the meloche CSV — unblocks cross-slope width** —
-  `estimate_cross_slope_width()` (`release_geometry.py:245-253`) looks for
-  `tau_p` / `wl_shear_strength` in **`meloche_df`**, which carries neither
-  (schema confirmed at `snowpack_analysis.py:635-648`), then returns `A_ca`
-  unchanged on NaN. The Gaume (2015)/θ flank constraint is therefore **dead** and
-  lateral extent is just `A_ca`. **Fix:** emit `tau_p` from
-  `compute_meloche_features()`, and/or read τp from the `profile_features` frame.
-  The standalone repo now does both; enabling it changed `d_lat` from a constant
-  `A_ca` to a per-trigger 21–60 m, so expect release polygons to move.
+- [x] **Add `tau_p` to the meloche CSV — unblocks cross-slope width** — DONE
+  2026-10-10. `compute_meloche_features()` now emits `tau_p`, and
+  `estimate_cross_slope_width()` also accepts `snap_features` and falls back to
+  it via `_tau_p_lookup()`, so the Gaume (2015)/θ flank constraint is live
+  either way. Expect release polygons to move: `d_lat` was effectively a
+  constant `A_ca` and becomes per-trigger. Note it is now composed with the
+  mode III speed cap as a `min()`, and on Jan 18 the speed cap is what binds.
 
 - [ ] **`max_clusters = 500` silently bounds the release region** — two
   independent implementations, each with its own hardcoded default:
@@ -285,11 +397,13 @@ CRS split is the highest-risk item and lives in **High Priority** above.
 
 - [ ] **Remove the dead `--mode3-scale` flag, or implement mode III** —
   `release_geometry.py:474` is honest (`mode3_scale: float = 2.0, # kept for API
-  compat, not used`), but the docstring at `:332` still claims "Lateral: Π₁ <
+  compat, not used`), but the docstring still claims "Lateral: Π₁ <
   Π₁_trigger × mode3_scale (mode III)" and the CLI flag is still live at
-  `analysis_pipeline.py:1024`. Users can set a flag that does nothing. **Blocked
-  by:** Gaume's antiplane (mode III) Λ formula — see the cross-slope Λ item under
-  Physical Model Improvements.
+  `analysis_pipeline.py:1024`. Users can set a flag that does nothing.
+  **No longer blocked:** mode III now *is* implemented, as the crack-speed cap
+  (ported 2026-10-10), and it does not use this flag — lateral extent is
+  `min(gaume_width, A_ca·0.712)`. The standalone removed the flag rather than
+  leave a no-op; do the same here, which means touching the CLI surface.
 
 - [ ] **Document that the Meloche arrest test is disabled** —
   `release_geometry.py:49` `USE_MELOCHE_ARREST = False`. What actually arrests the
@@ -300,8 +414,10 @@ CRS split is the highest-risk item and lives in **High Priority** above.
   because the module names imply the Meloche criterion is doing the work.
 
 - [ ] **Derive pixel size from `transform` instead of hardcoding 1 m** —
-  `np.gradient(fill_dem, 1.0)` at `snowpack_analysis.py:124`, `:493`;
-  `avalanche.py:64`, `:455`, `:663`. All slope/aspect grids assume 1 m.
+  partially done 2026-10-10: `compute_meloche_features` now uses
+  `px_m = abs(transform.a)` for both the DEM gradient and the θ estimators.
+  Still hardcoded: `snowpack_analysis.py:203`; `avalanche.py:64`, `:75-76`,
+  `:455`, `:663`. Those slope/aspect/HS-difference grids all assume 1 m.
 
 ### Already correct here — do not "fix" backwards
 

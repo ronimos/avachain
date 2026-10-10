@@ -2,7 +2,8 @@
 
 Sources: Meloche et al. (2025, JGR Earth Surface), Meloche et al. (ISSW 2026),
 Meloche et al. (2026, TARP report). The energy-cap functions are a hypothesis
-(see arrest_indices.md), not published results.
+(see docs/arrest_indices.md), not published results. The full derivation and the
+Jan 18 2026 validation live in ~/avalanche-release-areas/docs/release_area_methods.md.
 
 Units: SI (Pa, m, kg/m3, J/m2); angles in degrees.
 """
@@ -77,6 +78,45 @@ def dynamic_gradient(k_f, E, rho, nu=0.3, speed_ratio=1.6):
     return k_f * dynamic_factor(E, rho, nu, speed_ratio)
 
 
+# Crack-speed regimes. Upslope (mode II) cracks run supershear; mode III
+# (antiplane) cracks cannot exceed the shear wave speed.
+#
+# On the 1.6: Meloche et al. (2025) write the supershear speed as 1.6 c_s but
+# identify it with c_p -- "A horizontal dashed line is set at 1.6 c_s ~= sqrt(E'/rho),
+# which is the supershear speed (Trottet et al., 2022)" -- and plot "until
+# c_p ~= 1.6 c_s". So 1.6 is their rounding of c_p/c_s = sqrt(2/(1-nu)) = 1.690
+# at nu = 0.3. Taking adot = c_p exactly gives k_x/k_f = 1/2, which is what the
+# paper's own Fig. 3 caption states; the literal 1.6 gives 0.527.
+# We keep the literal 1.6 so published figures reproduce; cp_over_cs() below
+# gives the exact alternative. The choice moves mode3_length_ratio by ~5%
+# (0.712 -> 0.675).
+MODE2_SPEED_RATIO = 1.6   # adot / c_s upslope, Meloche et al. (2025) as written
+MODE3_SPEED_RATIO = 1.0   # adot / c_s cross-slope cap, Broberg (1989)
+
+
+def cp_over_cs(nu=0.3):
+    """c_p / c_s = sqrt(2/(1-nu)); 1.690 at nu=0.3.
+
+    The exact supershear bound that Meloche et al. round to 1.6. Pass as
+    speed_ratio_along to evaluate() for the self-consistent k_x/k_f = 1/2.
+    """
+    return np.sqrt(2.0 / (1.0 - nu))
+
+
+def mode3_length_ratio(E, rho, nu=0.3,
+                       speed_ratio_along=MODE2_SPEED_RATIO,
+                       speed_ratio_cross=MODE3_SPEED_RATIO):
+    """L_dyn,III / L_dyn,II = k_x,II / k_x,III.
+
+    A slower crack builds slab tension faster per unit advance, so the mode III
+    speed cap shortens the distance to first slab fracture. Since
+    c_s^2/c_p^2 = (1-nu)/2, E and rho cancel and this reduces to a function of
+    nu and the two speed ratios alone: 0.712 at nu=0.3.
+    """
+    return (dynamic_factor(E, rho, nu, speed_ratio_along)
+            / dynamic_factor(E, rho, nu, speed_ratio_cross))
+
+
 def tensile_length(sigma_t, k):
     """sigma_t / k; inf if k <= 0."""
     k = np.asarray(k, dtype=float)
@@ -84,9 +124,16 @@ def tensile_length(sigma_t, k):
         return np.where(k > 0, sigma_t / k, np.inf)
 
 
-def arrest_length(tau_g, theta, Lam, sigma_t, delta=1.0, L_t=None, C=0.045):
+C_FIT = 0.045  # fitted from Meloche et al. 2025 Fig. 8 (two runs); see docs/arrest_indices.md
+
+
+def arrest_length(tau_g, theta, Lam, sigma_t, delta=1.0, L_t=None, C=C_FIT):
     """JGR Eq. 20: A_ca / L_t = C * X * sqrt(sigma_t / tau_g),
     X = tau_g / (theta Lam sqrt(1 + delta)). C = 0.045 is a two-run fit (Fig. 8).
+
+    The only implementation of Eq. 20 in the package — call this rather than
+    re-deriving the scaling, so the C prefactor cannot be dropped.
+
     Returns (A_ca or A_ca/L_t, X)."""
     X = tau_g / (theta * Lam * np.sqrt(1.0 + delta))
     rel = C * X * np.sqrt(sigma_t / tau_g)
@@ -247,15 +294,36 @@ def tensile_strength_weakest_link(sigma_t_i, E_i, dz_i):
 # stress at which K_I reaches K_Ic. A faceted layer is not a traction-free
 # crack, so this is an upper bound on its weakening effect at best.
 #
-# K_Ic has NO sourced density parameterization for snow slabs in tension: the
+# K_Ic(rho) now has two sourced options, K_IC_RELATIONS below. Neither is a
+# slab-tension measurement: Schweizer et al. (2004) is a cantilever/beam fit and
+# Kirchner et al. (2000) is apparent toughness from small beams, so both carry a
+# specimen-size effect and kirchner2000 is a LOWER BOUND. The rest of the
 # accessible literature (van Herwijnen et al. 2016; Sigrist & Schweizer 2007;
 # Sigrist 2006) measures WEAK-LAYER energy release rates, not slab K_Ic, and
-# Meloche et al. (2025, 2026) give neither. So K_Ic is a required argument with
-# no default, and USE_LIGAMENT_BOUND stays off until one is supplied.
-USE_LIGAMENT_BOUND = False
+# Meloche et al. (2025, 2026) give neither. The bound has never been validated
+# against an observed crown, and is not fed into the BFS.
+#
+# The on/off switch is snowpack_analysis.USE_LIGAMENT_BOUND (release_areas keeps
+# it in config.py) -- do not shadow it here.
 
 RHO_ICE = 917.0
 DMAX_FACTOR = 1.0   # d_max = DMAX_FACTOR * grain size (both in m)
+
+# Schweizer, Michot & Kirchner (2004) Ann. Glaciol. 38, Eq. 8. A4 is the
+# paper's 0.35 kPa m.
+#
+# The exponent default changed to the paper's printed 1.9 on 2026-10-09. It had
+# been 2.0, this project's rounding of the abstract's "an exponent of about 2",
+# which runs 11% low at rho = 300 and 17% low at rho = 150. Nothing was
+# measured to justify 2.0 and nothing argues for it over the printed
+# regression, so the paper's figure is now the default and the rounding is kept
+# only as a named constant for reproducing older output. Note this cannot move
+# any release polygon: k_ic() reaches only the ligament columns, which the BFS
+# never reads.
+SCH2004_A4        = 350.0   # Pa m
+SCH2004_EXP_PAPER = 1.9     # as printed in Eq. 8 (r = 0.98)
+SCH2004_EXP_ROUND = 2.0     # the abstract's "about 2"; default before 2026-10-09
+SCH2004_EXP       = SCH2004_EXP_PAPER   # used by default
 
 
 def k_ic_kirchner2000(rho, d_max=None):
@@ -273,25 +341,35 @@ def k_ic_kirchner2000(rho, d_max=None):
     return 7.84e3 * (np.asarray(rho, dtype=float) / RHO_ICE) ** 2.3
 
 
-def k_ic_schweizer2004(rho, d_max=None):
-    """K_Ic = A4 (rho/917)^2 / sqrt(d_max), A4 = 350 Pa m, d_max in m.
+def k_ic_schweizer2004(rho, d_max=None, A4=SCH2004_A4, exp=SCH2004_EXP):
+    """K_Ic = A4 (rho/917)^exp / sqrt(d_max), A4 = 350 Pa m, d_max in m.
 
     Schweizer, Michot & Kirchner (2004), Ann. Glaciol. 38, 1-8, Eq. 8, which
     the paper gives as superseding its own Eqs. 5 and 6 (two (rho/rho_ice)^2.0
     fits with prefactors 13.0 and 21.6 kPa m^0.5 for different snow types) by
-    folding in the d_max^(-1/2) dependence. Valid 80-300 kg/m3 (series A-F).
+    folding in the d_max^(-1/2) dependence, reported at r = 0.98.
+
+    DENSITY EXPONENT: the paper's printed Eq. 8 carries **1.9**; its abstract
+    says "an exponent of about 2". Since 2026-10-09 we default to the printed
+    exp = 1.9. The earlier default of 2.0 was this project's rounding and runs
+    11% low at rho = 300 (1.18 vs 1.32 kPa m^0.5), diverging further below it;
+    only the prefactor-and-exponent pair as printed reproduces the paper's fit.
+    Pass exp=SCH2004_EXP_ROUND to reproduce output generated before the change.
+
+    Valid 80-300 kg/m3: series C-F, chosen to resolve the density dependence,
+    span 80-250, and the abstract quotes 100-300 across all series A-F.
 
     d_max is a LENGTH IN METRES. Note our zarr `grain_size` is already in m
     (median 5.9e-4), unlike raw SNOWPACK .pro output which is in mm.
 
-    rho = 300, d_max = 1 mm -> 1.18 kPa m^0.5.
+    rho = 300, d_max = 1 mm -> 1.18 kPa m^0.5 at the default exp = 2.0.
     """
     rho = np.asarray(rho, dtype=float)
     if d_max is None:
         return np.full(rho.shape, np.nan)
     d = np.asarray(d_max, dtype=float)
     with np.errstate(divide="ignore", invalid="ignore"):
-        return np.where(d > 0, 350.0 * (rho / RHO_ICE) ** 2 / np.sqrt(d), np.nan)
+        return np.where(d > 0, A4 * (rho / RHO_ICE) ** exp / np.sqrt(d), np.nan)
 
 
 # Selectable K_Ic(rho) relations for intact slab snow in mode I, with the
@@ -601,7 +679,7 @@ def aggregate_slab(rho_i, dz_i, sphericity_i, dendricity_i,
 # ---------------------------------------------------------------------------
 # Energy-cap framework (hypothesis)
 # ---------------------------------------------------------------------------
-R_FIT = 0.48  # fitted from Meloche et al. 2025 Fig. 8 (two runs); see arrest_indices.md
+R_FIT = 0.48  # fitted from Meloche et al. 2025 Fig. 8 (two runs); see docs/arrest_indices.md
 
 
 def slab_energy_cap(sigma_t, h, E, nu=0.3):
@@ -628,7 +706,7 @@ def energy_ratio(tau_p, K_wl, sigma_t, h, E, delta=1.0, tau_r=0.0, nu=0.3):
 
 def critical_strength(sigma_t, h, E, K_wl, delta=1.0, tau_r=0.0, R=R_FIT, nu=0.3):
     """tau_p* where G_c(tau_p*) = R * G_slab.
-    R may be a number or 'dynamic' (use k_x/k_f at 1.6 c_s; needs rho via critical_strength_dynamic)."""
+    R must be a number; pass R='dynamic' to evaluate() to resolve it via k_x/k_f first."""
     G_cap = R * slab_energy_cap(sigma_t, h, E, nu)
     return tau_r + np.sqrt(2.0 * K_wl * G_cap / (1.0 + delta))
 
@@ -645,22 +723,31 @@ def arrest_length_energy(tau_p0, tau_p_star, theta):
 # Combined evaluation
 # ---------------------------------------------------------------------------
 def evaluate(rho, h, psi_deg, E, sigma_t, D_wl, G_wl, theta, a_c=None, a_sc=None,
-             nu=0.3, phi_deg=27.0, delta=1.0, C=0.045, tau_p0=None, R=R_FIT,
-             use_residual=False):
+             nu=0.3, phi_deg=27.0, delta=1.0, C=C_FIT, tau_p0=None, R=R_FIT,
+             use_residual=False, speed_ratio_along=MODE2_SPEED_RATIO,
+             speed_ratio_cross=MODE3_SPEED_RATIO):
     """All indices for one slab / weak-layer configuration.
-    R: critical energy ratio (number) or 'dynamic' to use k_x/k_f."""
+    R: critical energy ratio (number) or 'dynamic' to use k_x/k_f.
+    speed_ratio_along / speed_ratio_cross: crack speed as a multiple of c_s for
+    mode II (supershear) and mode III (capped at c_s) propagation."""
     Lam = elastic_length(E, h, D_wl, G_wl, nu)
     K_wl = weak_layer_stiffness(G_wl, D_wl)
     tau_g = gravitational_shear(rho, h, psi_deg)
     tau_r = residual_shear(rho, h, psi_deg, phi_deg)
     k_f = float(tension_gradient(rho, psi_deg, phi_deg))
-    k_x = float(dynamic_gradient(k_f, E, rho, nu))
+    k_x = float(dynamic_gradient(k_f, E, rho, nu, speed_ratio_along))
+    k_x_cross = float(dynamic_gradient(k_f, E, rho, nu, speed_ratio_cross))
     L_t = float(tensile_length(sigma_t, k_f))
     L_dyn = float(tensile_length(sigma_t, k_x))
+    L_dyn_cross = float(tensile_length(sigma_t, k_x_cross))
 
     out = dict(Lambda=Lam, Lambda_cross=elastic_length_cross(E, h, D_wl, G_wl, nu),
                K_wl=K_wl, tau_g=tau_g, tau_r=tau_r, k_f=k_f, k_x=k_x,
-               L_t=L_t, L_dyn=L_dyn, sustained=psi_deg > phi_deg)
+               k_x_cross=k_x_cross, L_t=L_t, L_dyn=L_dyn,
+               L_dyn_cross=L_dyn_cross,
+               mode3_length_ratio=float(mode3_length_ratio(
+                   E, rho, nu, speed_ratio_along, speed_ratio_cross)),
+               sustained=psi_deg > phi_deg)
 
     if np.isfinite(L_t) and theta > 0:
         out["A_ca"], out["X"] = arrest_length(tau_g, theta, Lam, sigma_t, delta, L_t, C)
