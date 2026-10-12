@@ -96,8 +96,8 @@ Candidates must have valid SNOWPACK output with a detectable basal weak layer at
 
 Each candidate is then filtered by four criteria applied sequentially. All must pass for a cluster to remain a candidate.
 
-**Filter 1 — Gravitational driving stress: τ_g ≥ 50 Pa.**  
-The Meloche et al. (2025) brittle scaling law relates crack arrest length to the dimensionless number Π₁ = τ_g / (θ·Λ·√(1+δ)). As τ_g approaches zero (slope angle approaching the friction angle ϕ=27°), Π₁ diverges and the scaling law produces physically meaningless A_ca values. The 50 Pa threshold is an empirical lower bound for D2+ events: below this, the gravitational load on the weak layer is insufficient to sustain self-propagating crack growth. τ_g is computed per cluster by `compute_meloche_features()` in `snowpack_analysis.py` from cluster-specific slope angle (DEM), slab density, slab thickness, and the friction angle:
+**Filter 1 — Gravitational driving stress: τ_g ≥ 40 Pa.**  
+The Meloche et al. (2025) brittle scaling law relates crack arrest length to the dimensionless number Π₁ = τ_g / (θ·Λ·√(1+δ)). As τ_g approaches zero (slope angle approaching the friction angle ϕ=27°), Π₁ diverges and the scaling law produces physically meaningless A_ca values. The 40 Pa threshold is an empirical lower bound for D2+ events: below this, the gravitational load on the weak layer is insufficient to sustain self-propagating crack growth. τ_g is computed per cluster by `compute_meloche_features()` in `snowpack_analysis.py` from cluster-specific slope angle (DEM), slab density, slab thickness, and the friction angle:
 
 ```
 τ_g = ρ·g·h·sin(ψ)·(1 − tan(ϕ)/tan(ψ))

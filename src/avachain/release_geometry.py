@@ -35,6 +35,8 @@ import pandas as pd
 import xarray as xr
 from pyproj import Transformer
 
+import arrest_indices as _ai
+
 # Default physical parameters
 STAUCHWALL_DEG   = 28.0   # slope threshold for downslope arrest (degrees)
 FRICTION_DEG     = 27.0   # snow friction angle (degrees), Meloche Table 1
@@ -48,6 +50,172 @@ MIN_POLYGON_AREA = 200.0  # m² — discard degenerate polygons smaller than thi
 # Left OFF by default so the existing gates run unchanged; flip to A/B the 75-run.
 USE_MELOCHE_ARREST = False
 MELOCHE_DELTA      = 1.0   # softening coefficient δ (Meloche default; their Table 1)
+NU                 = 0.3   # slab Poisson's ratio
+
+THETA_MIN = 1e-6   # Pa/m; θ below this is treated as no usable gradient
+
+# Cross-slope θ sampling in estimate_cross_slope_width(). The lateral sample has
+# to sit near the true cross-slope axis (aspect ± 90°). Selecting it by raster
+# row/col instead — "same row ± 50 px, column offset > 5 px" — silently assumes
+# the fall line runs north-south. On the Jan 18 ESE start zone (aspect 113-120°,
+# cross axis 23-30°) that put the chosen neighbours a mean 30° off the cross
+# axis, with some within 1.2° of the fall line, so theta_cross was contaminated
+# by the along-slope gradient. Fixed 2026-10-09 in release_areas, ported here.
+THETA_CROSS_SECTOR_DEG = 30.0  # ± half-angle accepted about the sampling axis
+THETA_CROSS_MIN_SEP_M  = 5.0   # m; closer pairs make |Δτp|/d noise-dominated
+THETA_CROSS_MAX_SEP_M  = 50.0  # m; beyond this the pair is not abeam
+
+# ---- Mode III (cross-slope) elastic length -----------------------------
+# Λ_III is a different and SMALLER quantity than the along-slope (mode II) Λ.
+# Gaume's antiplane formula is not published yet, so propagation uses the mode II
+# Λ in every direction and the cross-slope branch is a no-op. When the formula
+# lands: update arrest_indices.elastic_length_cross() and flip this flag —
+# nothing else should need to change, or the directional split has drifted.
+#
+# Measured: flipping this has NO effect while Λ_III is a constant multiple of
+# Λ_II. The continuity test compares the *relative* change, which is
+# scale-invariant, and MIN_PROPAGATION_LAMBDA (0.1 m) is never approached. Only
+# a Λ_III with different spatial structure can move the flanks.
+USE_MODE3_LAMBDA = False
+
+# Λ continuity thresholds, cross-slope (mode III / flanks). Separate knobs so
+# the flanks can be tuned independently once Λ_III is known; identical to the
+# along-slope pair for now, so splitting the code changed no results.
+LAMBDA_CROSS_DROP_FACTOR = 0.20
+LAMBDA_CROSS_RISE_FACTOR = 0.30
+
+# ---- Mode III (cross-slope) crack-speed cap ----------------------------
+# Upslope (mode II) cracks run supershear at ~1.6 c_s; mode III cracks cannot
+# exceed c_s (Broberg 1989). Since k_x = k_f c_p²/(c_p² + ȧ²), a slower crack
+# builds slab tension FASTER per unit advance, so the distance to first slab
+# fracture is shorter cross-slope: L_dyn,III / L_dyn,II = 0.712 at ν = 0.3.
+# Unlike USE_MODE3_LAMBDA this is an absolute distance cap, so it does change
+# results. Only the restrictive half of mode III is coded — because G < E′ an
+# equal-strength slab has a *larger* energy cap cross-slope, but that needs a
+# flank strength τ_flank with no parameterisation. Left on because Broberg's
+# limit holds independently of any one event; do not tune it to Jan 18.
+MODE2_SPEED_RATIO   = _ai.MODE2_SPEED_RATIO   # ȧ / c_s upslope, Meloche et al. (2025)
+MODE3_SPEED_RATIO   = _ai.MODE3_SPEED_RATIO   # ȧ / c_s cross-slope, Broberg (1989)
+#
+# DEFAULT FLIPPED True -> False on 2026-10-10 (Ron's call), mirroring
+# release_areas/config.py. The argument is COMPLETENESS, not fit: only the
+# restrictive half of mode III is coded. Because G < E′ an equal-strength slab
+# also has a LARGER energy cap cross-slope (G_slab,III = τ_flank²h/2G against
+# σt²h/2E′), which pushes the other way, but that needs a flank strength
+# τ_flank with no parameterisation (blocked on a Cam-Clay β ambiguity). The
+# honest default for one side of a two-sided effect is off.
+#
+# Jan 18 corroborates without deciding it: cap off gives mean IoU 0.622 vs
+# 0.562 and area/observed 0.78 vs 0.63, i.e. the cap is what makes the model
+# under-predict area. On n = 1 that cannot carry the decision.
+#
+# TO FLIP BACK: once τ_flank lands, enable BOTH halves together — the cap and
+# slab_energy_cap_cross. This one alone restores the same one-sided bias.
+#
+# Consequence worth knowing: with the cap off, d_lat IS the Gaume θ-ratio
+# width, so that path is live again rather than dormant.
+USE_MODE3_SPEED_CAP = False  # apply the ratio to the lateral distance cap
+
+# ---- Anisotropic BFS rings (cross-slope growth rate) -------------------
+# The same speed ratio applied to the *growth* of the flood-fill rather than
+# only to a terminal distance cap: if one ring stands for one increment of
+# crack-front advance in TIME, the front should already be ~1.6x further
+# along-slope when it arrives. A cross-slope candidate is admitted at ring k
+# only once dist <= k * RING_STEP_M * (MODE3/MODE2), and is otherwise DEFERRED,
+# so arrest is still evaluated on arrival. The clock counts only rings that
+# admitted an along-slope cluster — the flanks are fed by the advancing front,
+# so driving the budget from the global ring counter lets flank growth buy
+# itself time and the constraint evaporates.
+#
+# RING_STEP_M = None derives the step from the median adjacent-cluster centroid
+# separation, i.e. one hop, so the fast axis keeps the unmodified BFS rate.
+#
+# Measured on Jan 18 (release-areas, 2026-10-10): with the default caps this is
+# INERT — d_lat = A_ca x 0.712 = 29-38 m binds before the ring budget (50-62 m),
+# so areas and IoU are unchanged. With the lateral cap removed it recovers most
+# of the cap's effect from the speed ratio alone (mean area 1.69x -> 0.85x
+# observed, best IoU 0.392 -> 0.642) and aligns the crown axis to 119 deg
+# against an observed 120.5 deg, but it under-elongates: L/W 1.9-2.1 against an
+# observed 3.2. Off by default. Do not tune the ratio — it is Broberg's.
+USE_ANISOTROPIC_RINGS = False
+RING_STEP_M           = None
+
+# ---- BFS region-size cap ---------------------------------------------------
+# Safety cap on the BFS flood-fill.  When it binds, the polygon is labelled
+# [CAP-BOUND] so it is never mistaken for a physics-limited result.
+# Measured on Jan 18: 500 → 2000 moves median area ~20 % (5 366 → 6 405 m²)
+# and best IoU 0.639 → 0.667; region size saturates by ~1 000 clusters so
+# any value ≥ 1 000 gives the same answer — raising it is not tuning.
+MAX_BFS_CLUSTERS = 2000
+
+
+def mode3_speed_cap_ratio(trigger_cluster_id: int,
+                          meloche_df: pd.DataFrame) -> Optional[float]:
+    """L_dyn,III / L_dyn,II for the trigger, or None if the cap is disabled.
+
+    Prefers the `mode3_length_ratio` column written by
+    compute_meloche_features; falls back to computing it from nu so CSVs
+    predating the column still get the cap. Returns None when
+    USE_MODE3_SPEED_CAP is off, which restores pre-cap behaviour.
+    """
+    if not USE_MODE3_SPEED_CAP:
+        return None
+
+    if (not meloche_df.empty and 'mode3_length_ratio' in meloche_df.columns
+            and trigger_cluster_id in meloche_df.index):
+        ratio = float(first_scalar(
+            meloche_df.loc[trigger_cluster_id, 'mode3_length_ratio']))
+        if np.isfinite(ratio) and 0.0 < ratio <= 1.0:
+            return ratio
+
+    # E and rho cancel out of the ratio, so any positive pair works here.
+    return float(_ai.mode3_length_ratio(
+        4.0e6, 250.0, NU, MODE2_SPEED_RATIO, MODE3_SPEED_RATIO))
+
+
+def _hop_length_m(neighbours: dict, centroids: dict) -> float:
+    """Median centroid separation of adjacent clusters in the BFS graph (m).
+
+    One ring of the flood-fill advances one graph hop, so this is the natural
+    per-ring advance and the length scale the anisotropic ring budget is
+    expressed in. Taken over every edge rather than per cluster so it is a
+    property of the graph, not of where the trigger happens to sit.
+    """
+    seps = [float(np.hypot(centroids[a][0] - centroids[b][0],
+                           centroids[a][1] - centroids[b][1]))
+            for a, nbrs in neighbours.items() if a in centroids
+            for b in nbrs if b in centroids]
+    return float(np.median(seps)) if seps else 0.0
+
+
+def directional_lambda(props: dict, is_cross: bool) -> float:
+    """Elastic length Λ to use for propagation in a given direction.
+
+    Along-slope (mode II) always uses `Lambda`. Cross-slope (mode III) uses
+    `Lambda_cross` only when USE_MODE3_LAMBDA is set; otherwise it falls back to
+    the mode II value, which is the current default because Gaume's antiplane
+    formula is not published yet.
+
+    This is the ONLY place the two directions diverge.
+    """
+    if is_cross and USE_MODE3_LAMBDA:
+        lam = props.get('Lambda_cross', np.nan)
+        if not np.isnan(lam):
+            return lam
+    return props.get('Lambda', np.nan)
+
+
+def first_scalar(value):
+    """Unwrap a pandas lookup that returned a Series/DataFrame to one scalar.
+
+    Cluster ids are not guaranteed unique across concatenated feature frames,
+    so .loc[cid, col] can yield a Series rather than a scalar.
+    """
+    if isinstance(value, pd.DataFrame):
+        return value.iloc[0, 0]
+    if isinstance(value, pd.Series):
+        return value.iloc[0]
+    return value
 
 
 # -----------------------------------------------------------------------
@@ -125,6 +293,33 @@ def utm_to_pixel(x: float, y: float, transform) -> tuple[int, int]:
     return row, col
 
 
+def cluster_pixel_index(cluster_map: np.ndarray) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    """Map every positive cluster id to its (rows, cols) pixel arrays.
+
+    Built in a single sort instead of one full-raster scan per cluster, which
+    is what made the per-cluster `np.argwhere(cluster_map == cid)` calls the
+    dominant cost of polygon generation.
+    """
+    flat    = cluster_map.ravel()
+    valid   = np.flatnonzero(flat > 0)
+    if len(valid) == 0:
+        return {}
+    ids     = flat[valid].astype(np.int64)
+    order   = np.argsort(ids, kind='stable')
+    ids     = ids[order]
+    linear  = valid[order]
+    splits  = np.flatnonzero(np.diff(ids)) + 1
+    ncols   = cluster_map.shape[1]
+    return {int(ids[seg[0]]): (linear[seg] // ncols, linear[seg] % ncols)
+            for seg in np.split(np.arange(len(ids)), splits) if len(seg)}
+
+
+def cluster_centroids_px(pixel_index: dict) -> dict[int, tuple[float, float]]:
+    """Per-cluster centroid in pixel (row, col) coordinates."""
+    return {cid: (float(rows.mean()), float(cols.mean()))
+            for cid, (rows, cols) in pixel_index.items()}
+
+
 # -----------------------------------------------------------------------
 # Downslope: stauchwall location
 # -----------------------------------------------------------------------
@@ -133,34 +328,46 @@ def find_stauchwall(trigger_row: int,
                     trigger_col: int,
                     slope_grid: np.ndarray,
                     aspect_grid: np.ndarray,
-                    transform,
+                    transform=None,
                     threshold_deg: float = STAUCHWALL_DEG,
                     max_steps: int = 500
                     ) -> tuple[int, int]:
     """
     Walk downslope from trigger pixel until slope drops below threshold.
 
-    Uses the fall-line direction (aspect at each step) to advance.
-    Returns (row, col) of the stauchwall pixel.
+    Each step advances one pixel width along the *local* aspect, carrying
+    sub-pixel position across iterations. Returns (row, col) of the stauchwall
+    pixel; if slope never drops below threshold within max_steps, returns the
+    pixel reached at max_steps — a conservative (large) release estimate.
 
-    If slope never drops below threshold within max_steps, returns
-    the pixel at max_steps — a conservative (large) release estimate.
+    Taking `int(np.sign(...))` of the direction components instead — which this
+    did before 2026-10-09 — quantises every step to a pure diagonal: sign() is
+    ±1 for any nonzero component, so only the four bearings 45/135/225/315 are
+    reachable and the walk degenerates into a straight ray that never follows
+    terrain. On the Little Professor ESE start zone (aspect 110-120°) that sent
+    every trigger off at 135°, a systematic +14° median clockwise error that
+    rotated the release polygons toward south, on 100% of start-zone pixels.
+
+    `transform` is accepted for call-site compatibility and unused: the walk is
+    in pixel units and one step is one pixel width.
 
     References: Perzl (2007) JRC; Swiss ALIP/PRA; Maggioni & Gruber;
                 Bühler et al.; Veitinger et al. (2016).
     """
     nrows, ncols = slope_grid.shape
     row, col     = trigger_row, trigger_col
+    row_f, col_f = float(trigger_row), float(trigger_col)
 
     for _ in range(max_steps):
         if slope_grid[row, col] < threshold_deg:
             return row, col
-        # Step one pixel in the downslope direction
         asp_rad = np.radians(aspect_grid[row, col])
-        dr = int(np.sign(-np.cos(asp_rad)))   # rows increase southward, so negate north component
-        dc = int(np.sign( np.sin(asp_rad)))   # col advances with +x (east)
-        new_row = row + dr
-        new_col = col + dc
+        # Downslope unit vector, map frame -> pixel frame:
+        # east = +sin(aspect) -> +col, north = +cos(aspect) -> -row.
+        row_f += -np.cos(asp_rad)
+        col_f +=  np.sin(asp_rad)
+        new_row = int(round(row_f))
+        new_col = int(round(col_f))
         if not (0 <= new_row < nrows and 0 <= new_col < ncols):
             break
         if np.isnan(slope_grid[new_row, new_col]):
@@ -174,29 +381,91 @@ def find_stauchwall(trigger_row: int,
 # Cross-slope: Gaume (2015) + θ
 # -----------------------------------------------------------------------
 
+def _tau_p_lookup(meloche_df: pd.DataFrame,
+                  snap_features: Optional[pd.DataFrame]) -> tuple:
+    """Pick the frame/column holding weak-layer shear strength τp.
+
+    compute_meloche_features() does not carry τp through to its output on older
+    CSVs, so the value normally lives in the profile_features frame. Checking
+    meloche_df first keeps hand-assembled frames that do carry it working.
+    """
+    for frame in (meloche_df, snap_features):
+        if frame is None or frame.empty:
+            continue
+        for col in ('tau_p', 'wl_shear_strength'):
+            if col in frame.columns:
+                return frame, col
+    return None, None
+
+
+def _sector_theta(offsets, axis_x: float, axis_y: float,
+                  tau_trigger: float, tau_frame, tau_col: str,
+                  n_neighbors: int) -> float:
+    """Mean |Δτp|/d over the nearest clusters lying along a given axis.
+
+    `offsets` is a prebuilt list of (cid, dx, dy, dist_m) already filtered to
+    the [MIN_SEP, MAX_SEP] separation band. A cluster qualifies when its
+    separation points within THETA_CROSS_SECTOR_DEG of ±(axis_x, axis_y) —
+    |d·axis|, so both halves of the axis count.
+
+    Used for both the along-slope and cross-slope θ so the ratio that sets the
+    Gaume width is formed from two estimates made the same way, at the same
+    lag, from the same τp field.
+    """
+    cos_min = np.cos(np.radians(THETA_CROSS_SECTOR_DEG))
+    sel = sorted(((cid, d) for cid, dx, dy, d in offsets
+                  if abs(dx * axis_x + dy * axis_y) / d >= cos_min),
+                 key=lambda t: t[1])[:n_neighbors]
+
+    vals = []
+    for cid, dist_m in sel:
+        if cid not in tau_frame.index:
+            continue
+        tau_j = float(pd.to_numeric(
+            first_scalar(tau_frame.loc[cid, tau_col]), errors='coerce'))
+        if not np.isnan(tau_j) and dist_m > 0:
+            vals.append(abs(tau_trigger - tau_j) / dist_m)
+    return float(np.mean(vals)) if vals else np.nan
+
+
 def estimate_cross_slope_width(
         trigger_cluster_id: int,
         A_ca: float,
         meloche_df: pd.DataFrame,
         cluster_map: np.ndarray,
         transform,
+        snap_features: Optional[pd.DataFrame] = None,
+        pixel_index: Optional[dict] = None,
         n_lateral_neighbors: int = 6,
-        gaume_aspect_cap: float = GAUME_ASPECT_CAP) -> float:
+        gaume_aspect_cap: float = GAUME_ASPECT_CAP,
+        aspect_deg: Optional[float] = None) -> float:
     """
-    Estimate cross-slope release width (m).
+    Estimate cross-slope release width (m) using Gaume et al. (2015) / θ.
 
-    Implements the Gaume et al. (2015) / Meloche (2025) conceptual framework:
-    cross-slope crack arrest is controlled by the WL shear-strength gradient θ
-    in the lateral direction. A higher cross-slope θ means stronger heterogeneity
-    and earlier arrest → narrower release.
+    Implements the Gaume et al. (2015) / Meloche (2025) framework: cross-slope
+    crack arrest is controlled by the WL shear-strength gradient θ in the
+    lateral direction. A higher cross-slope θ means stronger heterogeneity and
+    earlier arrest → narrower release. Width is A_ca × (θ_along/θ_cross),
+    capped at gaume_aspect_cap × A_ca.
 
-    Approach:
-      1. Find clusters laterally adjacent to the trigger cluster
-      2. Compute mean cross-slope θ from τ_p differences
-      3. Estimate width as A_ca × f(θ_cross / θ_downslope), capped at
-         GAUME_ASPECT_CAP × A_ca
+    Falls back to A_ca whenever θ, τp or `aspect_deg` is unavailable.
 
-    If θ data is unavailable, falls back to width = A_ca (square release).
+    `aspect_deg` is the downslope bearing at the trigger and is what defines
+    "cross-slope": the lateral sample is restricted to a ±THETA_CROSS_SECTOR_DEG
+    sector about the cross axis (aspect ± 90°), on either flank. Without it
+    there is no cross-slope direction to sample along, so the θ widening is
+    skipped rather than taken along the raster axes — which is what this did
+    before 2026-10-09 ("same row ± 50 px"), silently assuming a north-south
+    fall line and letting the along-slope gradient leak into theta_cross.
+
+    Both halves of the ratio are measured here, by `_sector_theta`, from the
+    same τp field in the same separation band: θ_along about the fall line,
+    θ_cross about the cross axis. Taking the numerator from the meloche CSV
+    instead pairs an *isotropic* k-NN mean at a ~3.3 m lag with a directional
+    mean at 5-50 m, and since θ(d) ≈ 3.87 + 72/d Pa/m on this slope the lag
+    mismatch alone inflates the ratio several-fold and drives it into
+    gaume_aspect_cap. The CSV θ survives only as a fallback numerator when no
+    cluster lies in the along-slope sector.
 
     References
     ----------
@@ -206,74 +475,65 @@ def estimate_cross_slope_width(
     if meloche_df.empty or 'theta' not in meloche_df.columns:
         return A_ca
 
+    if aspect_deg is None or np.isnan(aspect_deg):
+        return A_ca
+
     try:
         theta_down = float(meloche_df.loc[trigger_cluster_id, 'theta'])
     except (KeyError, TypeError):
         return A_ca
 
-    if np.isnan(theta_down) or theta_down < 1e-6:
+    if np.isnan(theta_down) or theta_down < THETA_MIN:
         return A_ca
 
-    # Get trigger centroid in pixel space
-    trig_pixels = np.argwhere(cluster_map == trigger_cluster_id)
-    if len(trig_pixels) == 0:
+    tau_frame, tau_col = _tau_p_lookup(meloche_df, snap_features)
+    if tau_frame is None or trigger_cluster_id not in tau_frame.index:
         return A_ca
-    t_row, t_col = trig_pixels.mean(axis=0)
-
-    # Find candidate lateral neighbors — similar row, different col
-    cids_all = np.unique(cluster_map[cluster_map > 0])
-    lateral  = []
-    for cid in cids_all:
-        if cid == trigger_cluster_id:
-            continue
-        pxs = np.argwhere(cluster_map == cid)
-        if len(pxs) == 0:
-            continue
-        c_row, c_col = pxs.mean(axis=0)
-        # "Lateral" = roughly same row (within ±50 px), different column
-        if abs(c_row - t_row) < 50 and abs(c_col - t_col) > 5:
-            dist = abs(c_col - t_col)  # pixel distance
-            lateral.append((cid, dist))
-
-    lateral.sort(key=lambda x: x[1])
-    lateral = lateral[:n_lateral_neighbors]
-
-    if not lateral:
-        return A_ca
-
-    # Compute θ_cross from τ_p differences
-    # Safely coerce to numeric scalar to avoid issues with non-float dtypes
-    if 'tau_p' in meloche_df.columns:
-        raw = meloche_df.loc[trigger_cluster_id, 'tau_p']
-    elif 'wl_shear_strength' in meloche_df.columns:
-        raw = meloche_df.loc[trigger_cluster_id, 'wl_shear_strength']
-    else:
-        raw = np.nan
-    tau_trigger = float(pd.to_numeric(raw, errors='coerce'))
+    tau_trigger = float(pd.to_numeric(
+        first_scalar(tau_frame.loc[trigger_cluster_id, tau_col]), errors='coerce'))
     if np.isnan(tau_trigger):
         return A_ca
 
-    theta_cross_vals = []
-    for cid, dist_px in lateral:
-        if cid not in meloche_df.index:
-            continue
-        col_name = ('tau_p' if 'tau_p' in meloche_df.columns
-                    else 'wl_shear_strength')
-        tau_lat = float(pd.to_numeric(meloche_df.loc[cid, col_name], errors='coerce'))
-        if not np.isnan(tau_lat) and dist_px > 0:
-            # Convert pixel distance to metres (assumes 1m pixels)
-            theta_cross_vals.append(abs(tau_trigger - tau_lat) / dist_px)
+    if pixel_index is None:
+        pixel_index = cluster_pixel_index(cluster_map)
+    centroids = cluster_centroids_px(pixel_index)
+    if trigger_cluster_id not in centroids:
+        return A_ca
+    t_row, t_col = centroids[trigger_cluster_id]
+    t_x, t_y = pixel_to_utm(int(round(t_row)), int(round(t_col)), transform)
 
-    if not theta_cross_vals:
+    # Separation of every other cluster from the trigger, in the map frame,
+    # restricted once to the usable band and reused for both axes.
+    asp_rad  = np.radians(float(aspect_deg))
+    fall_x, fall_y   = np.sin(asp_rad), np.cos(asp_rad)
+    cross_x, cross_y = -fall_y, fall_x
+
+    offsets = []
+    for cid, (c_row, c_col) in centroids.items():
+        if cid == trigger_cluster_id:
+            continue
+        c_x, c_y = pixel_to_utm(int(round(c_row)), int(round(c_col)), transform)
+        dx, dy   = c_x - t_x, c_y - t_y
+        dist_m   = float(np.hypot(dx, dy))
+        if THETA_CROSS_MIN_SEP_M <= dist_m <= THETA_CROSS_MAX_SEP_M:
+            offsets.append((cid, dx, dy, dist_m))
+    if not offsets:
         return A_ca
 
-    theta_cross = float(np.mean(theta_cross_vals))
+    theta_cross = _sector_theta(offsets, cross_x, cross_y, tau_trigger,
+                                tau_frame, tau_col, n_lateral_neighbors)
+    if np.isnan(theta_cross):
+        return A_ca
 
-    # Width scaling: larger cross-slope θ → shorter arrest width
-    # Ratio θ_down/θ_cross: if cross-slope is MORE heterogeneous than
-    # downslope, crack arrests sooner laterally.
-    if theta_cross > 1e-6:
-        width_factor = min(theta_down / theta_cross, gaume_aspect_cap)
+    # Numerator measured the same way, about the fall line. Falling back to the
+    # CSV θ reintroduces the estimator/lag mismatch, so it is a last resort.
+    theta_along = _sector_theta(offsets, fall_x, fall_y, tau_trigger,
+                                tau_frame, tau_col, n_lateral_neighbors)
+    if np.isnan(theta_along) or theta_along < THETA_MIN:
+        theta_along = theta_down
+
+    if theta_cross > THETA_MIN:
+        width_factor = min(theta_along / theta_cross, gaume_aspect_cap)
     else:
         width_factor = gaume_aspect_cap
 
@@ -321,6 +581,7 @@ def make_release_polygon_2d(
         size_factor: float = 1.0,
         stauchwall_deg: float = STAUCHWALL_DEG,
         mode3_scale: float = 1.5,
+        max_clusters: int = MAX_BFS_CLUSTERS,
         use_propagation: bool = True):
     """
     Build a 2D release polygon.
@@ -405,6 +666,7 @@ def make_release_polygon_2d(
             size_factor        = size_factor,
             A_ca               = A_ca,
             snap_features      = snap_features,
+            max_clusters       = max_clusters,
         )
         if polygon is not None:
             polygon = _clip_polygon(polygon)
@@ -428,7 +690,8 @@ def make_release_polygon_2d(
                                      transform, threshold_deg=stauchwall_deg)
     sw_x, sw_y  = pixel_to_utm(sw_row, sw_col, transform)
     half_width  = estimate_cross_slope_width(
-        trigger_cluster_id, A_ca, meloche_df, cluster_map, transform
+        trigger_cluster_id, A_ca, meloche_df, cluster_map, transform,
+        snap_features=snap_features, aspect_deg=t_aspect
     ) * size_factor / 2.0
 
     asp_rad = np.radians(t_aspect)
@@ -476,7 +739,7 @@ def propagate_release(
         A_ca: Optional[float] = None,
         snap_features: 'Optional[pd.DataFrame]' = None,
         k_neighbours: int = 8,
-        max_clusters: int = 500,
+        max_clusters: int = MAX_BFS_CLUSTERS,
         wave_callback=None):
     """
     Identify release zone as the connected region of clusters with
@@ -611,9 +874,28 @@ def propagate_release(
               f"WL strength criterion disabled")
 
     # Lateral distance cap from Gaume cross-slope width estimate
-    d_lat = estimate_cross_slope_width(
-        trigger_cluster_id, A_ca if A_ca else 50.0,
-        meloche_df, cluster_map, transform) * size_factor
+    A_ca_base   = A_ca if A_ca else 50.0
+    d_lat_gaume = estimate_cross_slope_width(
+        trigger_cluster_id, A_ca_base,
+        meloche_df, cluster_map, transform,
+        snap_features=snap_features, aspect_deg=t_aspect) * size_factor
+
+    # Mode III crack-speed cap. Mode III cannot exceed c_s where upslope runs
+    # supershear at ~1.6 c_s; the slower crack builds slab tension faster per
+    # unit advance, so first slab fracture — and hence arrest — comes sooner
+    # cross-slope. Composed as a min() with the Gaume width because arrest
+    # happens at whichever constraint binds first.
+    d_lat       = d_lat_gaume
+    mode3_ratio = mode3_speed_cap_ratio(trigger_cluster_id, meloche_df)
+    if mode3_ratio is not None:
+        d_lat_speed = A_ca_base * mode3_ratio * size_factor
+        d_lat = min(d_lat, d_lat_speed)
+        print(f"    d_lat={max(d_lat, 15.0):.0f}m  "
+              f"(gaume={d_lat_gaume:.0f}m, mode3_speed_cap={d_lat_speed:.0f}m "
+              f"@ ratio {mode3_ratio:.3f})")
+    else:
+        print(f"    d_lat={max(d_lat, 15.0):.0f}m  (gaume only, "
+              f"mode III speed cap off)")
     d_lat = max(d_lat, 15.0)
 
     tau_p_str = f"{tau_p_trigger:.0f} Pa" if tau_p_trigger else "N/A"
@@ -641,7 +923,7 @@ def propagate_release(
         """Return dict of crack-relevant properties for a cluster."""
         props = {'cid': cid}
         if not meloche_df.empty and cid in meloche_df.index:
-            for col in ['Lambda', 'tau_g', 'rc_wl', 'L_t']:
+            for col in ['Lambda', 'Lambda_cross', 'tau_g', 'rc_wl', 'L_t']:
                 if col in meloche_df.columns:
                     v = meloche_df.loc[cid, col]
                     if isinstance(v, pd.DataFrame): v = v.iloc[0][col]
@@ -662,6 +944,26 @@ def propagate_release(
     # Pre-fetch trigger properties as baseline
     trigger_props = _get_props(trigger_cluster_id)
 
+    def _direction(cid):
+        """(dist, is_upslope, is_downslope, is_cross) of a cluster from the trigger.
+
+        Within ±45° of the downslope bearing is downslope, within ±45° of the
+        opposite is upslope, everything else is cross-slope (mode III / flank).
+        None when the cluster has no centroid.
+        """
+        xy = centroids.get(cid)
+        if xy is None:
+            return None
+        asp_rad        = np.radians(t_aspect)
+        fall_x, fall_y = np.sin(asp_rad), np.cos(asp_rad)
+        dx, dy         = xy[0] - t_x, xy[1] - t_y
+        dist           = float(np.hypot(dx, dy))
+        dot            = (dx * fall_x + dy * fall_y) / max(dist, 1e-6)
+
+        is_downslope = dot >  0.707
+        is_upslope   = dot < -0.707
+        return dist, is_upslope, is_downslope, not is_upslope and not is_downslope
+
     def _qualifies(cid, current_props):
         """
         Does this cluster qualify for crack propagation?
@@ -677,22 +979,16 @@ def propagate_release(
                 return False, 'outside_start_zone'
 
         # Direction and distance from trigger
-        xy = centroids.get(cid)
-        if xy is None:
+        direction = _direction(cid)
+        if direction is None:
             return False, 'no_data'
-        asp_rad        = np.radians(t_aspect)
-        fall_x, fall_y = np.sin(asp_rad), np.cos(asp_rad)
-        dx, dy         = xy[0] - t_x, xy[1] - t_y
-        dist           = np.sqrt(dx**2 + dy**2)
-        dot            = (dx * fall_x + dy * fall_y) / max(dist, 1e-6)
-
-        is_downslope = dot >  0.707
-        is_upslope   = dot < -0.707
+        dist, is_upslope, is_downslope, is_cross = direction
 
         # Distance caps: upslope A_ca, downslope stauchwall, lateral Gaume width
+        # composed with the mode III crack-speed cap.
         if is_upslope   and dist > d_up:   return False, 'upslope_distance_cap'
         if is_downslope and dist > d_down: return False, 'downslope_distance_cap'
-        if not is_upslope and not is_downslope and dist > d_lat:
+        if is_cross and dist > d_lat:
             return False, 'lateral_distance_cap'
 
         # Terrain slope threshold — applies to all directions (downslope and lateral).
@@ -717,7 +1013,7 @@ def propagate_release(
             return False, 'thin_slab'
 
         # Minimum Lambda — slab too weak/compliant
-        lam_nbr_abs = nbr_props.get('Lambda', np.nan)
+        lam_nbr_abs = directional_lambda(nbr_props, is_cross)
         if not np.isnan(lam_nbr_abs) and lam_nbr_abs < MIN_PROPAGATION_LAMBDA:
             return False, 'low_lambda'
 
@@ -741,7 +1037,7 @@ def propagate_release(
                     # directed gradient toward stronger WL (Pa/m)
                     theta_dir = max(0.0, (tau_p_n - tau_p_c) / dist_cn)
                     if theta_dir > 0.0:
-                        Lam   = nbr_props.get('Lambda',  np.nan)
+                        Lam   = directional_lambda(nbr_props, is_cross)
                         tg    = tau_g_nbr
                         sig_t = nbr_props.get('sigma_t', np.nan)
                         L_t   = nbr_props.get('L_t',     np.nan)
@@ -758,17 +1054,26 @@ def propagate_release(
         # A DROP in Lambda (softening / more compliant slab over the WL) is the
         # physical arrest direction; a RISE (stiffening) should rarely arrest.
         # Thresholds are therefore asymmetric: tight on drops, loose on rises.
-        lam_current = current_props.get('Lambda', np.nan)
-        lam_nbr     = nbr_props.get('Lambda', np.nan)
+        # Cross-slope carries its own Λ and its own thresholds, so the flanks
+        # can diverge from the along-slope behaviour once Λ_III is known. The
+        # two pairs are equal for now, so this split changed no results.
+        lam_current = directional_lambda(current_props, is_cross)
+        lam_nbr     = directional_lambda(nbr_props,     is_cross)
+        lam_drop, lam_rise = (
+            (LAMBDA_CROSS_DROP_FACTOR, LAMBDA_CROSS_RISE_FACTOR)
+            if is_cross else
+            (LAMBDA_DROP_FACTOR, LAMBDA_RISE_FACTOR))
         if (not np.isnan(lam_current) and not np.isnan(lam_nbr)
                 and lam_current > 0):
             signed_change = (lam_nbr - lam_current) / lam_current
             if signed_change < 0:   # softening — arrest-prone
-                if -signed_change > LAMBDA_DROP_FACTOR * size_factor:
-                    return False, 'lambda_discontinuity_drop'
+                if -signed_change > lam_drop * size_factor:
+                    return False, ('lambda_cross_discontinuity_drop' if is_cross
+                                   else 'lambda_discontinuity_drop')
             else:                   # stiffening — propagation-favorable
-                if signed_change > LAMBDA_RISE_FACTOR * size_factor:
-                    return False, 'lambda_discontinuity_rise'
+                if signed_change > lam_rise * size_factor:
+                    return False, ('lambda_cross_discontinuity_rise' if is_cross
+                                   else 'lambda_discontinuity_rise')
 
         # Slab thickness jump (local gradient) — directional.
         # A DROP in thickness (toward a thinner slab that cannot sustain the
@@ -824,13 +1129,67 @@ def propagate_release(
     current_ring = [trigger_cluster_id]
     ring_idx = 0
 
+    # Anisotropic rings: the cross-slope front advances
+    # MODE3_SPEED_RATIO / MODE2_SPEED_RATIO as far per ring as the along-slope
+    # front, so a flank candidate waits ("deferred") until the budget reaches
+    # it. The clock counts only rings that admitted an along-slope cluster —
+    # see the USE_ANISOTROPIC_RINGS note at the top of this module.
+    rings_on   = USE_ANISOTROPIC_RINGS
+    ring_ratio = (MODE3_SPEED_RATIO / MODE2_SPEED_RATIO
+                  if MODE2_SPEED_RATIO > 0 else 1.0)
+    ring_step  = RING_STEP_M if RING_STEP_M else _hop_length_m(neighbours,
+                                                               centroids)
+    deferred: list = []     # (cid, parent_props, dist) still outside the budget
+    along_clock = 0
+    if rings_on:
+        print(f"    anisotropic rings ON: cross advance "
+              f"{ring_ratio:.3f} x {ring_step:.2f} m per ring")
+        if not (ring_step > 0 and ring_ratio > 0):
+            # A zero budget would never admit a flank cluster and the deferral
+            # queue would never drain, so refuse rather than hang.
+            raise ValueError("anisotropic rings need a positive ring_step and "
+                             f"speed ratio, got {ring_step} and {ring_ratio}")
+
+    def _cross_budget():
+        return along_clock * ring_step * ring_ratio
+
     if wave_callback is not None:
         wave_callback(0, [trigger_cluster_id], [])
 
+    # Deferred candidates are drained inside this loop, so they are only ever
+    # admitted while the front is still advancing — the front stopping IS the
+    # end of the event.
     while current_ring and len(failed) < max_clusters:
         ring_idx += 1
         next_ring = []
         ring_arrested = []
+        budget = _cross_budget()
+        admitted_along = False
+
+        def _admit(cid, parent_props):
+            """Evaluate arrest for one candidate and record the outcome."""
+            nonlocal admitted_along
+            qualifies, reason = _qualifies(cid, parent_props)
+            if qualifies:
+                failed.add(cid)
+                cluster_props[cid] = _get_props(cid)
+                next_ring.append(cid)
+                direction = _direction(cid)
+                if direction is not None and not direction[3]:
+                    admitted_along = True
+            else:
+                ring_arrested.append({'cid': cid, 'reason': reason})
+
+        # Deferred flank candidates the budget has now caught up with. Arrest
+        # is evaluated here, on arrival, not when the cluster was deferred.
+        if deferred:
+            still_deferred = []
+            for cid, parent_props, dist in deferred:
+                if dist <= budget:
+                    _admit(cid, parent_props)
+                else:
+                    still_deferred.append((cid, parent_props, dist))
+            deferred = still_deferred
 
         for current in current_ring:
             current_props = cluster_props.get(current, trigger_props)
@@ -838,13 +1197,17 @@ def propagate_release(
                 if nbr in visited:
                     continue
                 visited.add(nbr)
-                qualifies, reason = _qualifies(nbr, current_props)
-                if qualifies:
-                    failed.add(nbr)
-                    cluster_props[nbr] = _get_props(nbr)
-                    next_ring.append(nbr)
-                else:
-                    ring_arrested.append({'cid': nbr, 'reason': reason})
+                if rings_on:
+                    direction = _direction(nbr)
+                    if direction is not None:
+                        dist, _, _, is_cross = direction
+                        if is_cross and dist > budget:
+                            deferred.append((nbr, current_props, dist))
+                            continue
+                _admit(nbr, current_props)
+
+        if admitted_along:
+            along_clock += 1
 
         if not next_ring and not ring_arrested:
             break
@@ -853,6 +1216,25 @@ def propagate_release(
             wave_callback(ring_idx, next_ring, ring_arrested)
 
         current_ring = next_ring
+
+    # The event has a finite duration: once nothing more can be admitted, any
+    # flank candidate still outside the cross-slope budget is never reached.
+    if deferred:
+        print(f"    {len(deferred)} flank clusters dropped — still outside the "
+              f"cross-slope budget ({_cross_budget():.0f} m) when propagation "
+              f"stopped at ring {ring_idx} (along-slope clock {along_clock})")
+
+    # Distinguish "arrest criteria stopped the crack" from "the safety cap did".
+    # max_clusters is a safety cap, not physics: when it binds, the polygon is
+    # not a physical result. Measured on Jan 18 in release-areas, raising it
+    # from 500 to 2000 moved median area ~20% and best IoU 0.669 -> 0.677,
+    # with region size saturating by ~1000 clusters.
+    cap_bound = len(failed) >= max_clusters and bool(current_ring)
+    if cap_bound:
+        print(f"  WARNING: BFS hit the max_clusters cap ({max_clusters}) with "
+              f"{len(current_ring)} clusters still propagating — this polygon "
+              f"is bounded by the cap, not by arrest criteria. Raise it to let "
+              f"the physics terminate it.")
 
     # Debug direction breakdown
     dir_counts = {'upslope': 0, 'downslope': 0, 'lateral': 0, 'other': 0}
@@ -873,7 +1255,8 @@ def propagate_release(
     print(f"  Connected region: {len(failed)} clusters "
           f"(up={dir_counts['upslope']} "
           f"down={dir_counts['downslope']} "
-          f"lat={dir_counts['lateral']})")
+          f"lat={dir_counts['lateral']})"
+          f"{'  [CAP-BOUND]' if cap_bound else ''}")
 
     if len(failed) < 2:
         return None, failed

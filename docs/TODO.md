@@ -1,7 +1,11 @@
 # Little Professor Pipeline — TODO
 
-**Updated:** 2026-09-29  
+**Updated:** 2026-10-10  
 **Context:** UAS → distributed SNOWPACK → release geometry → com1DFA runout probability
+
+See [`CSV_FEATURE_PIPELINE_ISSUES.md`](../CSV_FEATURE_PIPELINE_ISSUES.md) for the
+full 2026-10-06 audit of the feature-CSV generation path (verified file:line
+evidence for every item in the "Feature-CSV pipeline audit" section below).
 
 ---
 
@@ -25,6 +29,25 @@
   **Calibration approach:** run com1DFA with the Jan 18 Meloche-derived release polygon (size_factor=1.00, P50 depth) across a μ/ξ grid, e.g. μ ∈ [0.10, 0.15, 0.20, 0.25, 0.30] × ξ ∈ [1000, 1500, 2000, 2500]. Score each combination against observed deposit extent (debris toe position, lateral spread). Select the (μ, ξ) pair that minimizes runout error. Typical D2 dry slab values on open terrain: μ ≈ 0.15–0.30, ξ ≈ 1000–2500 m/s².  
   **Dependency:** requires the observed-release validation run and the US-6 road polygon to also evaluate P(exceedance) sensitivity to μ/ξ.  
   **Note for multi-path extension:** μ/ξ are path-specific. Calibration on Little Professor does not transfer directly to Seven Sisters or Muleshoe — each path needs its own calibration against observed events or must use literature defaults with wider uncertainty bounds.
+
+- [ ] **Resolve EPSG:32613 vs EPSG:6342 split before regenerating any feature CSV**
+  — rasters and scenario outputs are **EPSG:6342** (NAD83(2011)/UTM 13N; DEM is
+  compound with NAVD88), but `snowpack_io.py:180`/`:192`/`:273` reproject to
+  **EPSG:32613** (WGS84/UTM 13N). Also 32613 at `snowpack_analysis.py:62`,
+  `make_release_raster.py:151`, `fetch_avalanche_obs.py:147-148`; 6342 at
+  `snowpack_analysis.py:69` and `scenario_writer.py:203`/`:231`/`:246`.
+  If the cluster map or DEM reaching `compute_meloche_features()` passes through
+  `snowpack_io.py`, cluster centroids and per-cluster slope angles are computed
+  on a mis-registered grid and **every row** of `meloche_features_all_*.csv` is
+  affected (`slope_angle`, `tau_g`, `theta`, `Pi1_elastic`, and all derived).
+  **Currently latent, not actively broken:** pyproj treats NAD83(2011)→WGS84 as a
+  null transform at this location (measured offset sub-millimetre), so present
+  outputs are numerically fine. But it is one PROJ-data upgrade from becoming a
+  real ~1 m shift, and the two declarations disagree about what the data *is*.
+  **Fix:** single `RASTER_EPSG = 6342` in `config.py`, referenced by every
+  reprojection target. Verify `cluster_map.tif`/`dem_1m.tif` CRS with rasterio
+  first — do not trust the literals. Do this first; everything else is
+  downstream of the grid being right.
 
 - [ ] **US-6 road polygon** for P(exceedance) calculation at infrastructure.
 
@@ -65,7 +88,197 @@
 
 ## Physical Model Improvements
 
-- [ ] **Asymmetric gradient thresholds** — LAMBDA_JUMP_FACTOR and THICKNESS_JUMP_FACTOR are currently symmetric (same threshold for stiffening and softening). Measure actual |ΔΛ/Λ| at slab-thickening boundaries (not just thinning) to determine if separate thresholds are warranted.
+### Release-areas sync, 2026-10-10 — what landed here
+
+The standalone repo (`~/avalanche-release-areas`) had accumulated physics this
+repo did not have, including two direction bugs that were live in the production
+path. Ported in one pass; 280 tests pass here (`tests/` was 232).
+
+- [x] **Two terrain-direction bugs — both fixed here.** They confused map
+  direction with raster indexing, and **row increases southward**.
+  - `find_stauchwall` stepped `dr = sign(-cos(asp))`, `dc = sign(sin(asp))`.
+    `np.sign` is ±1 for any nonzero component, so only the four bearings
+    45/135/225/315 were reachable — a pure diagonal on **100.00%** of Jan 18
+    start-zone pixels, median **+13.9°** clockwise error, and the walk was a
+    straight ray that never followed terrain. Now carries sub-pixel position.
+    `transform` is still accepted (call sites pass it positionally) and unused.
+  - `estimate_cross_slope_width` picked "abeam" neighbours by raster row/col
+    (`abs(c_row - t_row) < 50 and abs(c_col - t_col) > 5`), which assumes a
+    north–south fall line. Selected neighbours sat a mean **30°** off the true
+    cross axis — one within 1.2° of the fall line — so `theta_cross` absorbed
+    the along-slope gradient. Now samples in the map frame within
+    ±`THETA_CROSS_SECTOR_DEG` of the cross axis, and needs `aspect_deg`: without
+    it the θ widening is skipped rather than taken along the raster axes.
+  - **The lesson generalises.** Any new code here that derives a direction must
+    be checked against the map frame, never assumed from the array axes.
+    `tests/test_terrain_direction.py` (34 tests, ported) covers both helpers
+    with planar-DEM fixtures at known bearings. Neither had coverage before.
+
+- [x] **The Gaume width ratio no longer depends on the CSV θ.**
+  `estimate_cross_slope_width` measures *both* halves itself via
+  `_sector_theta` — θ_along about the fall line, θ_cross about the cross axis —
+  from the same τp field in the same separation band. Pairing the CSV's
+  isotropic k-NN mean at a ~3.3 m lag with a directional mean at 5–50 m
+  inflates the ratio several-fold on its own, given θ(d) ≈ 3.87 + 72/d Pa/m.
+  The CSV θ survives only as a fallback numerator when no cluster lies in the
+  along-slope sector. Note the Gaume path is effectively **dormant** on Jan 18:
+  `d_lat = min(gaume_width, A_ca·0.712)` and the mode III speed cap binds.
+
+- [x] **θ estimator is selectable, default `plane_fit`** (`snowpack_analysis.py`).
+  θ is a property of the **lag it is measured at**, not of the snowpack. Our
+  clusters are ~3 m across and k=6 averages 3.3 m, inside the 0.5–10 m band
+  Meloche et al. treat as local noise (Appendix E). The τp variogram gives
+  θ(d) = 3.87 + 72/d Pa/m: at 3.3 m θ is **15% slope-scale trend, 85% local
+  noise**. `plane_fit` fits a local least-squares plane within
+  `THETA_FIT_RADIUS_M = L_SS` and takes |∇τp|; `knn` reproduces every
+  pre-2026-10-09 CSV. Median θ 25.19 (`knn`) vs 7.28 (`plane_fit`) Pa/m on
+  Jan 18, so A_ca × ~3.3. **The argument is the calibration scale, not the fit**
+  — Meloche's θ is the gradient of a ramp over L_ss, so the neighbourhood should
+  be L_ss. Do not pick it by IoU: θ moves Π₁, hence the whole filter chain.
+  Also emits `theta_grad_east` / `theta_grad_north` (NaN under `knn`), so a θ
+  split is available from the estimator itself.
+
+- [x] **`arrest_indices.py` is now identical to the standalone's** (modulo doc
+  paths). That brings `mode3_length_ratio`, `cp_over_cs`, `k_x_cross`,
+  `L_dyn_cross`, the named `C_FIT`, and **`SCH2004_EXP = 1.9`** — the exponent
+  as printed in Schweizer, Michot & Kirchner (2004) Eq. 8, verified against the
+  PDF. The old 2.0 was this project's rounding of the abstract's "about 2" and
+  runs 11% low at ρ = 300, 17% at ρ = 150; `SCH2004_EXP_ROUND` reproduces it.
+  This **cannot** move a release polygon — `k_ic()` reaches only the ligament
+  columns, which the BFS never reads — so it had to be decided from the source.
+
+**Operationally: existing meloche CSVs are stale.** θ changes, so Π₁, the
+trigger ranking and the whole filter chain change with it. Nothing moves until
+`compute_meloche_features` is re-run. Validated end-to-end in the standalone
+repo on Jan 18 (best IoU 0.677 at `--max-clusters 2000`, mean area/observed
+0.82 against the 0.83 mask-limited ceiling); **not yet re-run through this
+pipeline.** Do that before trusting any avachain release polygon.
+
+- [ ] **Re-run the Jan 18 analysis here and reconcile against the standalone.**
+  The two repos should now agree on geometry given the same CSVs. Any
+  divergence is a porting defect, so this is the acceptance test for the sync.
+
+- [ ] **Anisotropic BFS rings — to investigate (Ron's idea, 2026-10-09).** As
+  `propagate_release` adds rings to the flood-fill, grow roughly **1.6× further
+  along-slope than cross-slope** per ring, instead of growing isotropically and
+  only clipping afterwards with `d_up` / `d_down` / `d_lat`. The ratio is
+  already in the model as `MODE2_SPEED_RATIO`: mode II runs supershear at
+  ~1.6 c_s while mode III caps at c_s (Broberg 1989). If a ring represents one
+  increment of crack-front advance in *time*, the front should already be ~1.6×
+  further along-slope when it arrives — the anisotropy belongs in the growth,
+  not only in a terminal cap; at present the front shape is an artifact of
+  cluster geometry. Settle first whether this *replaces* the speed cap or
+  composes with it (both would double-count the same 1.6). Judge it against the
+  observed crown's aspect (major axis 119°, L/W 3.51), a sharper test than IoU,
+  and do not tune the ratio to this event.
+
+- [ ] **Trigger-set stability — the top-N ranking is decided by Sk38 ties.**
+  Places 3–5 turn on Sk38 agreeing to 2–3 significant figures, so the set is not
+  stable against θ. In the standalone's §6 2×2 the ranking moved 2858/1068 →
+  6191/5817; in one run an Sk38 tie at 0.75 put cluster 3020 in fifth place and
+  that scenario collapsed to 434 m² at IoU 0.061, dragging the mean on its own.
+  Any comparison must be read trigger-matched, and a tie-break less brittle
+  than raw Sk38 ordering would be worth having.
+
+- [ ] **θ validity is the strongest open objection to the whole arrest route.**
+  Under `plane_fit`, **97.2%** of Jan 18 start-zone clusters fall below
+  Meloche's `THETA_VALID_MIN` (20 Pa/m), against 36.2% under `knn`. Read
+  literally, the Jan 18 weak layer has no slope-scale ramp steep enough to
+  arrest within L_ss. This is **not** an argument for reverting to `knn`, which
+  only looked compliant because it was measuring noise. Recorded as
+  `THETA_VALID_MIN/MAX`, not enforced; enforcing it is an open modelling
+  decision that one event cannot settle.
+
+- [ ] **Adding a τp Gaussian random field is NOT the indicated next step** —
+  a reading of JGR Appendix E that earlier notes here got wrong. Appendix E is a
+  sensitivity analysis whose stated result is that local noise "mainly affects
+  the crack speed"; the paper's arrest-relevant heterogeneity *is* the linear
+  ramp. Our measured σ_local is 69 Pa against Appendix E's 500 Pa, and
+  superimposing that field would inject 55–169 Pa/m of spurious θ (2–7× the real
+  median), shrinking A_ca further in the wrong direction.
+
+- [ ] **Asymmetric gradient thresholds — premise is now out of date.** The
+  constants were renamed and *already made asymmetric*:
+  `release_geometry.py:798-801` has `LAMBDA_DROP_FACTOR = 0.20` /
+  `LAMBDA_RISE_FACTOR = 0.30` and `THICKNESS_DROP_FACTOR = 0.20` /
+  `THICKNESS_RISE_FACTOR = 0.30` ("tight: softening arrests readily / loose:
+  stiffening rarely arrests"). `LAMBDA_JUMP_FACTOR` and `THICKNESS_JUMP_FACTOR`
+  no longer exist. **What is still open:** the 0.20/0.30 split is an
+  uncalibrated guess. Measure actual |ΔΛ/Λ| and |Δh/h| at observed crown and
+  flank boundaries to check whether 0.30 is the right loosening, and whether Λ
+  and thickness warrant different values from each other.
+
+- [ ] **Cross-slope (mode III) elastic length Λ_III — awaiting Gaume's formula.**
+  The cross-slope Λ is a *different and smaller* quantity than the up/downslope
+  (mode II) Λ, and the antiplane formula is not published yet. Ron expects it
+  from Johan Gaume soon.
+  **Current state:** `arrest_indices.elastic_length_cross()` uses the slab shear
+  modulus, `Λ_III = √(G h D_wl / G_wl)`, giving `Λ_III/Λ_II = √((1−ν)/2) ≈ 0.59`
+  at ν = 0.3 — Ron's own derivation, not published. Nothing in the propagation
+  path uses it: the BFS applies a single Λ in all directions.
+  **Prep done in both repos** (ported here 2026-10-10): arrest evaluation splits
+  into along-slope vs cross-slope branches and `release_geometry.directional_lambda(props, is_cross)`
+  is the single place the two diverge, with its own continuity thresholds
+  (`LAMBDA_CROSS_DROP_FACTOR` / `..._RISE_FACTOR`, currently equal to the
+  along-slope pair). `compute_meloche_features` emits `Lambda_cross`. Both
+  branches are still fed by the mode II formula, so results are unchanged. To
+  land the real formula: (1) update `arrest_indices.elastic_length_cross()`,
+  (2) set `release_geometry.USE_MODE3_LAMBDA = True`, (3) regenerate the meloche
+  CSV. Nothing else should need to change — if it does, the split has drifted.
+  **Measured caveat — a constant Λ_III/Λ_II ratio changes nothing.** The Λ
+  continuity gate tests the *relative* change (Λ_nbr − Λ_cur)/Λ_cur, which is
+  invariant under uniform rescaling of Λ, and the only absolute threshold
+  (`MIN_PROPAGATION_LAMBDA` = 0.1 m) is never approached (min Λ_II = 0.54 m on
+  Jan 18 → min Λ_III = 0.32 m). The current derivation gives
+  Λ_III/Λ_II = √((1−ν)/2), a constant, so switching to it provably changes
+  nothing — verified by running both flag states in the standalone repo:
+  identical areas and IoU. **A real Λ_III will only move the flanks if it
+  carries different spatial structure**, i.e. depends on properties that vary
+  across clusters differently from E′. (A spatially varying Λ_cross does change
+  every release area, confirming the plumbing is live.) Worth checking against
+  Gaume's formula as soon as it arrives: if it is just a constant factor, the
+  flank behaviour will need a different mechanism — most likely the mode III
+  crack-speed cap rather than Λ.
+  **Expected physics once implemented** (methods §3, not yet simulated): mode III
+  cracks cannot exceed `c_s` (Broberg 1989) versus ~1.6 `c_s` upslope, capping
+  lateral energy flux; and because G < E′ an equal-strength slab has a *larger*
+  energy cap cross-slope. If both hold, lateral arrest is driven mainly by the
+  speed cap and weak-layer heterogeneity rather than slab fracture — consistent
+  with the JGR paper attributing lateral arrest to WL heterogeneity.
+  **Unblocks:** the dead `--mode3-scale` flag (see Feature-CSV audit section).
+
+- [x] **Mode III crack-speed cap — PORTED HERE 2026-10-10.**
+  Implemented 2026-10-06 in `~/avalanche-release-areas`, mirrored here with the
+  rest of the release-areas physics (see the port entry at the top of this
+  section). `arrest_indices.mode3_length_ratio()` gives
+  `L_dyn,III/L_dyn,II = k_x,II/k_x,III = 0.712` at ν=0.3 (E and ρ cancel; the
+  ratio depends only on ν and the two speed ratios). `evaluate()` now also
+  returns `k_x_cross`, `L_dyn_cross`, `mode3_length_ratio`, and
+  `compute_meloche_features` emits `L_dyn`, `L_dyn_cross`,
+  `mode3_length_ratio`. `propagate_release` composes it with the Gaume width as a
+  minimum: `d_lat = min(gaume_width, A_ca·0.712)·size_factor`, via
+  `release_geometry.mode3_speed_cap_ratio()`, which prefers the CSV column and
+  falls back to computing the ratio from ν so pre-column CSVs still get the cap.
+  Behind `release_geometry.USE_MODE3_SPEED_CAP` (default on); off is
+  bit-for-bit identical to pre-cap.
+  **Measured on Jan 18:** unlike Λ_III this is *not* scale-invariant — it is an
+  absolute distance cap, so it does change results. Binds on 2 of 5 triggers
+  (the other 3 were already Gaume-limited below it): median area
+  6 405 → 5 389 m², ratio 0.92 → 0.78, best IoU unchanged 0.667, mean IoU
+  0.567 → 0.561.
+  **So it makes the aggregate fit slightly worse, and that is expected.** Only
+  the *restrictive* half of mode III is coded: because G < E′ an equal-strength
+  slab has a *larger* energy cap cross-slope (G_slab,III = τ_flank²h/2G vs
+  σt²h/2E′), which pushes the other way, but it needs a flank strength τ_flank
+  with no parameterisation. Left on because Broberg's limit holds independently
+  of this event — do not tune it against Jan 18.
+  **Next, in priority order:** (1) find or assume a τ_flank parameterisation so
+  `slab_energy_cap_cross` can supply the permissive half; (2) revisit the
+  uncalibrated `TAU_G_ABS_FLOOR` (350 Pa) and the Λ/thickness discontinuity
+  factors, the likely reason the model under-predicts area before the cap is
+  even applied; (3) if the JGR attribution of lateral arrest to weak-layer
+  heterogeneity is right, neither Λ_III nor the speed cap is the dominant
+  control and the missing ingredient is spatial τp variability on the flanks.
 
 - [ ] **Downslope arrest: direct τ_g < τ_p criterion** — replace 28° slope proxy with direct comparison of distributed τ_g and τ_p from SNOWPACK. Makes stauchwall arrest parameter-free and physically explicit. τ_g and τ_p are both already computed.
 
@@ -97,6 +310,125 @@
   - The "0.952 out-of-crown" cluster case study — high P_unstable but Ron's SNOWPACK review suggests insufficient slab for crack propagation. Document as a case study of why high P_unstable alone doesn't imply triggering.
 
 - [ ] **BFS propagation at 1 m grid resolution** — test the BFS crack propagation model on the native 1 m DEM grid instead of the cluster neighbor graph, restricted to the area around the observed Jan 18 release area. Currently the BFS operates on ~6,636 clusters (~3 m median diameter); running at 1 m resolution within a cropped domain (~200×200 m around the release) would evaluate arrest criteria at the pixel scale (~64K cells but only ~4K in the cropped area). This would reveal whether cluster-scale smoothing of slab properties masks sharp gradients that control arrest at finer scales, and whether the BFS boundary converges to the same location as the cluster-based result. If boundaries differ meaningfully, the cluster resolution may need tightening (smaller `max_cells_per_cluster`) or the gradient thresholds may need recalibration for the finer grid. This is a diagnostic test — 1 m resolution across the full start zone is not operationally viable (would require ~65K SNOWPACK simulations).
+
+---
+
+## Feature-CSV pipeline audit *(2026-10-06)*
+
+Found by auditing `~/avalanche-release-areas` (the standalone extraction of this
+code) against its own methods doc, then verifying each item against the avachain
+source. Every file:line below was checked directly. Full writeup with code
+quotes: [`CSV_FEATURE_PIPELINE_ISSUES.md`](../CSV_FEATURE_PIPELINE_ISSUES.md).
+
+CRS split is the highest-risk item and lives in **High Priority** above.
+
+- [x] **`theta` is Pa per *pixel*, not Pa/m** — FIXED 2026-10-10 with the θ
+  estimator port. `compute_meloche_features()` now takes
+  `px_m = abs(transform.a)` and both estimators (`theta_knn`, `theta_plane_fit`)
+  work in metres; `np.gradient(fill_dem, px_m)` too. A no-op on the current 1 m
+  data, as predicted. Covered by
+  `tests/test_theta_estimators.py::test_px_m_scales_theta_inversely`.
+
+- [ ] **Drop `A_ca_elastic` — it is uncalibrated** —
+  `snowpack_analysis.py:633` computes `A_ca_elastic = L_SS * Pi1**(1.5)`
+  (emitted `:644`, `L_SS = 20.0` at `:485`). JGR Eq. 19 is a *proportionality*
+  with no published constant; this silently assumes the constant is 1. On Little
+  Professor that yields a median of **7 800 m** and a max of **3.7 × 10⁶ m** in a
+  shipped CSV. Nothing downstream reads it. **Fix:** remove the column; keep the
+  dimensionless `Pi1_elastic`, which carries the same information. The standalone
+  dropped it on 2026-10-09; the 2026-10-10 port deliberately left it in place
+  here, since removing a CSV column is a schema change rather than a physics fix.
+
+- [x] **Add `tau_p` to the meloche CSV — unblocks cross-slope width** — DONE
+  2026-10-10. `compute_meloche_features()` now emits `tau_p`, and
+  `estimate_cross_slope_width()` also accepts `snap_features` and falls back to
+  it via `_tau_p_lookup()`, so the Gaume (2015)/θ flank constraint is live
+  either way. Expect release polygons to move: `d_lat` was effectively a
+  constant `A_ca` and becomes per-trigger. Note it is now composed with the
+  mode III speed cap as a `min()`, and on Jan 18 the speed cap is what binds.
+
+- [ ] **`max_clusters = 500` silently bounds the release region** — two
+  independent implementations, each with its own hardcoded default:
+  `release_geometry.py:479`/`:830` and `probabilistic_release.py:44`/`:123`.
+  Neither warns when it binds. Measured in the standalone repo on Jan 18: the cap
+  binds on **3 of 5 triggers**, and lifting it moves median release area ~20%
+  (5 366 → 6 405 m²) and best IoU 0.639 → 0.667. Region size saturates by ~1 000
+  clusters, so **any value ≥ 1000 gives an identical answer — raising it is not
+  tuning to the event.** **Fix:** single constant in `config.py`, exposed as a
+  CLI flag, plus a warning when the BFS exits with clusters still propagating so
+  a capped polygon is never mistaken for a physical result.
+
+- [ ] **50 Pa feature floor sits above the 40 Pa downstream filter** —
+  `snowpack_analysis.py:580-581` `tau_g_min_valid = 50.0  # Pa — empirical
+  minimum for D2+ events`, while trigger selection downstream gates on
+  τg ≥ 40 Pa. Clusters between 40 and 50 Pa therefore pass the documented filter
+  but have **no arrest indices at all**. Pick one threshold.
+
+- [ ] **Duplicate cluster IDs resolve by dict insertion order** —
+  `analyze_release_zone.py:898-906` concatenates the `snap_data` groups *plus* a
+  separate `start_zone` frame; `compute_meloche_features` then dedupes with
+  `keep='first'` (`snowpack_analysis.py:519`). Which duplicate wins depends on
+  dict ordering, so reordering `snap_data` silently changes CSV contents.
+  **Fix:** dedupe on a documented priority, or assert uniqueness before concat.
+
+- [ ] **Two code paths write the same CSV filename** —
+  `reinitialize_snowpack.py:346` writes a file using the same
+  `all_start_zone_features_` prefix as `analyze_release_zone.py:893`. Whichever
+  ran last wins, with no way to tell from the file. **Fix:** distinct names, or
+  stamp the producer into the CSV.
+
+- [ ] **`profile_features(min_depth_cm=…)` is accepted and ignored** —
+  `snowpack_analysis.py:231`; parameter is in the signature and documented but
+  never referenced in the body (231–375). **Fix:** `z` is negative downward from
+  the surface, so the test is `-interface_z < min_depth_cm / 100.0` → return
+  without slab/WL features. Low risk: changes 2 of 3 542 clusters on Jan 18, both
+  already removed by the 0.5 m slab-thickness filter downstream.
+
+- [ ] **Consolidate the duplicated E / σt parameterisation** — the provenance
+  comment at `snowpack_analysis.py:358-363` is the *only* record that these are
+  power-law hand-fits through anchor points of the **van Herwijnen et al. (2016)
+  range** (~2 MPa at ρ=200, ~4 at 300, ~6 at 350) rather than published
+  regressions. A second copy in MPa/kPa units exists at `:758-759`; two copies
+  will drift. **Keep the comment** — the standalone extraction lost it and it had
+  to be recovered from here. Since Λ ∝ √E and G_slab ∝ σt²/E, both arrest
+  frameworks inherit this choice; replacing it with a cited regression is the
+  highest-value improvement to the input chain. Unvalidated outside
+  200–350 kg m⁻³ (Jan 18 densities 264–332 are inside).
+
+- [ ] **Remove the dead `--mode3-scale` flag, or implement mode III** —
+  `release_geometry.py:474` is honest (`mode3_scale: float = 2.0, # kept for API
+  compat, not used`), but the docstring still claims "Lateral: Π₁ <
+  Π₁_trigger × mode3_scale (mode III)" and the CLI flag is still live at
+  `analysis_pipeline.py:1024`. Users can set a flag that does nothing.
+  **No longer blocked:** mode III now *is* implemented, as the crack-speed cap
+  (ported 2026-10-10), and it does not use this flag — lateral extent is
+  `min(gaume_width, A_ca·0.712)`. The standalone removed the flag rather than
+  leave a no-op; do the same here, which means touching the CLI surface.
+
+- [ ] **Document that the Meloche arrest test is disabled** —
+  `release_geometry.py:49` `USE_MELOCHE_ARREST = False`. What actually arrests the
+  BFS is `TAU_G_ABS_FLOOR = 350.0` (`:542`, checked `:711`) plus the Λ/thickness
+  discontinuity heuristics (`:798-801`). So the **350 Pa floor, not the
+  documented 40 Pa gate, is the binding driving-stress criterion**, and it is
+  uncalibrated. This may be the right engineering choice — it just needs saying,
+  because the module names imply the Meloche criterion is doing the work.
+
+- [ ] **Derive pixel size from `transform` instead of hardcoding 1 m** —
+  partially done 2026-10-10: `compute_meloche_features` now uses
+  `px_m = abs(transform.a)` for both the DEM gradient and the θ estimators.
+  Still hardcoded: `snowpack_analysis.py:203`; `avalanche.py:64`, `:75-76`,
+  `:455`, `:663`. Those slope/aspect/HS-difference grids all assume 1 m.
+
+### Already correct here — do not "fix" backwards
+
+The standalone extraction regressed three behaviours that avachain gets right.
+Noted so a future sync does not propagate the worse version:
+
+| Behaviour | avachain | standalone (since fixed) |
+|---|---|---|
+| Release depth source | `release_geometry.py:905` `depth_from_snowpack` uses per-cluster slab thickness above the WL, falling back to `wl_fraction × HS` | used `hs` (ground→surface) — implied a full-depth release |
+| Depth raster clipped to polygon | `analysis_pipeline.py:822` calls `rasterize_release_polygon(polygon, scaled_depth, …)` | never clipped — volume was domain-wide and identical across scenarios |
+| `depth_percentile` is real | `config.py:57` `depth_scales = {10:0.75, 50:1.00, 90:1.30}`, applied `analysis_pipeline.py:820-821` | pure no-op |
 
 ---
 

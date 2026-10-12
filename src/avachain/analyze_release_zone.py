@@ -624,6 +624,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--project-dir',
                         default=None)
+    parser.add_argument('--toml', default=None,
+                        help='Path to slope_config.toml; overrides --project-dir for config loading')
     parser.add_argument('--pro-dir',    default=None)
     parser.add_argument('--zarr-path',  default=None)
     parser.add_argument('--release-geojson', default=None)
@@ -643,7 +645,14 @@ def main():
                              'all_start_zone_features and meloche_features_all CSVs.')
     args = parser.parse_args()
 
-    cfg = ProjectConfig(project_dir=Path(args.project_dir))
+    if args.toml:
+        cfg = ProjectConfig.from_toml(args.toml)
+    else:
+        toml_path = Path(args.project_dir) / "slope_config.toml"
+        if toml_path.exists():
+            cfg = ProjectConfig.from_toml(str(toml_path))
+        else:
+            cfg = ProjectConfig(project_dir=Path(args.project_dir))
 
     with rasterio.open(str(cfg.resampled_dir / "dem_1m.tif")) as src:
         dem       = src.read(1).astype(np.float32)
@@ -685,7 +694,7 @@ def main():
     print(f"Cluster IDs saved: {group_ids_path}")
 
     print("Loading SNOWPACK dataset (Zarr store is large — may take 30-60s)...")
-    zarr_path = Path(args.zarr_path)
+    zarr_path = Path(args.zarr_path) if args.zarr_path else cfg.zarr_path
     if zarr_path.exists():
         _raw = xr.open_zarr(str(zarr_path))
         # Deduplicate time index — can arise from batched append
@@ -734,18 +743,24 @@ def main():
                 print(f"    Loading {loc_mask.sum()} locations from Zarr...")
                 ds_t = ds_group.sel(time=snap_ts, method='nearest').compute()
 
-            rows = []
-            n_locs = ds_t.sizes.get('location', 1)
-            for i in range(n_locs):
+            n_locs  = ds_t.sizes.get('location', 1)
+            _hld    = 'location' in ds_t.dims
+            _md     = args.min_depth
+
+            def _extract_grp(i, _ds=ds_t, _ids=loc_ids, _hld=_hld, _md=_md):
                 try:
-                    ds_loc = ds_t.isel(location=i) \
-                        if 'location' in ds_t.dims else ds_t
-                    feat = profile_features(ds_loc, args.min_depth)
+                    ds_loc = _ds.isel(location=i) if _hld else _ds
+                    feat   = profile_features(ds_loc, _md)
                     if feat:
-                        feat['cluster_id'] = loc_ids[i]
-                        rows.append(feat)
+                        feat['cluster_id'] = _ids[i]
+                        return feat
                 except Exception:
-                    continue
+                    pass
+                return None
+
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            with _TPE(max_workers=min(16, n_locs)) as _pool:
+                rows = [r for r in _pool.map(_extract_grp, range(n_locs)) if r]
 
             df = pd.DataFrame(rows).set_index('cluster_id') if rows \
                  else pd.DataFrame()
@@ -842,18 +857,25 @@ def main():
             warnings.simplefilter('ignore')
             ds_t_all = ds_all.sel(
                 time=snap_ts, method='nearest').compute()
-        n_all = ds_t_all.sizes.get('location', 1)
-        for i in range(n_all):
+        n_all  = ds_t_all.sizes.get('location', 1)
+        _hld   = 'location' in ds_t_all.dims
+        _md    = args.min_depth
+
+        def _extract_sz(i, _ds=ds_t_all, _ids=loc_ids_all, _hld=_hld, _md=_md):
             try:
-                ds_loc = ds_t_all.isel(location=i) \
-                    if 'location' in ds_t_all.dims else ds_t_all
-                feat = profile_features(ds_loc, args.min_depth)
+                ds_loc = _ds.isel(location=i) if _hld else _ds
+                feat   = profile_features(ds_loc, _md)
                 if feat:
-                    feat['cluster_id'] = loc_ids_all[i]
+                    feat['cluster_id'] = _ids[i]
                     feat['group']      = 'start_zone'
-                    all_rows.append(feat)
+                    return feat
             except Exception:
-                continue
+                pass
+            return None
+
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        with _TPE(max_workers=min(16, n_all)) as _pool:
+            all_rows = [r for r in _pool.map(_extract_sz, range(n_all)) if r]
         print(f"  Extracted features for {len(all_rows)} additional clusters")
 
     # Merge with existing snap_data and save
