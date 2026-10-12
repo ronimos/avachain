@@ -140,6 +140,14 @@ USE_MODE3_SPEED_CAP = False  # apply the ratio to the lateral distance cap
 USE_ANISOTROPIC_RINGS = False
 RING_STEP_M           = None
 
+# ---- BFS region-size cap ---------------------------------------------------
+# Safety cap on the BFS flood-fill.  When it binds, the polygon is labelled
+# [CAP-BOUND] so it is never mistaken for a physics-limited result.
+# Measured on Jan 18: 500 → 2000 moves median area ~20 % (5 366 → 6 405 m²)
+# and best IoU 0.639 → 0.667; region size saturates by ~1 000 clusters so
+# any value ≥ 1 000 gives the same answer — raising it is not tuning.
+MAX_BFS_CLUSTERS = 2000
+
 
 def mode3_speed_cap_ratio(trigger_cluster_id: int,
                           meloche_df: pd.DataFrame) -> Optional[float]:
@@ -573,6 +581,7 @@ def make_release_polygon_2d(
         size_factor: float = 1.0,
         stauchwall_deg: float = STAUCHWALL_DEG,
         mode3_scale: float = 1.5,
+        max_clusters: int = MAX_BFS_CLUSTERS,
         use_propagation: bool = True):
     """
     Build a 2D release polygon.
@@ -657,6 +666,7 @@ def make_release_polygon_2d(
             size_factor        = size_factor,
             A_ca               = A_ca,
             snap_features      = snap_features,
+            max_clusters       = max_clusters,
         )
         if polygon is not None:
             polygon = _clip_polygon(polygon)
@@ -729,7 +739,7 @@ def propagate_release(
         A_ca: Optional[float] = None,
         snap_features: 'Optional[pd.DataFrame]' = None,
         k_neighbours: int = 8,
-        max_clusters: int = 500,
+        max_clusters: int = MAX_BFS_CLUSTERS,
         wave_callback=None):
     """
     Identify release zone as the connected region of clusters with

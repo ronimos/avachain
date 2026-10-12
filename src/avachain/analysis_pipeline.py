@@ -643,6 +643,7 @@ def step_scenarios(cfg, args):
                 size_factor=_mid_sf,
                 stauchwall_deg=args.stauchwall_deg,
                 mode3_scale=args.mode3_scale,
+                max_clusters=args.max_clusters,
                 use_propagation=True,
             )
             if _poly_check is not None:
@@ -808,6 +809,7 @@ def step_scenarios(cfg, args):
                         size_factor        = size_f,
                         stauchwall_deg     = args.stauchwall_deg,
                         mode3_scale        = args.mode3_scale,
+                        max_clusters       = args.max_clusters,
                         use_propagation    = not args.no_propagation,
                     )
 
@@ -1006,6 +1008,9 @@ def main():
                              'outputs/scenarios/YYYY-MM-DD/<horizon>/. '
                              'Omit for T+0 (writes directly to YYYY-MM-DD/).')
     parser.add_argument('--n-triggers',    type=int,   default=None)
+    parser.add_argument('--max-clusters',  type=int,   default=None,
+                        help='BFS region-size cap (default: config max_bfs_clusters = 2000). '
+                             'A [CAP-BOUND] warning is printed when it binds.')
     parser.add_argument('--size-factors',  type=float, nargs='+',
                         default=None,
                         help='Size factor multipliers for arrest thresholds. '
@@ -1057,6 +1062,8 @@ def main():
         args.zarr_path = cfg.zarr_path
     if args.n_triggers is None:
         args.n_triggers = cfg.n_triggers
+    if args.max_clusters is None:
+        args.max_clusters = cfg.max_bfs_clusters
     if args.size_factors is None:
         args.size_factors = cfg.size_factors
     if args.depth_pcts is None:

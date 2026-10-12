@@ -52,6 +52,7 @@ class ProjectConfig:
     # --- Scenario defaults ---
     default_snapshot: str = "2026-01-18"
     n_triggers: int = 5
+    max_bfs_clusters: int = 2000
     size_factors: list = field(default_factory=lambda: [0.70, 0.85, 1.00, 1.15, 1.30])
     depth_percentiles: list = field(default_factory=lambda: [10, 50, 90])
     depth_scales: dict = field(default_factory=lambda: {10: 0.75, 50: 1.00, 90: 1.30})
@@ -264,6 +265,7 @@ class ProjectConfig:
             base_lon=float(base.get("lon", 0.0)),
             base_alt_m=float(base.get("elev_m", 0.0)),
             n_triggers=int(scenarios.get("n_triggers", 5)),
+            max_bfs_clusters=int(scenarios.get("max_bfs_clusters", 2000)),
             size_factors=list(scenarios.get("size_factors", [0.70, 0.85, 1.00, 1.15, 1.30])),
             depth_percentiles=list(scenarios.get("depth_percentiles", [10, 50, 90])),
             stauchwall_deg=float(scenarios.get("stauchwall_deg", 28.0)),
