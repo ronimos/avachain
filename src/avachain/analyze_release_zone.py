@@ -624,6 +624,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--project-dir',
                         default=None)
+    parser.add_argument('--toml', default=None,
+                        help='Path to slope_config.toml; overrides --project-dir for config loading')
     parser.add_argument('--pro-dir',    default=None)
     parser.add_argument('--zarr-path',  default=None)
     parser.add_argument('--release-geojson', default=None)
@@ -643,11 +645,14 @@ def main():
                              'all_start_zone_features and meloche_features_all CSVs.')
     args = parser.parse_args()
 
-    toml_path = Path(args.project_dir) / "slope_config.toml"
-    if toml_path.exists():
-        cfg = ProjectConfig.from_toml(str(toml_path))
+    if args.toml:
+        cfg = ProjectConfig.from_toml(args.toml)
     else:
-        cfg = ProjectConfig(project_dir=Path(args.project_dir))
+        toml_path = Path(args.project_dir) / "slope_config.toml"
+        if toml_path.exists():
+            cfg = ProjectConfig.from_toml(str(toml_path))
+        else:
+            cfg = ProjectConfig(project_dir=Path(args.project_dir))
 
     with rasterio.open(str(cfg.resampled_dir / "dem_1m.tif")) as src:
         dem       = src.read(1).astype(np.float32)

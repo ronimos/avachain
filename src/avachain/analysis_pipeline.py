@@ -274,6 +274,8 @@ def step_analyze(cfg, args):
               '--pro-dir',     str(args.pro_dir),
               '--zarr-path',   str(args.zarr_path),
               '--snapshot-date', args.snapshot_date]
+    if getattr(args, 'toml', None):
+        cmd += ['--toml', str(args.toml)]
     if args.classifier:
         cmd.append('--classifier')
     if args.plots:
