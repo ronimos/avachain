@@ -1024,7 +1024,7 @@ def main():
     parser.add_argument('--mu',            type=float, default=None)
     parser.add_argument('--xi',            type=float, default=None)
     parser.add_argument('--stauchwall-deg',type=float, default=None)
-    parser.add_argument('--max-slab-thickness', type=float, default=1.5,
+    parser.add_argument('--max-slab-thickness', type=float, default=2.0,
                         help='Maximum slab thickness for skier trigger (m). '
                              'Use 10.0 for natural trigger scenarios. '
                              'Default 1.5 (skier stress negligible below ~1.5m).')
