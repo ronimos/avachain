@@ -234,6 +234,7 @@ def step_zarr_build(cfg, args):
         batch_size = args.batch_size,
         n_cpus     = args.workers,
         max_layers = args.max_layers,
+        rebuild    = getattr(args, 'rebuild', False),
     )
 
 
@@ -997,6 +998,11 @@ def main():
     parser.add_argument('--batch-size', type=int, default=100)
     parser.add_argument('--workers',    type=int, default=31)
     parser.add_argument('--max-layers', type=int, default=338)
+    parser.add_argument('--rebuild', action='store_true',
+                        help='Overwrite an existing Zarr store instead of '
+                             'resuming into it. Required if the store is '
+                             'unreadable — zarr_build refuses to append to a '
+                             'store whose resume state it cannot recover.')
 
     # analyze
     parser.add_argument('--classifier', action='store_true')

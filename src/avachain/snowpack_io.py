@@ -73,15 +73,50 @@ def load_dataset(pro_dir: Path,
 # Zarr cache builder
 # -----------------------------------------------------------------------
 
+def _resume_state(zarr_out: Path, rebuild: bool) -> tuple[set, bool]:
+    """
+    Decide what is already in `zarr_out` and whether to append to it.
+
+    Returns (written_locs, append). `append` False means the first write uses
+    mode='w' and overwrites whatever is there.
+
+    Raises RuntimeError if the store exists but cannot be read. That case used
+    to print "starting fresh" and then append anyway — because the append mode
+    was taken from `zarr_out.exists()` rather than from whether the resume
+    state had actually been recovered — which silently grafted a second full
+    copy of every cluster onto the store. Nine such runs are why
+    slope_snowpack.zarr reached 78 GB for 6565 distinct clusters. Appending to
+    a store we cannot read is never the right guess, and neither is wiping
+    hours of SNOWPACK output without being asked, so refuse and say so.
+    """
+    if rebuild or not zarr_out.exists():
+        return set(), False
+
+    try:
+        with xr.open_zarr(str(zarr_out)) as existing:
+            written_locs = set(str(v) for v in existing.coords['location'].values)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Zarr store {zarr_out} exists but could not be read ({exc}). "
+            f"Refusing to append to it — that is what produced the duplicated "
+            f"locations in the 78 GB store. Delete it, or pass rebuild=True "
+            f"(--rebuild) to overwrite it."
+        ) from exc
+
+    print(f"Resuming — {len(written_locs)} locations already written")
+    return written_locs, True
+
+
 def build_zarr_cache(pro_dir: Path,
                      zarr_out: Path,
                      batch_size: int = 100,
                      n_cpus: int = 31,
-                     max_layers: int = 338) -> None:
+                     max_layers: int = 338,
+                     rebuild: bool = False) -> None:
     """
     Build a Zarr cache from .pro files, processing in batches.
 
-    Resumable: checks which locations are already written and skips them.
+    Resumable: skips locations already written, per file rather than per batch.
     Squeezes singleton slope/realization dims and pads layers to max_layers.
 
     Parameters
@@ -91,6 +126,7 @@ def build_zarr_cache(pro_dir: Path,
     batch_size : .pro files per batch (100 uses ~4 GB RAM)
     n_cpus     : parallel workers passed to xsnow.read()
     max_layers : pad all datasets to this layer count (use global max)
+    rebuild    : overwrite an existing store instead of resuming into it
     """
     pro_files = sorted(pro_dir.glob("cluster_*_cluster_*.pro"))
     n_total   = len(pro_files)
@@ -98,16 +134,7 @@ def build_zarr_cache(pro_dir: Path,
     print(f"Files: {n_total}  batch_size: {batch_size}  "
           f"batches: {n_batches}  workers: {n_cpus}")
 
-    # Collect already-written locations for resume
-    written_locs: set = set()
-    if zarr_out.exists():
-        try:
-            existing     = xr.open_zarr(str(zarr_out))
-            written_locs = set(existing.coords['location'].values)
-            existing.close()
-            print(f"Resuming — {len(written_locs)} locations already written")
-        except Exception as exc:
-            print(f"Could not read existing Zarr ({exc}), starting fresh")
+    written_locs, append = _resume_state(zarr_out, rebuild)
 
     t_total = time.time()
 
@@ -115,17 +142,33 @@ def build_zarr_cache(pro_dir: Path,
         batch_files = pro_files[batch_idx * batch_size:
                                 (batch_idx + 1) * batch_size]
 
-        # Skip completed batches.
-        # .pro files are named {station}_{experiment}.pro (e.g. cluster_0001_cluster_0001.pro)
-        # but the Zarr location coordinate stores just the station name (cluster_0001).
-        # Strip the _<experiment> suffix so the resume check matches.
-        batch_locs = [f.stem.split('_cluster_')[0] for f in batch_files]
-        if written_locs and all(n in written_locs for n in batch_locs):
+        # .pro files are named {station}_{experiment}.pro (e.g.
+        # cluster_0001_cluster_0001.pro) but the Zarr location coordinate
+        # stores just the station name (cluster_0001). Strip the _<experiment>
+        # suffix so the resume check matches.
+        #
+        # Filter file by file, not all-or-nothing per batch: a batch whose
+        # write was interrupted part-way leaves some of its locations in the
+        # store, and re-appending the whole batch duplicates exactly those.
+        keep, keep_locs, seen = [], [], set()
+        for f in batch_files:
+            loc = f.stem.split('_cluster_')[0]
+            if loc in written_locs or loc in seen:   # seen guards repeats
+                continue                             # within the batch itself
+            keep.append(f)
+            keep_locs.append(loc)
+            seen.add(loc)
+
+        if not keep:
             print(f"  Batch {batch_idx+1}/{n_batches}: SKIP")
             continue
 
+        n_skipped   = len(batch_files) - len(keep)
+        batch_files = keep
+
         print(f"  Batch {batch_idx+1}/{n_batches}: "
-              f"{batch_files[0].name} … {batch_files[-1].name}")
+              f"{batch_files[0].name} … {batch_files[-1].name}"
+              + (f"  ({n_skipped} already written, skipped)" if n_skipped else ""))
 
         with tempfile.TemporaryDirectory() as tmp:
             for f in batch_files:
@@ -151,10 +194,13 @@ def build_zarr_cache(pro_dir: Path,
         elif n_layers > max_layers:
             ds = ds.isel(layer=slice(0, max_layers))
 
-        t1   = time.time()
-        mode = 'w' if not zarr_out.exists() else 'a'
+        t1 = time.time()
+        # Append only once we know the store holds a recovered resume state:
+        # `zarr_out.exists()` is not that, and using it is what let an
+        # unreadable store be appended to.
+        written_now = [str(v) for v in ds.coords['location'].values]
         try:
-            if mode == 'a':
+            if append:
                 ds.to_zarr(str(zarr_out), mode='a', append_dim='location')
             else:
                 ds.to_zarr(str(zarr_out), mode='w')
@@ -163,6 +209,11 @@ def build_zarr_cache(pro_dir: Path,
             continue
         finally:
             del ds
+
+        # Only now are these locations really in the store; a failed write
+        # above must leave them eligible for a later resume.
+        written_locs.update(written_now)
+        append = True
 
         t_write = time.time() - t1
         elapsed = time.time() - t_total

@@ -174,6 +174,57 @@ literal (the bytes go to AvaFrame); a test pins its AUTHORITY code instead.
 
 ---
 
+## The Zarr store, and the dev fixture
+
+`slope_snowpack.zarr` is 78 GB and holds **59280 `location` entries for 6565
+distinct clusters** — the full cluster set was appended ~9 times, each copy
+byte-identical, at index strides of exactly 6565. Consequences to know about:
+
+- Selecting by `int(name.split('_')[-1]) in ids` (the idiom in
+  `analyze_release_zone.py`) matches **every copy**. The 1608-cluster Jan 18
+  start zone pulls 14502 locations, so the per-cluster loop runs ~9×. Output is
+  still correct — the CSV keys by cluster id — only the cost is wrong.
+- Chunks are `(location=25, time=126, layer=85)` but `analyze` reads one
+  snapshot, so each read decompresses 126 timesteps to use one. Measured on 500
+  locations: 1 timestep 1.4 s, 126 timesteps 0.7 s — same chunks either way.
+
+The duplication cause is fixed in `snowpack_io._resume_state`: append mode used
+to come from `zarr_out.exists()` while the skip-list came from a separate
+`xr.open_zarr` in a try/except, so an unreadable store printed "starting fresh"
+and then appended a whole second copy. It now refuses and asks for `--rebuild`.
+The skip is also per file rather than per batch, so an interrupted batch no
+longer re-appends the locations that did land. Pinned by
+`tests/test_zarr_cache_resume.py`.
+
+For iteration, cut a fixture rather than waiting on the full store:
+
+```bash
+python src/avachain/make_dev_zarr.py --toml slopes/little_prof/slope_config.toml \
+       --dates 2026-01-18 --pad-days 2 --buffer-m 200
+# → snowpack/little_prof/output/dev_snowpack.zarr, 427 MB
+python src/avachain/analysis_pipeline.py analyze --toml ... \
+       --zarr-path snowpack/little_prof/output/dev_snowpack.zarr --force
+```
+
+It deduplicates `location`, keeps a **dilated** start zone, subsets time and
+rechunks to `time=1`. Measured: snapshot read 173 s → 0.3 s, `analyze` 13 s.
+
+Two things to keep in mind:
+
+- The buffer is not optional. The release BFS grows outward from its trigger
+  and `_build_scour_depth_map` wants every cluster in the domain, with a
+  full-depth fallback for path/deposition clusters. Cut to the start zone
+  exactly and those reads miss — and a missing location fails as if it were
+  physics. At 200 m the buffer selects 6229 of 6565 clusters, so the speedup is
+  dedup + rechunk + time subset, not a smaller cluster count.
+- **The full domain stays the acceptance gate.** A subset cannot see
+  BFS-escape or anything else domain-scale — same reason the 40–50 Pa `tau_g`
+  band needs a unit test rather than Jan 18.
+
+Layer trimming is measured, not assumed: the median Jan 18 profile uses 102 of
+338 layers, but across the dilated domain some profile uses all 338, so the
+trim currently saves nothing. Don't hardcode 258.
+
 ## Output layout
 
 `output_dir` is slope-namespaced: `outputs/<slope_name>/`. For Little
