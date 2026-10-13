@@ -13,11 +13,31 @@ that actually generates the two CSVs from the zarr store:
 - `meloche_features_all_<DATE>.csv` — `compute_meloche_features()` output
 
 Everything below was verified by reading the avachain source, not inferred.
-Nothing in this repo has been modified.
 
 Three defects found in the standalone copy are **absent here** — avachain is the
 better implementation and the extraction lost the behaviour. Those are listed
 in the last section so they don't get "fixed" backwards.
+
+## Status as of 2026-10-13
+
+This is the 2026-10-06 audit text, kept as the evidence record. The file:line
+references are from that date and have since moved. `docs/TODO.md` is the
+backlog of record; check there before acting on anything below.
+
+| # | Issue | Status |
+|---|---|---|
+| 1 | CRS mismatch | **Fixed** 2026-10-13 — `config.RASTER_EPSG = 6342`, guarded by `tests/test_raster_crs.py` |
+| 2 | `theta` in Pa per pixel | **Fixed** 2026-10-10 with the θ estimator port |
+| 3 | `A_ca_elastic` uncalibrated | **Fixed** 2026-10-13 — column dropped |
+| 4 | `min_depth_cm` ignored | Open |
+| 5 | 50 Pa floor vs 40 Pa filter | **Fixed** 2026-10-13 — both 40 Pa; no-op on Jan 18 (0/1608 clusters in band) |
+| 6 | Duplicate cluster IDs | Open |
+| 7 | Two writers, one filename | Open |
+| 8 | Hardcoded 1 m pixel | Partly fixed 2026-10-10 — θ and DEM gradient use `px_m`; slope/aspect/HS grids still assume 1 m |
+| 9 | Dead `mode3_scale` | **Fixed** 2026-10-13 — flag and parameter removed |
+| 10 | `max_clusters = 500` | **Fixed** 2026-10-12 — 2000, `--max-clusters`, `[CAP-BOUND]` warning |
+| 11 | Cross-slope width never applies | **Fixed** 2026-10-10 — `tau_p` emitted, Gaume flank constraint live |
+| 12 | Meloche arrest test disabled | Open — still needs documenting |
 
 ---
 

@@ -233,7 +233,9 @@ pipeline.** Do that before trusting any avachain release polygon.
   energy cap cross-slope. If both hold, lateral arrest is driven mainly by the
   speed cap and weak-layer heterogeneity rather than slab fracture — consistent
   with the JGR paper attributing lateral arrest to WL heterogeneity.
-  **Unblocks:** the dead `--mode3-scale` flag (see Feature-CSV audit section).
+  (The old `--mode3-scale` flag that once stood in for this was a no-op and was
+  removed 2026-10-13; the real mechanism is `directional_lambda` plus the
+  speed cap, so nothing is waiting on a CLI surface.)
 
 - [x] **Mode III crack-speed cap — PORTED HERE 2026-10-10.**
   Implemented 2026-10-06 in `~/avalanche-release-areas`, mirrored here with the
