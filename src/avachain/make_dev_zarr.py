@@ -63,7 +63,7 @@ from scipy import ndimage
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import ProjectConfig                      # noqa: E402
-from snowpack_io import kml_to_mask                   # noqa: E402
+from snowpack_io import kml_to_mask, unique_location_index   # noqa: E402
 
 # Layers above this are NaN pad in practice: the median Jan 18 profile uses
 # 102 of 338 and the deepest uses 258. Trimming is safe but is the one step
@@ -99,34 +99,6 @@ def dilated_start_zone_clusters(cfg, buffer_m: float) -> set[int]:
           f"after {buffer_m:g} m buffer ({px_m:g} m/px)")
     print(f"  clusters selected: {len(ids)}")
     return ids
-
-
-def unique_location_index(ds: xr.Dataset, keep_ids: set[int]) -> np.ndarray:
-    """Positional index of the first entry for each wanted cluster.
-
-    First rather than any: the duplicates are byte-identical (verified across
-    index strides of 6565 in the production store), so the earliest copy is as
-    good as the last, and taking one makes the result independent of how many
-    times the store was re-appended.
-    """
-    names = np.array([str(v) for v in ds.coords['location'].values])
-    ids   = np.array([int(n.split('_')[-1]) for n in names])
-
-    seen, idx = set(), []
-    for i, cid in enumerate(ids):
-        if cid in keep_ids and cid not in seen:
-            seen.add(cid)
-            idx.append(i)
-
-    missing = keep_ids - seen
-    if missing:
-        print(f"  WARNING: {len(missing)} selected clusters absent from the "
-              f"store, e.g. {sorted(missing)[:5]}")
-    n_dup = len(names) - len(set(ids))
-    if n_dup:
-        print(f"  store holds {len(names)} locations for {len(set(ids))} "
-              f"clusters ({n_dup} duplicate entries dropped)")
-    return np.array(idx, dtype=int)
 
 
 def time_index(ds: xr.Dataset, dates: list[str], pad_days: int) -> np.ndarray:

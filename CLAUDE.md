@@ -176,17 +176,22 @@ literal (the bytes go to AvaFrame); a test pins its AUTHORITY code instead.
 
 ## The Zarr store, and the dev fixture
 
-`slope_snowpack.zarr` is 78 GB and holds **59280 `location` entries for 6565
-distinct clusters** — the full cluster set was appended ~9 times, each copy
-byte-identical, at index strides of exactly 6565. Consequences to know about:
+`slope_snowpack.zarr` **was** 78 GB holding 59280 `location` entries for 6565
+distinct clusters — the full cluster set appended ~9 times, each copy
+byte-identical, at index strides of exactly 6565. It was deduplicated and
+rechunked on 2026-10-13 (`dedup_zarr.py`) to **6565 locations, 12.5 GB,
+chunks `(location=256, time=1, layer=338)`**. The duplicated original is kept
+alongside as `slope_snowpack.zarr.duplicated` — delete it once you are
+satisfied; it is 78 GB.
 
-- Selecting by `int(name.split('_')[-1]) in ids` (the idiom in
-  `analyze_release_zone.py`) matches **every copy**. The 1608-cluster Jan 18
-  start zone pulls 14502 locations, so the per-cluster loop runs ~9×. Output is
-  still correct — the CSV keys by cluster id — only the cost is wrong.
-- Chunks are `(location=25, time=126, layer=85)` but `analyze` reads one
-  snapshot, so each read decompresses 126 timesteps to use one. Measured on 500
-  locations: 1 timestep 1.4 s, 126 timesteps 0.7 s — same chunks either way.
+Measured effect on the full domain, Jan 18: single-snapshot read 173 s → 1.3 s,
+`analyze` 25m 08s → ~17 s warm. The feature CSVs are bit-identical before and
+after. Two things that surprised us:
+
+- `time=1` chunks **compress worse** (less temporal redundancy inside a chunk),
+  so 78 GB / 9 predicted 8.7 GB and the result was 12.5 GB.
+- The **first** read of a freshly written store is slow — 7m16s cold against
+  ~17 s warm. Don't read a single cold run as a failed optimisation.
 
 The duplication cause is fixed in `snowpack_io._resume_state`: append mode used
 to come from `zarr_out.exists()` while the skip-list came from a separate
@@ -196,7 +201,24 @@ The skip is also per file rather than per batch, so an interrupted batch no
 longer re-appends the locations that did land. Pinned by
 `tests/test_zarr_cache_resume.py`.
 
-For iteration, cut a fixture rather than waiting on the full store:
+Two things to keep true of any store built from here on:
+
+- Selecting by `int(name.split('_')[-1]) in ids` (the idiom throughout
+  `analyze_release_zone.py`) matches **every** copy of a duplicated cluster. On
+  the old store the 1608-cluster Jan 18 start zone pulled 14502 locations and
+  `analyze` logged "Extracted features for 14502 additional clusters". Output
+  stayed correct — the CSV keys by cluster id — only the cost was wrong, so
+  this failure mode is invisible except in the log line and the clock.
+- `time=1` is right because **every** consumer reads one timestep
+  (`isel(time=tidx)` / `sel(time=ts, method='nearest')` in
+  `analysis_pipeline`, `analyze_release_zone`, `release_geometry`,
+  `snowpack_analysis`); no 3D read spans a time slab, and the HS history behind
+  dHS/dt comes from the SMET side, not from here. If that changes, a full
+  time-series read of HS is the thing that got worse: 0.1 s → 3.2 s for 1608
+  locations.
+
+`make_dev_zarr.py` cuts a smaller fixture — dedup, **dilated** start zone, time
+subset, `time=1` chunks:
 
 ```bash
 python src/avachain/make_dev_zarr.py --toml slopes/little_prof/slope_config.toml \
@@ -206,10 +228,13 @@ python src/avachain/analysis_pipeline.py analyze --toml ... \
        --zarr-path snowpack/little_prof/output/dev_snowpack.zarr --force
 ```
 
-It deduplicates `location`, keeps a **dilated** start zone, subsets time and
-rechunks to `time=1`. Measured: snapshot read 173 s → 0.3 s, `analyze` 13 s.
+Be aware it is **mostly redundant now**: it was written when `analyze` took 25
+minutes, and the deduped main store does the full domain in ~17 s against the
+fixture's ~13 s. What it is still worth using for is a 427 MB store instead of
+12.5 GB — a copyable fixture, a cold cache, or a disk-light checkout. Reach for
+it for those reasons, not for speed.
 
-Two things to keep in mind:
+Two things to keep in mind when you do:
 
 - The buffer is not optional. The release BFS grows outward from its trigger
   and `_build_scour_depth_map` wants every cluster in the domain, with a

@@ -73,6 +73,40 @@ def load_dataset(pro_dir: Path,
 # Zarr cache builder
 # -----------------------------------------------------------------------
 
+def unique_location_index(ds: xr.Dataset,
+                          keep_ids: "set[int] | None" = None) -> np.ndarray:
+    """Positional index of the first entry for each wanted cluster.
+
+    `keep_ids` None keeps every cluster in the store, which is the dedup case;
+    a set restricts to those cluster ids, which is the dev-fixture case.
+
+    First occurrence rather than any: the duplicate entries left by the resume
+    bug are byte-identical (verified in the production store across index
+    strides of 6565 — equal lat/lon/alt and equal data), so the earliest copy
+    is as good as the last, and taking the first makes the result independent
+    of how many times the store was re-appended.
+    """
+    names = np.array([str(v) for v in ds.coords['location'].values])
+    ids   = np.array([int(n.split('_')[-1]) for n in names])
+
+    seen, idx = set(), []
+    for i, cid in enumerate(ids):
+        if (keep_ids is None or cid in keep_ids) and cid not in seen:
+            seen.add(cid)
+            idx.append(i)
+
+    if keep_ids is not None:
+        missing = keep_ids - seen
+        if missing:
+            print(f"  WARNING: {len(missing)} selected clusters absent from "
+                  f"the store, e.g. {sorted(missing)[:5]}")
+    n_dup = len(names) - len(set(ids))
+    if n_dup:
+        print(f"  store holds {len(names)} locations for {len(set(ids))} "
+              f"clusters ({n_dup} duplicate entries dropped)")
+    return np.array(idx, dtype=int)
+
+
 def _resume_state(zarr_out: Path, rebuild: bool) -> tuple[set, bool]:
     """
     Decide what is already in `zarr_out` and whether to append to it.
