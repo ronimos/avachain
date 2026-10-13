@@ -510,11 +510,14 @@ def step_scenarios(cfg, args):
     MIN_SLAB_THICKNESS = 0.5  # metres — too thin = D1 at most
     MAX_SLAB_THICKNESS = args.max_slab_thickness  # metres — too thick = skier can't trigger
 
-    # All clusters that overlap the start zone mask
+    # All clusters that overlap the start zone mask.
+    # Iterate the feature index, not the set: nsmallest() breaks Sk38 ties by
+    # position, and set iteration order would hand a tie to a different
+    # cluster than the standalone repo does.
     sz_cids = set(int(c) for c in np.unique(cluster_map[start_zone_mask])
                   if c > 0)
-    candidate_ids = [cid for cid in sz_cids
-                     if cid in snap_features.index]
+    candidate_ids = [cid for cid in snap_features.index
+                     if cid in sz_cids]
     print(f"  Start zone clusters with features: {len(candidate_ids)}")
 
     def _scalar_val(df, cid, col):

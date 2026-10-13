@@ -370,6 +370,11 @@ def profile_features(ds_t_loc, min_depth_cm: float) -> dict:
     if slab_m is None:
         return result
 
+    # z is negative downward from the snow surface, so the WL top sits
+    # -interface_z below the surface.
+    if -interface_z < min_depth_cm / 100.0:
+        return result
+
     # Element thicknesses, used to weight every bulk mean and to sum layer
     # thicknesses. See element_thickness() for why a plain element mean and a
     # z-span are both wrong.

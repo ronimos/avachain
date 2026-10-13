@@ -5,6 +5,7 @@ Run with:  pytest tests/test_snowpack_analysis.py -v
 
 Covers:
   - split_wl_slab()       : basal WL/slab interface detection
+  - profile_features()    : min_depth_cm shallow-WL guard
   - assign_cluster_groups(): release / adjacent / reference assignment
 """
 
@@ -12,12 +13,14 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import xarray as xr
 
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "avachain"))
 
-from snowpack_analysis import split_wl_slab, assign_cluster_groups
+from snowpack_analysis import (split_wl_slab, assign_cluster_groups,
+                               profile_features)
 
 
 # ---------------------------------------------------------------------------
@@ -276,3 +279,57 @@ class TestAssignClusterGroups:
         groups = assign_cluster_groups(cluster_map, release_mask, start_zone_mask,
                                        dem, domain_mask)
         assert 6 in groups['release']
+
+
+# ---------------------------------------------------------------------------
+# profile_features — min_depth_cm guard
+# ---------------------------------------------------------------------------
+#
+# The parameter was in the signature and documented but never referenced in
+# the body until 2026-10-13, so a shallow weak layer produced a full feature
+# set instead of being rejected. ~/avalanche-release-areas implements it; this
+# pins the behaviour so the two repos cannot drift apart again.
+
+_Z_GRID = [-1.2, -1.1, -1.0, -0.9, -0.8, -0.7, -0.6,
+           -0.5, -0.4, -0.3, -0.2, -0.1]
+
+
+def _profile(grain_types, hs=1.2):
+    """One cluster at one timestep: DH 5xx = weak layer, RG 3xx = slab."""
+    return xr.Dataset({
+        'z':          ('e', np.array(_Z_GRID, dtype=float)),
+        'grain_type': ('e', np.array(grain_types, dtype=float)),
+        'HS':         ((), hs),
+    })
+
+
+# WL from the base up to z=-0.2 leaves a 0.2 m slab; WL in the bottom two
+# elements only leaves a 1.1 m slab.
+_THIN_SLAB  = [520] * 11 + [320]
+_THICK_SLAB = [520] * 2 + [320] * 10
+
+
+def test_shallow_wl_is_rejected_above_min_depth():
+    """A 0.2 m slab is shallower than the 0.3 m floor — no slab features."""
+    feat = profile_features(_profile(_THIN_SLAB), 30.0)
+    assert 'slab_thickness' not in feat
+    assert feat == {'hs': pytest.approx(1.2)}
+
+
+def test_deep_wl_is_kept_at_same_min_depth():
+    """A 1.1 m slab clears the same floor and yields the full feature set."""
+    feat = profile_features(_profile(_THICK_SLAB), 30.0)
+    assert feat['slab_thickness'] == pytest.approx(1.1)
+    assert 'E_slab' in feat
+
+
+def test_min_depth_zero_disables_the_guard():
+    """min_depth_cm=0 must not reject anything — guard is opt-in by value."""
+    feat = profile_features(_profile(_THIN_SLAB), 0.0)
+    assert feat['slab_thickness'] == pytest.approx(0.2)
+
+
+def test_guard_boundary_is_inclusive_of_equal_depth():
+    """-interface_z == min_depth_cm/100 is kept; the test is strictly less."""
+    feat = profile_features(_profile(_THIN_SLAB), 20.0)
+    assert feat['slab_thickness'] == pytest.approx(0.2)
