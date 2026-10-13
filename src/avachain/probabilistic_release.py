@@ -24,6 +24,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from config import RASTER_EPSG
+
 
 # -----------------------------------------------------------------------
 # Probabilistic flood-fill
@@ -335,7 +337,7 @@ def main():
         from pyproj import Transformer
         with open(str(gj_obs)) as f:
             gj_data = _json.load(f)
-        t = Transformer.from_crs('EPSG:4326', 'EPSG:6342', always_xy=True)
+        t = Transformer.from_crs('EPSG:4326', f'EPSG:{RASTER_EPSG}', always_xy=True)
         def _reproj(poly):
             from shapely.geometry import Polygon, MultiPolygon
             def ring(r): return [t.transform(x,y) for x,y in r.coords]

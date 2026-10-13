@@ -30,6 +30,8 @@ from pathlib import Path
 from scipy.ndimage import uniform_filter, label as connected_components
 from typing import Tuple, Optional
 
+from config import RASTER_EPSG
+
 
 # =====================================================================
 # Crown delineation (given approximate location or full-slope scan)
@@ -272,9 +274,9 @@ def load_slope_mask(kml_path, dem_shape: tuple, transform) -> np.ndarray:
             x0 = transform[2]
 
         if abs(x0) > 180:
-            # Projected — reproject lon/lat to UTM zone 13N (A-Basin)
+            # Projected — reproject lon/lat to the raster CRS (UTM 13N, A-Basin)
             transformer = Transformer.from_crs(
-                'EPSG:4326', 'EPSG:6342', always_xy=True)
+                'EPSG:4326', f'EPSG:{RASTER_EPSG}', always_xy=True)
             pts = [transformer.transform(lon, lat)
                    for lon, lat in pts_lonlat]
         else:

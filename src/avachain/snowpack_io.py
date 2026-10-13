@@ -25,6 +25,8 @@ import xarray as xr
 import xsnow
 from pyproj import Transformer
 
+from config import RASTER_EPSG
+
 
 # -----------------------------------------------------------------------
 # Dataset loading
@@ -177,7 +179,7 @@ def build_zarr_cache(pro_dir: Path,
 # -----------------------------------------------------------------------
 
 def load_boundaries(project_dir: Path,
-                    target_epsg: int = 6342) -> dict:
+                    target_epsg: int = RASTER_EPSG) -> dict:
     """
     Load start zone KML and release area GeoJSON, reproject to target CRS.
 
@@ -189,7 +191,7 @@ def load_boundaries(project_dir: Path,
     Parameters
     ----------
     project_dir  : project root (data/boundaries/ is expected inside)
-    target_epsg  : EPSG code for output CRS (default 6342 = NAD83(2011)/UTM 13N)
+    target_epsg  : EPSG code for output CRS (default config.RASTER_EPSG)
     """
     from xml.etree import ElementTree as ET
     from shapely.geometry import shape
@@ -270,7 +272,7 @@ def load_boundaries(project_dir: Path,
 def kml_to_mask(kml_path: Path,
                 shape: tuple,
                 transform,
-                target_epsg: int = 6342) -> np.ndarray:
+                target_epsg: int = RASTER_EPSG) -> np.ndarray:
     """
     Rasterize a KML polygon to a boolean mask matching a raster grid.
 

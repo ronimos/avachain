@@ -30,6 +30,7 @@ import pandas as pd
 import xarray as xr
 import arrest_indices as _ai
 from arrest_indices import evaluate as _ai_evaluate
+from config import RASTER_EPSG
 
 # Slab/weak-layer material constants shared across profile_features and
 # compute_meloche_features (Reiweger et al. 2010; Gaume et al. 2018)
@@ -138,14 +139,14 @@ GROUP_LABELS = {
 # Geometry helpers
 # -----------------------------------------------------------------------
 
-def _reproject_lonlat_to_utm(pts_lonlat, epsg: int = 6342):
+def _reproject_lonlat_to_utm(pts_lonlat, epsg: int = RASTER_EPSG):
     """Reproject list of (lon, lat) points to UTM."""
     from pyproj import Transformer
     t = Transformer.from_crs('EPSG:4326', f'EPSG:{epsg}', always_xy=True)
     return [t.transform(x, y) for x, y in pts_lonlat]
 
 
-def geojson_to_mask(path, dem_shape, transform, dst_epsg: int = 6342) -> np.ndarray:
+def geojson_to_mask(path, dem_shape, transform, dst_epsg: int = RASTER_EPSG) -> np.ndarray:
     from shapely.geometry import shape
     from shapely.ops import unary_union
     from pyproj import Transformer as _T, CRS as _CRS

@@ -37,6 +37,8 @@ import numpy as np
 import pandas as pd
 import rasterio
 
+from config import RASTER_EPSG
+
 
 # -----------------------------------------------------------------------
 # Utility: ASCII grid writer
@@ -200,7 +202,7 @@ def write_scenario(scenario_dir: Path,
             'type': 'FeatureCollection',
             'crs': {
                 'type': 'name',
-                'properties': {'name': 'EPSG:6342'},
+                'properties': {'name': f'EPSG:{RASTER_EPSG}'},
             },
             'features': [feature],
         }

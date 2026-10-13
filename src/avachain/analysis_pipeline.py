@@ -1023,9 +1023,10 @@ def main():
     parser.add_argument('--xi',            type=float, default=None)
     parser.add_argument('--stauchwall-deg',type=float, default=None)
     parser.add_argument('--max-slab-thickness', type=float, default=2.0,
-                        help='Maximum slab thickness for skier trigger (m). '
-                             'Use 10.0 for natural trigger scenarios. '
-                             'Default 1.5 (skier stress negligible below ~1.5m).')
+                        help='Maximum slab thickness to accept as a trigger (m). '
+                             'Default 2.0, sized for explosive control. Use 1.5 for '
+                             'skier-triggered scenarios (skier stress is negligible '
+                             'below ~1.5 m) or 10.0 for natural triggers.')
     parser.add_argument('--no-propagation', action='store_true',
                         help='Skip BFS propagation, use rectangle fallback')
     parser.add_argument('--restrict-to-release-area', action='store_true',

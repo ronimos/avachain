@@ -589,7 +589,9 @@ def make_release_polygon_2d(
         BFS cluster flood-fill with per-direction arrest criteria:
           - Upslope:   Meloche brittle Π₁ at candidate < Π₁ at trigger
           - Downslope: slope < stauchwall_deg (~28°)
-          - Lateral:   mode III speed cap applied via d_lat in propagate_release
+          - Lateral:   distance > d_lat — the Gaume θ-ratio cross-slope width
+                       (floor 15 m), additionally capped by the mode III crack
+                       speed when USE_MODE3_SPEED_CAP is on (currently off)
         size_factor relaxes (>1) or tightens (<1) arrest thresholds.
 
     Fallback (use_propagation=False, or if propagation returns None):
