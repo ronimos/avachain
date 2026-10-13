@@ -504,7 +504,10 @@ def step_scenarios(cfg, args):
     # Group assignment (release/adjacent/reference) is for validation
     # comparison, NOT for trigger selection — operationally we don't know
     # which clusters will be in the release area.
-    MIN_TAU_G   = 40.0   # Pa — below this the scaling law is not applicable
+    # Pa — minimum gravitational driving shear stress to accept as a trigger.
+    # Distinct from snowpack_analysis.TAU_G_FEATURE_FLOOR (50 Pa), which gates
+    # whether arrest indices are computed at all; see the note there.
+    MIN_TAU_G   = 40.0
     MIN_SLOPE   = 30.0   # degrees — well above the 27° friction angle
     MAX_SK38    = 1.0    # Sk38 >= 1.0 = stable for skier triggering (Schweizer & Jamieson 2007)
     MIN_SLAB_THICKNESS = 0.5  # metres — too thin = D1 at most

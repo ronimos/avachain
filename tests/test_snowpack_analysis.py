@@ -333,3 +333,30 @@ def test_guard_boundary_is_inclusive_of_equal_depth():
     """-interface_z == min_depth_cm/100 is kept; the test is strictly less."""
     feat = profile_features(_profile(_THIN_SLAB), 20.0)
     assert feat['slab_thickness'] == pytest.approx(0.2)
+
+
+# ---------------------------------------------------------------------------
+# tau_g thresholds — parity with ~/avalanche-release-areas
+# ---------------------------------------------------------------------------
+#
+# These are two deliberately different constants, which is easy to mistake for
+# a bug and "fix" by collapsing them: commit 8de10d4 did exactly that, lowering
+# the feature floor to 40 to match the trigger gate. The standalone repo keeps
+# them apart, so avachain must too. Both values are pinned here because the
+# divergence is invisible on Jan 18 (no cluster falls in the 40-50 Pa band) and
+# so cannot be caught by the acceptance test.
+
+def test_tau_g_feature_floor_matches_standalone():
+    from snowpack_analysis import TAU_G_FEATURE_FLOOR
+    assert TAU_G_FEATURE_FLOOR == 50.0
+
+
+def test_feature_floor_sits_above_the_trigger_gate():
+    """The 40-50 Pa dead band is intentional, not an oversight.
+
+    If someone closes it, that is a modelling decision that has to be made in
+    ~/avalanche-release-areas first — not a local cleanup.
+    """
+    from snowpack_analysis import TAU_G_FEATURE_FLOOR
+    trigger_gate = 40.0
+    assert TAU_G_FEATURE_FLOOR > trigger_gate

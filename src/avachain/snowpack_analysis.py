@@ -97,6 +97,17 @@ THETA_FIT_RADIUS_M       = L_SS
 THETA_FIT_MIN_NEIGHBOURS = 8      # minimum centroids in radius, else θ = NaN
 THETA_MIN                = 1e-6   # Pa/m; below this there is no usable gradient
 
+# Pa; below this the arrest scaling laws are not evaluated and the cluster gets
+# no arrest indices. Deliberately ABOVE the 40 Pa trigger gate
+# (analysis_pipeline.MIN_TAU_G), which leaves a 40-50 Pa band that passes
+# trigger selection with no indices — kept to match
+# ~/avalanche-release-areas config.TAU_G_FEATURE_FLOOR, whose value this is.
+# UNSUPPORTED there and here: Meloche et al. never varied tau_g (h=0.5 m,
+# rho=250, psi=35 fixed in all four campaigns, so tau_g = 703 Pa is the only
+# simulated value). The paper's size caveat is "size 3 or more", not D2+.
+# See THETA_VALID_* for the thresholds the paper does give.
+TAU_G_FEATURE_FLOOR      = 50.0
+
 # Validity range of the arrest scaling laws in θ, from Meloche et al. (2025).
 # The only quantitative propagation thresholds the paper gives:
 #   p.12 "Shear strength gradients of more than 20 Pa m-1 were needed to obtain
@@ -876,8 +887,7 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
         # Validity guard: use full gravitational shear (not friction-adjusted) to match
         # the tau_g definition in arrest_indices.evaluate() and the paper.
         tau_g_guard = rho * G_GRAV * h_m * sin_psi
-        tau_g_min_valid = 40.0   # Pa — below this the scaling law is not applicable
-        if tau_g_guard < tau_g_min_valid:
+        if tau_g_guard < TAU_G_FEATURE_FLOOR:
             rows_out.append({'cluster_id': cid, 'tau_g': tau_g_guard,
                              'slope_angle': psi_deg,
                              'note': 'tau_g below valid range for scaling law'})
