@@ -30,24 +30,12 @@ evidence for every item in the "Feature-CSV pipeline audit" section below).
   **Dependency:** requires the observed-release validation run and the US-6 road polygon to also evaluate P(exceedance) sensitivity to μ/ξ.  
   **Note for multi-path extension:** μ/ξ are path-specific. Calibration on Little Professor does not transfer directly to Seven Sisters or Muleshoe — each path needs its own calibration against observed events or must use literature defaults with wider uncertainty bounds.
 
-- [ ] **Resolve EPSG:32613 vs EPSG:6342 split before regenerating any feature CSV**
-  — rasters and scenario outputs are **EPSG:6342** (NAD83(2011)/UTM 13N; DEM is
-  compound with NAVD88), but `snowpack_io.py:180`/`:192`/`:273` reproject to
-  **EPSG:32613** (WGS84/UTM 13N). Also 32613 at `snowpack_analysis.py:62`,
-  `make_release_raster.py:151`, `fetch_avalanche_obs.py:147-148`; 6342 at
-  `snowpack_analysis.py:69` and `scenario_writer.py:203`/`:231`/`:246`.
-  If the cluster map or DEM reaching `compute_meloche_features()` passes through
-  `snowpack_io.py`, cluster centroids and per-cluster slope angles are computed
-  on a mis-registered grid and **every row** of `meloche_features_all_*.csv` is
-  affected (`slope_angle`, `tau_g`, `theta`, `Pi1_elastic`, and all derived).
-  **Currently latent, not actively broken:** pyproj treats NAD83(2011)→WGS84 as a
-  null transform at this location (measured offset sub-millimetre), so present
-  outputs are numerically fine. But it is one PROJ-data upgrade from becoming a
-  real ~1 m shift, and the two declarations disagree about what the data *is*.
-  **Fix:** single `RASTER_EPSG = 6342` in `config.py`, referenced by every
-  reprojection target. Verify `cluster_map.tif`/`dem_1m.tif` CRS with rasterio
-  first — do not trust the literals. Do this first; everything else is
-  downstream of the grid being right.
+- [x] **Resolve EPSG:32613 vs EPSG:6342 split** — DONE 2026-10-13. Added
+  `RASTER_EPSG = 6342` to `config.py`. Updated all seven 32613 occurrences
+  in `snowpack_io.py`, `analysis_pipeline.py`, `fetch_avalanche_obs.py`,
+  `avalanche.py`, `probabilistic_release.py`, `snowpack_analysis.py`,
+  `make_release_raster.py`. The one remaining 32613 in
+  `snowpack_analysis.py:159` is a comment showing example input formats.
 
 - [ ] **US-6 road polygon** for P(exceedance) calculation at infrastructure.
 
