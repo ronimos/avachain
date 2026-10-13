@@ -580,7 +580,6 @@ def make_release_polygon_2d(
         snap_features: 'Optional[pd.DataFrame]' = None,
         size_factor: float = 1.0,
         stauchwall_deg: float = STAUCHWALL_DEG,
-        mode3_scale: float = 1.5,
         max_clusters: int = MAX_BFS_CLUSTERS,
         use_propagation: bool = True):
     """
@@ -590,7 +589,7 @@ def make_release_polygon_2d(
         BFS cluster flood-fill with per-direction arrest criteria:
           - Upslope:   Meloche brittle Π₁ at candidate < Π₁ at trigger
           - Downslope: slope < stauchwall_deg (~28°)
-          - Lateral:   Π₁ < Π₁_trigger × mode3_scale (mode III)
+          - Lateral:   mode III speed cap applied via d_lat in propagate_release
         size_factor relaxes (>1) or tightens (<1) arrest thresholds.
 
     Fallback (use_propagation=False, or if propagation returns None):
@@ -662,7 +661,6 @@ def make_release_polygon_2d(
             transform          = transform,
             start_zone_mask    = start_zone_mask,
             stauchwall_deg     = stauchwall_deg,
-            mode3_scale        = mode3_scale,
             size_factor        = size_factor,
             A_ca               = A_ca,
             snap_features      = snap_features,
@@ -734,7 +732,6 @@ def propagate_release(
         transform,
         start_zone_mask: Optional[np.ndarray] = None,
         stauchwall_deg: float = STAUCHWALL_DEG,
-        mode3_scale: float = 2.0,    # kept for API compat, not used
         size_factor: float = 1.0,
         A_ca: Optional[float] = None,
         snap_features: 'Optional[pd.DataFrame]' = None,

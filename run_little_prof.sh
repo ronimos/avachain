@@ -220,7 +220,7 @@ if [[ $REINIT -eq 1 ]]; then
 
     echo ""
     echo "    Pass 2: $EVENT_DATE → current date (scoured clusters only)"
-    REINIT_STATS="$PROJECT_DIR/outputs/analysis/reinit_stats_${EVENT_DATE}.json"
+    REINIT_STATS="$PROJECT_DIR/outputs/little_prof/analysis/reinit_stats_${EVENT_DATE}.json"
     if [[ -f "$REINIT_STATS" ]]; then
         bash "$SLOPE_SCRIPTS/run_snowpack.sh" "" "" "$REINIT_STATS"
     else

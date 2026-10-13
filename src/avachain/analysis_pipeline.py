@@ -644,7 +644,6 @@ def step_scenarios(cfg, args):
                 snap_features=snap_features,
                 size_factor=_mid_sf,
                 stauchwall_deg=args.stauchwall_deg,
-                mode3_scale=args.mode3_scale,
                 max_clusters=args.max_clusters,
                 use_propagation=True,
             )
@@ -810,7 +809,6 @@ def step_scenarios(cfg, args):
                         snap_features      = snap_features,
                         size_factor        = size_f,
                         stauchwall_deg     = args.stauchwall_deg,
-                        mode3_scale        = args.mode3_scale,
                         max_clusters       = args.max_clusters,
                         use_propagation    = not args.no_propagation,
                     )
@@ -1028,13 +1026,6 @@ def main():
                         help='Maximum slab thickness for skier trigger (m). '
                              'Use 10.0 for natural trigger scenarios. '
                              'Default 1.5 (skier stress negligible below ~1.5m).')
-    parser.add_argument('--mode3-scale',   type=float, default=1.5,
-                        help='Lateral arrest multiplier on trigger Pi1 '
-                             '(default 1.5, must be > 1.0). Higher = '
-                             'tighter cross-slope arrest. Mode III '
-                             'propagates near shear wave speed and arrests '
-                             'more easily than downslope mode II. '
-                             'Calibrate against observed flank location.')
     parser.add_argument('--no-propagation', action='store_true',
                         help='Skip BFS propagation, use rectangle fallback')
     parser.add_argument('--restrict-to-release-area', action='store_true',

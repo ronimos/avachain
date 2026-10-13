@@ -1,6 +1,6 @@
 # Little Professor Pipeline — TODO
 
-**Updated:** 2026-10-10  
+**Updated:** 2026-10-13  
 **Context:** UAS → distributed SNOWPACK → release geometry → com1DFA runout probability
 
 See [`CSV_FEATURE_PIPELINE_ISSUES.md`](../CSV_FEATURE_PIPELINE_ISSUES.md) for the
@@ -329,15 +329,9 @@ CRS split is the highest-risk item and lives in **High Priority** above.
   data, as predicted. Covered by
   `tests/test_theta_estimators.py::test_px_m_scales_theta_inversely`.
 
-- [ ] **Drop `A_ca_elastic` — it is uncalibrated** —
-  `snowpack_analysis.py:633` computes `A_ca_elastic = L_SS * Pi1**(1.5)`
-  (emitted `:644`, `L_SS = 20.0` at `:485`). JGR Eq. 19 is a *proportionality*
-  with no published constant; this silently assumes the constant is 1. On Little
-  Professor that yields a median of **7 800 m** and a max of **3.7 × 10⁶ m** in a
-  shipped CSV. Nothing downstream reads it. **Fix:** remove the column; keep the
-  dimensionless `Pi1_elastic`, which carries the same information. The standalone
-  dropped it on 2026-10-09; the 2026-10-10 port deliberately left it in place
-  here, since removing a CSV column is a schema change rather than a physics fix.
+- [x] **Drop `A_ca_elastic` — it is uncalibrated** — DONE 2026-10-13.
+  Removed the computation and output column from `snowpack_analysis.py`.
+  `Pi1_elastic` carries the same information without the bogus constant.
 
 - [x] **Add `tau_p` to the meloche CSV — unblocks cross-slope width** — DONE
   2026-10-10. `compute_meloche_features()` now emits `tau_p`, and
@@ -347,22 +341,16 @@ CRS split is the highest-risk item and lives in **High Priority** above.
   constant `A_ca` and becomes per-trigger. Note it is now composed with the
   mode III speed cap as a `min()`, and on Jan 18 the speed cap is what binds.
 
-- [ ] **`max_clusters = 500` silently bounds the release region** — two
-  independent implementations, each with its own hardcoded default:
-  `release_geometry.py:479`/`:830` and `probabilistic_release.py:44`/`:123`.
-  Neither warns when it binds. Measured in the standalone repo on Jan 18: the cap
-  binds on **3 of 5 triggers**, and lifting it moves median release area ~20%
-  (5 366 → 6 405 m²) and best IoU 0.639 → 0.667. Region size saturates by ~1 000
-  clusters, so **any value ≥ 1000 gives an identical answer — raising it is not
-  tuning to the event.** **Fix:** single constant in `config.py`, exposed as a
-  CLI flag, plus a warning when the BFS exits with clusters still propagating so
-  a capped polygon is never mistaken for a physical result.
+- [x] **`max_clusters = 500` silently bounds the release region** — DONE
+  2026-10-12. `MAX_BFS_CLUSTERS = 2000` in `release_geometry.py`, wired through
+  `PipelineConfig.max_bfs_clusters` and `--max-clusters` CLI flag. A `[CAP-BOUND]`
+  warning is emitted when the BFS exits with clusters still propagating.
 
-- [ ] **50 Pa feature floor sits above the 40 Pa downstream filter** —
-  `snowpack_analysis.py:580-581` `tau_g_min_valid = 50.0  # Pa — empirical
-  minimum for D2+ events`, while trigger selection downstream gates on
-  τg ≥ 40 Pa. Clusters between 40 and 50 Pa therefore pass the documented filter
-  but have **no arrest indices at all**. Pick one threshold.
+- [x] **50 Pa feature floor sits above the 40 Pa downstream filter** — DONE
+  2026-10-13. `tau_g_min_valid` lowered to 40 Pa in `snowpack_analysis.py` to
+  match `MIN_TAU_G` in `analysis_pipeline.py`. Both now use the scaling-law
+  applicability threshold; the D2+ character of the event is enforced by the
+  slab-thickness and slope filters downstream.
 
 - [ ] **Duplicate cluster IDs resolve by dict insertion order** —
   `analyze_release_zone.py:898-906` concatenates the `snap_data` groups *plus* a
@@ -395,15 +383,11 @@ CRS split is the highest-risk item and lives in **High Priority** above.
   highest-value improvement to the input chain. Unvalidated outside
   200–350 kg m⁻³ (Jan 18 densities 264–332 are inside).
 
-- [ ] **Remove the dead `--mode3-scale` flag, or implement mode III** —
-  `release_geometry.py:474` is honest (`mode3_scale: float = 2.0, # kept for API
-  compat, not used`), but the docstring still claims "Lateral: Π₁ <
-  Π₁_trigger × mode3_scale (mode III)" and the CLI flag is still live at
-  `analysis_pipeline.py:1024`. Users can set a flag that does nothing.
-  **No longer blocked:** mode III now *is* implemented, as the crack-speed cap
-  (ported 2026-10-10), and it does not use this flag — lateral extent is
-  `min(gaume_width, A_ca·0.712)`. The standalone removed the flag rather than
-  leave a no-op; do the same here, which means touching the CLI surface.
+- [x] **Remove the dead `--mode3-scale` flag** — DONE 2026-10-13. Removed from
+  `propagate_release()` and `make_release_polygon_2d()` signatures, from both
+  call sites in `analysis_pipeline.py`, and from argparse. The docstring for
+  `make_release_polygon_2d` now correctly states that lateral extent is governed
+  by the mode III speed cap via `d_lat` in `propagate_release`.
 
 - [ ] **Document that the Meloche arrest test is disabled** —
   `release_geometry.py:49` `USE_MELOCHE_ARREST = False`. What actually arrests the

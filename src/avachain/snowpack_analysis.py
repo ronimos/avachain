@@ -870,7 +870,7 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
         # Validity guard: use full gravitational shear (not friction-adjusted) to match
         # the tau_g definition in arrest_indices.evaluate() and the paper.
         tau_g_guard = rho * G_GRAV * h_m * sin_psi
-        tau_g_min_valid = 50.0   # Pa — empirical minimum for D2+ events
+        tau_g_min_valid = 40.0   # Pa — below this the scaling law is not applicable
         if tau_g_guard < tau_g_min_valid:
             rows_out.append({'cluster_id': cid, 'tau_g': tau_g_guard,
                              'slope_angle': psi_deg,
@@ -912,7 +912,6 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
         denom        = theta * Lambda_ai * np.sqrt(1.0 + DELTA)
         Pi1          = tau_g_ai / denom
         Pi2          = Pi1 * np.sqrt(sigma_t / tau_g_ai)
-        A_ca_elastic = L_SS * Pi1**(1.5)
 
         # Eq. 20 again under the two layered sigma_t bounds, alongside (never
         # replacing) A_ca_brittle. Only sigma_t and E change: k_f and tau_g
@@ -946,7 +945,6 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
             'L_dyn':         ai.get('L_dyn',       np.nan),
             'L_dyn_cross':   ai.get('L_dyn_cross', np.nan),
             'mode3_length_ratio': ai.get('mode3_length_ratio', np.nan),
-            'A_ca_elastic':  A_ca_elastic,
             'A_ca_brittle':  A_ca_ai,
             'rc_wl':         row.get('rc_wl', np.nan),
             'G_slab':        G_slab,
