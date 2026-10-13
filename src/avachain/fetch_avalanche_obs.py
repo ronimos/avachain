@@ -30,7 +30,7 @@ from typing import Optional
 
 import requests
 
-from config import ProjectConfig
+from config import ProjectConfig, RASTER_EPSG
 
 # --- CAIC API ---
 
@@ -144,8 +144,8 @@ def filter_to_boundary(observations: list, kml_path: str, buffer_m: float = 200)
     poly_lonlat = Polygon(coords_lonlat)
 
     # Buffer in meters requires projection to UTM
-    proj_to_utm = Transformer.from_crs("EPSG:4326", "EPSG:32613", always_xy=True)
-    proj_to_lonlat = Transformer.from_crs("EPSG:32613", "EPSG:4326", always_xy=True)
+    proj_to_utm = Transformer.from_crs("EPSG:4326", f"EPSG:{RASTER_EPSG}", always_xy=True)
+    proj_to_lonlat = Transformer.from_crs(f"EPSG:{RASTER_EPSG}", "EPSG:4326", always_xy=True)
 
     poly_utm = shapely_transform(
         functools.partial(lambda t, x, y, z=None: t.transform(x, y), proj_to_utm),

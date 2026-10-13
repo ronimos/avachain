@@ -274,7 +274,7 @@ def load_slope_mask(kml_path, dem_shape: tuple, transform) -> np.ndarray:
         if abs(x0) > 180:
             # Projected — reproject lon/lat to UTM zone 13N (A-Basin)
             transformer = Transformer.from_crs(
-                'EPSG:4326', 'EPSG:32613', always_xy=True)
+                'EPSG:4326', 'EPSG:6342', always_xy=True)
             pts = [transformer.transform(lon, lat)
                    for lon, lat in pts_lonlat]
         else:

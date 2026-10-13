@@ -9,6 +9,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+# Horizontal CRS of all project rasters (cluster_map.tif, DEM, scenario outputs).
+# NAD83(2011) / UTM zone 13N — the actual files are COMPD with NAVD88 vertical.
+# rasterio returns EPSG=None for compound CRS; the horizontal component is 6342.
+RASTER_EPSG = 6342
+
 
 @dataclass
 class ProjectConfig:

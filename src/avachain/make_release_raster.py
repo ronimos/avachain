@@ -148,7 +148,7 @@ def main():
         "notes": (
             "Slab depth = 80% of SNOWPACK HS (WL ~20%). "
             "Release polygon = observed Jan 18 release area GeoJSON. "
-            "CRS: EPSG:32613 (UTM 13N). "
+            "CRS: EPSG:6342 (NAD83(2011)/UTM 13N). "
             "Feed tif or asc to com1DFA as releaseScenario raster."
         ),
     }

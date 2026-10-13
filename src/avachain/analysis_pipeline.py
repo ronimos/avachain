@@ -35,7 +35,7 @@ import rasterio
 # ---------------------------------------------------------------------------
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config import ProjectConfig
+from config import ProjectConfig, RASTER_EPSG
 from snowpack_io import load_dataset, load_boundaries, kml_to_mask
 from snowpack_analysis import (
     assign_cluster_groups,
@@ -197,7 +197,7 @@ def _load_observed_release_polygon(cfg, snapshot_date=None):
     if _m:
         src_epsg = int(_m.group(1))
 
-    dst_epsg = 32613
+    dst_epsg = RASTER_EPSG
     if src_epsg != dst_epsg:
         t = Transformer.from_crs(f'EPSG:{src_epsg}', f'EPSG:{dst_epsg}', always_xy=True)
 

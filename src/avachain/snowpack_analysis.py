@@ -138,7 +138,7 @@ GROUP_LABELS = {
 # Geometry helpers
 # -----------------------------------------------------------------------
 
-def _reproject_lonlat_to_utm(pts_lonlat, epsg: int = 32613):
+def _reproject_lonlat_to_utm(pts_lonlat, epsg: int = 6342):
     """Reproject list of (lon, lat) points to UTM."""
     from pyproj import Transformer
     t = Transformer.from_crs('EPSG:4326', f'EPSG:{epsg}', always_xy=True)
