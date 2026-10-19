@@ -179,10 +179,15 @@ literal (the bytes go to AvaFrame); a test pins its AUTHORITY code instead.
 `slope_snowpack.zarr` **was** 78 GB holding 59280 `location` entries for 6565
 distinct clusters — the full cluster set appended ~9 times, each copy
 byte-identical, at index strides of exactly 6565. It was deduplicated and
-rechunked on 2026-10-13 (`dedup_zarr.py`) to **6565 locations, 12.5 GB,
-chunks `(location=256, time=1, layer=338)`**. The duplicated original is kept
-alongside as `slope_snowpack.zarr.duplicated` — delete it once you are
-satisfied; it is 78 GB.
+rechunked on 2026-10-13 (`dedup_zarr.py`) to **6565 locations, 14 GB,
+chunks `(location=256, time=1, layer=338)`**. The **swap ran on 2026-10-19**
+(`dedup_zarr.py --skip-write --swap`, after it verified all 30 variables over
+32 clusters × 8 timesteps bit-identical), so the deduped store is now the live
+one at `cfg.zarr_path`. The duplicated original is kept alongside as
+`slope_snowpack.zarr.duplicated` — delete it once you are satisfied; it is
+78 GB. Before 10-19 the live store was still the duplicated one and the
+deduped candidate sat beside it as `.dedup`, so a note claiming the swap had
+happened predated it actually happening.
 
 Measured effect on the full domain, Jan 18: single-snapshot read 173 s → 1.3 s,
 `analyze` 25m 08s → ~17 s warm. The feature CSVs are bit-identical before and
@@ -249,6 +254,57 @@ Two things to keep in mind when you do:
 Layer trimming is measured, not assumed: the median Jan 18 profile uses 102 of
 338 layers, but across the dilated domain some profile uses all 338, so the
 trim currently saves nothing. Don't hardcode 258.
+
+## SMET units — write values in the file's own units, never SI
+
+The SMET header carries `units_offset = ... 273.15 ...` for `TA` and
+`units_multiplier = ... 0.01 ...` for `RH` and `HS`, and **SNOWPACK applies
+them on read**. So the numbers in the file are °C, percent and **centimetres**
+— not Kelvin, fraction and metres. `smet_writer.write_smet` is the only
+producer of these files and writes them that way; `nwp_ingest._format_nwp_row`
+and `smet_append._format_smet_row` both append into the same files and must
+match it.
+
+`smet_append` converted as well until 2026-10-19, so a −10.7 °C row landed as
+262.4 in the file and 535.6 K inside SNOWPACK, and HS came out 100× small.
+Nothing downstream catches this: SNOWPACK runs happily on 535 K air and the
+symptom is nonsense stratigraphy, not an error. A test had even pinned the
+divergence (`test_nwp_ingest_convention_differs`) — one file has one units
+header, so two writers cannot hold two conventions. Pinned now by
+`tests/test_smet_append_units.py`.
+
+The weather cache (`outputs/weather/<station>.parquet`) therefore stores
+**HS in cm** too, so the ΔHS propagation in `smet_append` is dimensionally
+consistent. It is built by `smet_writer.load_and_convert`; never hand-roll the
+CAIC conversions (the raw CSV is tenths of °F, tenths of mph, tenths of W/m²).
+
+## Replay clock — `$AVACHAIN_AS_OF`
+
+`config.replay_as_of()` resolves a simulated UTC "now" from an explicit
+argument, else `$AVACHAIN_AS_OF`, else `None` (live behaviour). It is an env
+var rather than a flag because `run_daily.sh` / `run_little_prof.sh` spawn a
+dozen Python subprocesses; exporting once reaches all of them.
+
+Two seams consume it, and they are the only two places the pipeline can see
+the future:
+
+- `pipeline_io.discover_surveys(as_of=)` — gate here, not by staging TIFs:
+  `step_transport`, `step_avalanche` and `fetch_avalanche_obs` each re-glob
+  independently, so one cutoff covers all three.
+- `nwp_ingest.get_stable_ts(now=)`.
+
+Two traps when replaying. SMETs must be **truncated to the replay start**, or
+`smet_append` short-circuits on `last_ts >= until` and every append is a silent
+no-op. And the existing `.sno` restart files are **temporally ragged** (1789
+clusters at 2026-01-31, 871 at 02-07, only 505 at season end; the dates match
+the 18 `reinit_stats_*.json`), because chained reinit with partial pass-2
+reruns strands each scoured group at its own event date — so a coherent start
+state needs a seed run, and post-reinit restart coherence is worth asserting.
+
+There is no per-cycle WRF archive for this season, only one rolling file, so
+rows after a historical `T_stable` were written later than that date. The NWP
+path can be exercised for plumbing but **cannot support a forecast-skill
+claim**.
 
 ## Output layout
 
