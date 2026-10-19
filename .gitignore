@@ -41,7 +41,10 @@ outputs/
 results/
 
 # Snowpack runtime data — per-slope input/output dirs (large, derived)
-snowpack/*/output/
+# output/ plus preserved-baseline variants such as output_slope38az90/,
+# which a rename creates outside the plain output/ pattern. Tens of GB of
+# .pro/.sno/Zarr, all regenerable from a re-run.
+snowpack/*/output*/
 snowpack/*/input/
 snowpack/*/windninja/
 snowpack/*/temp/
