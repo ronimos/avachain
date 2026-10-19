@@ -41,6 +41,13 @@ CLUSTERS_FILE="${3:-}"
 
 MAX_JOBS=30
 
+# Per-cluster terrain, substituted into template.sno from each SMET header.
+# DEFAULT_* are only the fallback for a SMET with no slope_angle/slope_azi.
+DEFAULT_SLOPE_ANGLE=38.0
+DEFAULT_SLOPE_AZI=90.0
+MAX_SLOPE_DEG=55.0
+n_clamped=0
+
 # --- Sanity checks ---
 for f in "$SNOWPACK_BIN" "$MASTER_CFG" "$TEMPLATE_SNO"; do
     if [[ ! -f "$f" ]]; then
@@ -96,6 +103,20 @@ for smet in "${smets[@]}"; do
     lon=$(awk -F'=' '/^longitude/{gsub(/ /,"",$2); print $2}' "$smet")
     alt=$(awk -F'=' '/^altitude/{gsub(/ /,"",$2); print $2}' "$smet")
 
+    # Per-cluster terrain. SNOWPACK takes slope from the .sno, not the .smet,
+    # so without this every cluster runs at the slope-level default.
+    sang=$(awk -F'=' '/^slope_angle/{gsub(/ /,"",$2); print $2}' "$smet")
+    sazi=$(awk -F'=' '/^slope_azi/{gsub(/ /,"",$2); print $2}' "$smet")
+    [[ -z "$sang" ]] && sang=$DEFAULT_SLOPE_ANGLE
+    [[ -z "$sazi" ]] && sazi=$DEFAULT_SLOPE_AZI
+    # Clamp: above MAX_SLOPE_DEG snow sluffs rather than forming a slab, and
+    # SNOWPACK's settlement and energy balance are outside their calibrated
+    # range. Affects 46 of 6565 clusters (0.7%); p99 is 49.7 deg.
+    if awk -v a="$sang" -v m="$MAX_SLOPE_DEG" 'BEGIN{exit !(a>m)}'; then
+        sang=$MAX_SLOPE_DEG
+        n_clamped=$((n_clamped + 1))
+    fi
+
     res_sno="$OUTPUT_DIR/${cid}_${cid}.sno"
     cluster_sno="$SNOW_IN_DIR/${cid}.sno"
     if [[ -f "$res_sno" ]]; then
@@ -106,6 +127,8 @@ for smet in "${smets[@]}"; do
             -e "s/WRFLAT/$lat/g"  \
             -e "s/WRFLON/$lon/g"  \
             -e "s/WRFELEV/$alt/g" \
+            -e "s/WRFSLOPE/$sang/g" \
+            -e "s/WRFAZI/$sazi/g" \
             -e "s/WRFDATE/${BDATE%T*}/g" \
             "$TEMPLATE_SNO" > "$cluster_sno"
     fi
@@ -138,6 +161,7 @@ done
 
 wait
 echo "=== Run complete: $(date -u) ==="
+[[ $n_clamped -gt 0 ]] && echo "    Slope clamped to ${MAX_SLOPE_DEG} deg for $n_clamped cluster(s)"
 
 n_ok=0; n_fail=0
 failed_list=()

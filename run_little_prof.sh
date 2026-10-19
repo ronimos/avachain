@@ -220,6 +220,10 @@ if [[ $REINIT -eq 1 ]]; then
 
     echo ""
     echo "    Pass 2: $EVENT_DATE → current date (scoured clusters only)"
+    # Slope-namespaced, like every other path in this script. An
+    # un-namespaced outputs/analysis/ here silently made pass 2 rerun
+    # every cluster instead of the scoured set; the fix had been applied
+    # to the generated script but not here, so --force undid it.
     REINIT_STATS="$PROJECT_DIR/outputs/little_prof/analysis/reinit_stats_${EVENT_DATE}.json"
     if [[ -f "$REINIT_STATS" ]]; then
         bash "$SLOPE_SCRIPTS/run_snowpack.sh" "" "" "$REINIT_STATS"

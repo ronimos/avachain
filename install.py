@@ -200,6 +200,13 @@ CLUSTERS_FILE="${{3:-}}"
 
 MAX_JOBS={max_jobs}
 
+# Per-cluster terrain, substituted into template.sno from each SMET header.
+# DEFAULT_* are only the fallback for a SMET with no slope_angle/slope_azi.
+DEFAULT_SLOPE_ANGLE={slope_angle_deg}
+DEFAULT_SLOPE_AZI={aspect_deg}
+MAX_SLOPE_DEG=55.0
+n_clamped=0
+
 # --- Sanity checks ---
 for f in "$SNOWPACK_BIN" "$MASTER_CFG" "$TEMPLATE_SNO"; do
     if [[ ! -f "$f" ]]; then
@@ -255,6 +262,20 @@ for smet in "${{smets[@]}}"; do
     lon=$(awk -F'=' '/^longitude/{{gsub(/ /,"",$2); print $2}}' "$smet")
     alt=$(awk -F'=' '/^altitude/{{gsub(/ /,"",$2); print $2}}' "$smet")
 
+    # Per-cluster terrain. SNOWPACK takes slope from the .sno, not the .smet,
+    # so without this every cluster runs at the slope-level default.
+    sang=$(awk -F'=' '/^slope_angle/{{gsub(/ /,"",$2); print $2}}' "$smet")
+    sazi=$(awk -F'=' '/^slope_azi/{{gsub(/ /,"",$2); print $2}}' "$smet")
+    [[ -z "$sang" ]] && sang=$DEFAULT_SLOPE_ANGLE
+    [[ -z "$sazi" ]] && sazi=$DEFAULT_SLOPE_AZI
+    # Clamp: above MAX_SLOPE_DEG snow sluffs rather than forming a slab, and
+    # SNOWPACK's settlement and energy balance are outside their calibrated
+    # range. Affects 46 of 6565 clusters (0.7%); p99 is 49.7 deg.
+    if awk -v a="$sang" -v m="$MAX_SLOPE_DEG" 'BEGIN{{exit !(a>m)}}'; then
+        sang=$MAX_SLOPE_DEG
+        n_clamped=$((n_clamped + 1))
+    fi
+
     res_sno="$OUTPUT_DIR/${{cid}}_${{cid}}.sno"
     cluster_sno="$SNOW_IN_DIR/${{cid}}.sno"
     if [[ -f "$res_sno" ]]; then
@@ -265,6 +286,8 @@ for smet in "${{smets[@]}}"; do
             -e "s/WRFLAT/$lat/g"  \\
             -e "s/WRFLON/$lon/g"  \\
             -e "s/WRFELEV/$alt/g" \\
+            -e "s/WRFSLOPE/$sang/g" \\
+            -e "s/WRFAZI/$sazi/g" \\
             -e "s/WRFDATE/${{BDATE%T*}}/g" \\
             "$TEMPLATE_SNO" > "$cluster_sno"
     fi
@@ -297,6 +320,7 @@ done
 
 wait
 echo "=== Run complete: $(date -u) ==="
+[[ $n_clamped -gt 0 ]] && echo "    Slope clamped to ${{MAX_SLOPE_DEG}} deg for $n_clamped cluster(s)"
 
 n_ok=0; n_fail=0
 failed_list=()
@@ -553,7 +577,11 @@ if [[ $REINIT -eq 1 ]]; then
 
     echo ""
     echo "    Pass 2: $EVENT_DATE → current date (scoured clusters only)"
-    REINIT_STATS="$PROJECT_DIR/outputs/analysis/reinit_stats_${{EVENT_DATE}}.json"
+    # Slope-namespaced, like every other path in this script. An
+    # un-namespaced outputs/analysis/ here silently made pass 2 rerun
+    # every cluster instead of the scoured set; the fix had been applied
+    # to the generated script but not here, so --force undid it.
+    REINIT_STATS="$PROJECT_DIR/outputs/{slope_name}/analysis/reinit_stats_${{EVENT_DATE}}.json"
     if [[ -f "$REINIT_STATS" ]]; then
         bash "$SLOPE_SCRIPTS/run_snowpack.sh" "" "" "$REINIT_STATS"
     else
@@ -919,6 +947,8 @@ def _render_run_snowpack(cfg: dict) -> str:
         snowpack_lib  = sp.get("lib_dir", ""),
         season_end    = sp.get("season_end", "YYYY-MM-DD"),
         max_jobs      = sp.get("max_parallel_jobs", 30),
+        slope_angle_deg = slope.get("slope_angle_deg", 38.0),
+        aspect_deg      = slope.get("aspect_deg", 90.0),
     )
 
 
@@ -980,10 +1010,16 @@ def _render_template_sno(cfg: dict) -> str:
     sp    = cfg.get("snowpack", {})
     season_start = sp.get("season_start", "")
     profile_date = f"{season_start}T12:00" if season_start else "YYYY-MM-DDT12:00"
+    # WRFSLOPE / WRFAZI are substituted per cluster by run_snowpack.sh from
+    # that cluster's own SMET header. They used to be baked in from the
+    # slope-level config, so all 6565 clusters ran at 38 deg / 90 deg while
+    # their true terrain ranged 8-81 deg and 1-356 deg -- inflating
+    # tau_g = rho g h sin(psi) by a median 1.28x. The slope-level values stay
+    # as the fallback when a SMET carries no slope_angle/slope_azi header.
     return _TEMPLATE_SNO.format(
         profile_date = profile_date,
-        slope_angle  = f"{slope.get('slope_angle_deg', 0.0):.1f}",
-        slope_azi    = f"{slope.get('aspect_deg', 0.0):.1f}",
+        slope_angle  = "WRFSLOPE",
+        slope_azi    = "WRFAZI",
     )
 
 
