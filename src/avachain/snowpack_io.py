@@ -141,6 +141,29 @@ def _resume_state(zarr_out: Path, rebuild: bool) -> tuple[set, bool]:
     return written_locs, True
 
 
+def _chunk_encoding(ds, max_layers: int, loc_chunk: int = 256) -> dict:
+    """Per-variable chunk encoding: one timestep, whole layer column.
+
+    Matches what dedup_zarr produces -- (location=256, time=1, layer=338) --
+    so a rebuild and a rechunk agree. Wide-time chunks compress better, so the
+    store is smaller with the bad layout; size is not the signal here.
+    """
+    enc = {}
+    for name, var in ds.data_vars.items():
+        chunks = []
+        for d in var.dims:
+            if d == 'location':
+                chunks.append(loc_chunk)
+            elif d == 'time':
+                chunks.append(1)
+            elif d == 'layer':
+                chunks.append(max_layers)
+            else:
+                chunks.append(ds.sizes[d])
+        enc[name] = {'chunks': tuple(chunks)}
+    return enc
+
+
 def build_zarr_cache(pro_dir: Path,
                      zarr_out: Path,
                      batch_size: int = 100,
@@ -237,7 +260,17 @@ def build_zarr_cache(pro_dir: Path,
             if append:
                 ds.to_zarr(str(zarr_out), mode='a', append_dim='location')
             else:
-                ds.to_zarr(str(zarr_out), mode='w')
+                # Chunk encoding is fixed when the store is created, so it can
+                # only be set on this first write. time=1 because EVERY
+                # consumer reads a single snapshot (isel(time=tidx) /
+                # sel(time=ts) in analysis_pipeline, analyze_release_zone,
+                # release_geometry, snowpack_analysis); inheriting the reader's
+                # (25, 126, 85) chunks makes a one-timestep read decompress
+                # 126 timesteps. This used to be corrected after the fact by
+                # dedup_zarr's rechunk, so any plain rebuild silently
+                # reintroduced the slow layout.
+                ds.to_zarr(str(zarr_out), mode='w',
+                           encoding=_chunk_encoding(ds, max_layers))
         except Exception as exc:
             print(f"    ERROR writing Zarr: {exc}")
             continue

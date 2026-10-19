@@ -196,3 +196,71 @@ def test_resumed_store_keeps_one_row_per_location_with_right_data(pro_dir,
                for loc in ds.coords['location'].values}
 
     assert got == {f"cluster_{i:04d}": float(i) for i in range(1, 5)}
+
+
+# ---------------------------------------------------------------------------
+# Chunking: one timestep per chunk
+# ---------------------------------------------------------------------------
+
+class TestChunkEncoding:
+    """A rebuild must not reintroduce the slow layout.
+
+    Every consumer reads a single snapshot (isel(time=tidx) / sel(time=ts) in
+    analysis_pipeline, analyze_release_zone, release_geometry,
+    snowpack_analysis), so chunks must be time=1. build_zarr_cache used to
+    call to_zarr() with no encoding and inherit the .pro reader's
+    (25, 126, 85) chunks, which makes a one-timestep read decompress 126
+    timesteps. The good layout existed only inside dedup_zarr's rechunk, so
+    any plain rebuild silently undid it -- which is exactly what the
+    2026-10-19 per-cluster-aspect re-baseline did.
+
+    Note the badly-chunked store is SMALLER on disk (wide-time chunks compress
+    better), so size is not a usable signal here.
+    """
+
+    def test_time_dim_is_chunked_to_one(self, pro_dir, tmp_path):
+        out = tmp_path / "chunks.zarr"
+        _build(pro_dir, out)
+        with xr.open_zarr(str(out)) as ds:
+            chunks = ds["density"].encoding["chunks"]
+            dims = ds["density"].dims
+        assert chunks[dims.index("time")] == 1, (
+            f"time chunk is {chunks[dims.index('time')]}, not 1 — a snapshot "
+            f"read will decompress that many timesteps")
+
+    def test_layer_dim_is_one_whole_column(self, pro_dir, tmp_path):
+        out = tmp_path / "chunks.zarr"
+        _build(pro_dir, out)
+        with xr.open_zarr(str(out)) as ds:
+            chunks = ds["density"].encoding["chunks"]
+            dims = ds["density"].dims
+        assert chunks[dims.index("layer")] == N_LAYER, (
+            "a profile should not be split across layer chunks")
+
+    def test_encoding_helper_covers_every_data_var(self):
+        ds = _synthetic_batch_like()
+        enc = snowpack_io._chunk_encoding(ds, max_layers=338)
+        assert set(enc) == set(ds.data_vars)
+        for name, spec in enc.items():
+            assert len(spec["chunks"]) == len(ds[name].dims)
+
+    def test_encoding_helper_shapes(self):
+        ds = _synthetic_batch_like()
+        enc = snowpack_io._chunk_encoding(ds, max_layers=338, loc_chunk=256)
+        dims = ds["density"].dims
+        chunks = enc["density"]["chunks"]
+        assert chunks[dims.index("location")] == 256
+        assert chunks[dims.index("time")] == 1
+        assert chunks[dims.index("layer")] == 338
+
+
+def _synthetic_batch_like():
+    """A squeezed (location, time, layer) frame, as written to the store."""
+    return xr.Dataset(
+        data_vars={"density": (("location", "time", "layer"),
+                               np.zeros((4, N_TIME, N_LAYER), dtype="float32")),
+                   "HS": (("location", "time"),
+                          np.zeros((4, N_TIME), dtype="float32"))},
+        coords={"location": [f"cluster_{i:04d}" for i in range(1, 5)],
+                "time": np.arange(N_TIME), "layer": np.arange(N_LAYER)},
+    )
