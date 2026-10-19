@@ -184,14 +184,54 @@ Two rules:
 
 ### Tier 1 — invariance (build and run this FIRST)
 
-**SNOWPACK restart exactness.** On a small cluster set, compare a day-by-day
-incremental advance from `T_start` to `T_end` against one continuous run over
-the same span. These must agree.
+**SNOWPACK restart exactness.** `src/avachain/tier1_restart_check.py`. A shared
+warmup produces one byte-identical `.sno` at `T_start`; arm A then runs
+`T_start → T_end` in a single invocation while arms B_k run it in k-day steps,
+restarting each time. Same binary, same SMETs, same `master_config.ini`.
 
-This has nothing to do with data gating — it is a property of SNOWPACK's
-restart files. If it fails, every other replay number is uninterpretable. It is
-cheap, and it gates the whole module. Do not skip it because the harness looks
-more interesting.
+```bash
+python src/avachain/tier1_restart_check.py \
+    --toml slopes/little_prof/slope_config.toml \
+    --clusters 8 --start 2026-02-05 --end 2026-02-13 --steps 1,2,4,8
+```
+
+**Result: PASS** (8 clusters spread across the domain, 2026-02-05 → 02-13,
+Snowpack 3.7.1).
+
+| restarts | max ΔHS (m) | max Δthick (m) | max ΔT (K) |
+|---|---|---|---|
+| 0 | 0.000e+00 | 0.000e+00 | 0.000e+00 |
+| 1 | 3.450e-04 | 1.550e-02 | 2.067e-02 |
+| 3 | 4.760e-04 | 1.550e-02 | 2.704e-02 |
+| 7 | 6.190e-04 | 1.551e-02 | 3.000e-02 |
+
+Zero restarts gives exactly zero — the control, showing the harness itself
+introduces nothing. Layer counts are identical everywhere; `mk`, `ne`, `Rho_S`,
+`Conduc_S`, `HeatCapac_S`, `Vol_Frac_S` are bit-identical; total depth is
+conserved to under 1 mm. **1 → 7 restarts (7×) grows ΔHS by 1.79× — sub-linear**,
+consistent with the `.sno`'s 6-decimal storage quantum accumulating like a
+random walk rather than a trajectory diverging. The harness asserts that
+sub-linearity rather than merely printing it, because it is the property a
+32-tick replay rests on.
+
+**Three tiers of check, because the first version got this wrong.** A
+per-element *relative* metric is useless — sphericity sits near 0, so a 1e-4
+wobble read as a 26% error. And a blanket 1 mm per-layer bound also failed, for
+a real reason: `COMBINE_ELEMENTS` merges thin elements and a restart can make
+that decision land differently. In 1 of 8 clusters ~7 adjacent layers
+redistributed by up to 1.55 cm while that cluster's total depth stayed within
+0.19 mm; the other 7 moved < 0.3 mm. So internal boundary placement is a
+legitimate discretisation freedom and **total depth is the invariant**.
+Therefore: structural quantities exact, total depth conserved, per-layer
+quantities bounded by values *measured* from this run at ~1.3× the worst
+observed. Those bounds are characterisation, not a correctness claim — do not
+widen them to make a run pass.
+
+**Carry this caveat forward.** Per-layer density (`Vol_Frac_I`, which with
+`Vol_Frac_V` sums to 1) differs by up to 1% in the worst layer. Since
+E ∝ ρ^2.8 that is ~3% in E, hence in Λ and A_ca. Bounded and non-accumulating,
+but it is the floor on how exactly any layer-resolved replay comparison can
+agree.
 
 ### Tier 2 — the measurement (must *not* match)
 
@@ -257,6 +297,27 @@ every forecast artifact so nobody later mines them for skill numbers, and if
 genuine verification is wanted, ask CAIC whether `res.smet` rows are written
 once at first forecast or rewritten each cycle — and whether per-cycle
 issuances are retained anywhere.
+
+### 8.1b The season baseline was built by a SNOWPACK version that is gone
+
+Every `.pro` in the tree carries
+`#Run 2026-05-12T..., with Snowpack-3.7.0, compiled on Aug 26 2025`. The
+installed binary is now **3.7.1 (compiled 2026-10-13)**, and
+`/home/caic/caic/rtsys/snowpack/exe/` holds only `snowpack-git` (→ 3.7.1) and
+`snowpack-3.6.0`. **3.7.0 cannot be reproduced.**
+
+So a replay-vs-season-Zarr comparison confounds three variables: binary
+version, restart pattern, and data gating. Only the third is of interest.
+
+**Therefore the Tier 2 reference is not the season Zarr but a *full-knowledge
+replay*** — same 3.7.1 binary, same incremental tick pattern, survey gating
+**off**. Differencing that against the gated replay isolates the information
+deficit exactly, which is what §11.1 of the design concept asks for. The season
+Zarr drops to a sanity anchor: broad agreement expected, exact agreement not.
+
+The same confound applies to the regenerated 03-07 full-chain baseline, which
+is current analysis code reading 3.7.0 SNOWPACK output. Compare gated vs
+full-knowledge replay there too, both 3.7.1.
 
 ### 8.2 SMETs must be truncated to `T_start`
 
@@ -333,8 +394,10 @@ Note this window has exactly **one** full-chain comparison date. The richer one
 | 4 | Clock seams | `now=` / `as_of=` + `$AVACHAIN_AS_OF`; 17 tests |
 | 5 | Weather cache | 5153 rows, 2025-09-01 → 2026-04-13, units match the SMET field-for-field |
 
-Three defects surfaced only because building the clock made the daily-forward
-chain run for the first time:
+| 6 | MeteoIO input plugins | **Fixed** — `METEO`/`SNOW = SMET` were missing from `[INPUT]` (and `SNOW` from `[OUTPUT]`), so SNOWPACK aborted with "No plugin defined for METEO" before reading data; `run_snowpack.sh` could not have run |
+
+Four defects surfaced only because building the clock and Tier 1 made the
+chain actually run for the first time:
 
 - **`smet_append` wrote double-converted units.** It converted TA to Kelvin, RH
   to a fraction and treated HS as metres, but the SMET header already declares
@@ -347,12 +410,17 @@ chain run for the first time:
   `run_daily.sh` passes to both, so it aborted at step 1 under `set -euo
   pipefail`. That script had never run.
 - **`pyarrow` was undeclared** despite three modules using it.
+- **The generated `master_config.ini` was missing the MeteoIO input plugins.**
+  The complete config lived in the pre-rename tree at
+  `snowpack/<slope>/config/`; three lines were dropped when `install.py` took
+  over generating it at `slopes/<slope>/config/`, and since only one
+  `master_config.ini` exists now, nothing shadowed the gap.
 
 ---
 
 ## 12. Build order
 
-1. **Tier 1 restart-exactness experiment** (§7). Gates everything.
+1. ~~**Tier 1 restart-exactness experiment** (§7)~~ — **done, PASS.**
 2. Replay slope + seed procedure (§3, §5), ending in a frozen seed snapshot.
 3. Tick driver with mode dispatch and per-tick archiving (§6).
 4. Tier 3 assertions (§7) — these are the module's real output.
