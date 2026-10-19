@@ -67,15 +67,13 @@ THETA_CROSS_MAX_SEP_M  = 50.0  # m; beyond this the pair is not abeam
 
 # ---- Mode III (cross-slope) elastic length -----------------------------
 # Λ_III is a different and SMALLER quantity than the along-slope (mode II) Λ.
-# Gaume's antiplane formula is not published yet, so propagation uses the mode II
-# Λ in every direction and the cross-slope branch is a no-op. When the formula
-# lands: update arrest_indices.elastic_length_cross() and flip this flag —
-# nothing else should need to change, or the directional split has drifted.
-#
-# Measured: flipping this has NO effect while Λ_III is a constant multiple of
-# Λ_II. The continuity test compares the *relative* change, which is
-# scale-invariant, and MIN_PROPAGATION_LAMBDA (0.1 m) is never approached. Only
-# a Λ_III with different spatial structure can move the flanks.
+# elastic_length_cross() now matches Gaume's own antiplane-shear derivation
+# exactly (personal communication, 2026-10-18; not yet published) — see
+# ~/avalanche-release-areas/docs/release_area_methods.md §3. Whether antiplane
+# shear (vs. bending) is the right cross-slope regime is still open; Gaume's
+# open item. The flag stays off because a single global NU makes Λ_III/Λ_II
+# a constant, which the continuity gate is provably invariant to. Only a
+# Λ_III with different spatial structure can move the flanks.
 USE_MODE3_LAMBDA = False
 
 # Λ continuity thresholds, cross-slope (mode III / flanks). Separate knobs so
@@ -193,10 +191,17 @@ def directional_lambda(props: dict, is_cross: bool) -> float:
 
     Along-slope (mode II) always uses `Lambda`. Cross-slope (mode III) uses
     `Lambda_cross` only when USE_MODE3_LAMBDA is set; otherwise it falls back to
-    the mode II value, which is the current default because Gaume's antiplane
-    formula is not published yet.
+    the mode II value. `elastic_length_cross()` now matches Gaume's own
+    antiplane-shear derivation exactly (personal communication, 2026-10-18;
+    not yet published), but the flag stays off because a single global NU makes
+    Λ_III/Λ_II a constant, which the continuity gate is provably invariant to
+    — see ~/avalanche-release-areas/docs/release_area_methods.md §3.
 
-    This is the ONLY place the two directions diverge.
+    This is the ONLY place the two directions diverge. If Λ ever carries
+    spatially-varying material properties (a per-cluster ν, or a
+    bending-stiffness-based Λ_III per Gaume's still-open regime question),
+    update `arrest_indices.elastic_length_cross()` and set USE_MODE3_LAMBDA —
+    no other change should be needed.
     """
     if is_cross and USE_MODE3_LAMBDA:
         lam = props.get('Lambda_cross', np.nan)

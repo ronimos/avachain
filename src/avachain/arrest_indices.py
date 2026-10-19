@@ -37,7 +37,11 @@ def elastic_length(E, h, D_wl, G_wl, nu=0.3):
 
 def elastic_length_cross(E, h, D_wl, G_wl, nu=0.3):
     """Cross-slope (mode III) Lambda using slab shear modulus G instead of E'.
-    Hypothesis: Lambda_III / Lambda_II = sqrt((1 - nu) / 2)."""
+    Lambda_III / Lambda_II = sqrt((1 - nu) / 2). Confirmed against Johan
+    Gaume's own antiplane-shear derivation (personal communication,
+    2026-10-18; not yet published) -- see ~/avalanche-release-areas/docs/release_area_methods.md §3.
+    Whether antiplane shear (vs. bending) is the right cross-slope regime is
+    still open; this formula is correct *for* the antiplane case."""
     return np.sqrt(shear_modulus(E, nu) * h * D_wl / G_wl)
 
 
@@ -66,18 +70,6 @@ def tension_gradient(rho, psi_deg, phi_deg=27.0):
     return np.maximum(k, 0.0)
 
 
-def dynamic_factor(E, rho, nu=0.3, speed_ratio=1.6):
-    """k_x / k_f = c_p^2 / (c_p^2 + adot^2), adot = speed_ratio * c_s."""
-    c_s, c_p = wave_speeds(E, rho, nu)
-    adot = speed_ratio * c_s
-    return c_p**2 / (c_p**2 + adot**2)
-
-
-def dynamic_gradient(k_f, E, rho, nu=0.3, speed_ratio=1.6):
-    """k_x = k_f c_p^2 / (c_p^2 + adot^2)."""
-    return k_f * dynamic_factor(E, rho, nu, speed_ratio)
-
-
 # Crack-speed regimes. Upslope (mode II) cracks run supershear; mode III
 # (antiplane) cracks cannot exceed the shear wave speed.
 #
@@ -92,6 +84,18 @@ def dynamic_gradient(k_f, E, rho, nu=0.3, speed_ratio=1.6):
 # (0.712 -> 0.675).
 MODE2_SPEED_RATIO = 1.6   # adot / c_s upslope, Meloche et al. (2025) as written
 MODE3_SPEED_RATIO = 1.0   # adot / c_s cross-slope cap, Broberg (1989)
+
+
+def dynamic_factor(E, rho, nu=0.3, speed_ratio=MODE2_SPEED_RATIO):
+    """k_x / k_f = c_p^2 / (c_p^2 + adot^2), adot = speed_ratio * c_s."""
+    c_s, c_p = wave_speeds(E, rho, nu)
+    adot = speed_ratio * c_s
+    return c_p**2 / (c_p**2 + adot**2)
+
+
+def dynamic_gradient(k_f, E, rho, nu=0.3, speed_ratio=MODE2_SPEED_RATIO):
+    """k_x = k_f c_p^2 / (c_p^2 + adot^2)."""
+    return k_f * dynamic_factor(E, rho, nu, speed_ratio)
 
 
 def cp_over_cs(nu=0.3):
