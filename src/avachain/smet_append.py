@@ -38,8 +38,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from config import replay_as_of
 
-SMET_DIR_DEFAULT = Path(__file__).parent.parent.parent / "snowpack" / "little_prof" / "input"
+
+# Both are resolved from ProjectConfig in main() when --toml is given. The
+# previous module-level default hardcoded the slope name and pointed at
+# input/ rather than input/smet, so it silently read the wrong directory for
+# any slope; there is deliberately no path default now — pass --toml or
+# --smet-dir and get an error instead of a wrong answer.
 WEATHER_CACHE_DIR = Path(__file__).parent.parent.parent / "outputs" / "weather"
 
 # Primary met station used for per-cluster forcing (all clusters share the same
@@ -84,7 +90,13 @@ def _read_smet_fields(smet_path: Path) -> list[str]:
 
 
 def _read_smet_last_hs(smet_path: Path) -> float | None:
-    """Return the last valid HS value (metres) written in a SMET file."""
+    """Return the last valid HS value in a SMET file, in the file's own unit.
+
+    That unit is cm (the header carries units_multiplier=0.01), so the station
+    HS in the weather cache must also be cm for the ΔHS propagation below to
+    be dimensionally consistent — which is what smet_writer.load_and_convert
+    produces.
+    """
     fields = _read_smet_fields(smet_path)
     if "HS" not in fields:
         return None
@@ -148,26 +160,22 @@ def _propagate_hs_station_only(hs_start: float,
 
 
 def _format_smet_row(ts: pd.Timestamp, row: dict, fields: list[str]) -> str:
-    """Format one hourly row as a SMET data line."""
+    """Format one hourly row as a SMET data line.
+
+    Values go out in the file's own units, unconverted — TA in °C, RH in
+    percent, HS in cm — matching smet_writer.write_smet (the only producer of
+    these files) and nwp_ingest._format_nwp_row. The header declares
+    units_offset=273.15 for TA and units_multiplier=0.01 for RH and HS, and
+    SNOWPACK applies them on read, so converting here as well double-converts:
+    a -10.7 °C row became 262.4 in the file and 535.6 K inside SNOWPACK.
+    """
     parts = []
     for col in fields:
         if col == "timestamp":
             parts.append(ts.strftime("%Y-%m-%dT%H:%M"))
         else:
             val = row.get(col, -999)
-            if pd.isna(val):
-                parts.append("-999")
-            elif col in ("TA",):
-                # SMET stores temperature in Kelvin
-                parts.append(f"{val + 273.15:.2f}")
-            elif col in ("RH",):
-                # SMET stores RH as fraction 0-1
-                parts.append(f"{val / 100.0:.4f}")
-            elif col in ("HS",):
-                # SMET stores HS in metres
-                parts.append(f"{val:.4f}")
-            else:
-                parts.append(f"{val:.4f}")
+            parts.append("-999" if pd.isna(val) else f"{val:.4f}")
     return "\t".join(parts)
 
 
@@ -296,8 +304,12 @@ def append_all(smet_dir: Path,
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Append new met records to per-cluster SMET files")
-    parser.add_argument("--smet-dir", type=Path, default=SMET_DIR_DEFAULT,
-                        help="Directory containing cluster_*.smet files")
+    parser.add_argument("--toml", default=None,
+                        help="Slope config TOML; supplies smet dir, weather "
+                             "cache and station id")
+    parser.add_argument("--smet-dir", type=Path, default=None,
+                        help="Directory containing cluster_*.smet files "
+                             "(overrides --toml)")
     parser.add_argument("--cluster", type=int, default=None,
                         help="Single cluster ID to update")
     parser.add_argument("--until", default=None,
@@ -311,35 +323,43 @@ def main() -> None:
                         help="Slope name (used with --project-dir)")
     args = parser.parse_args()
 
-    until = (pd.Timestamp(args.until, tz="UTC") if args.until
+    # --until wins, then the replay clock ($AVACHAIN_AS_OF), then wall clock.
+    _as_of = replay_as_of(args.until)
+    until = (pd.Timestamp(_as_of, tz="UTC") if _as_of
              else pd.Timestamp("now", tz="UTC").floor("h"))
 
-    # Resolve primary station from config when slope is specified
+    # Resolve smet dir, weather cache and station from config.
+    global WEATHER_CACHE_DIR
     active_station_id = None
-    if args.project_dir and args.slope_name:
+    smet_dir = args.smet_dir
+    _toml = Path(args.toml) if args.toml else None
+    if _toml is None and args.project_dir and args.slope_name:
         _toml = Path(args.project_dir) / "slopes" / args.slope_name / "slope_config.toml"
-        if _toml.exists():
-            import sys as _sys
-            _sys.path.insert(0, str(Path(args.project_dir) / "src" / "avachain"))
-            from config import ProjectConfig as _PC
-            _cfg = _PC.from_toml(_toml)
-            active_station_id = _cfg.summit_id or None
+    if _toml and _toml.exists():
+        from config import ProjectConfig as _PC
+        _cfg = _PC.from_toml(_toml)
+        active_station_id = _cfg.summit_id or None
+        WEATHER_CACHE_DIR = _cfg.weather_cache_dir
+        if smet_dir is None:
+            smet_dir = _cfg.smet_dir
+    if smet_dir is None:
+        raise SystemExit("No SMET directory: pass --toml or --smet-dir.")
 
     if args.cluster is not None:
         pattern = f"cluster_{args.cluster:04d}_cluster_{args.cluster:04d}.smet"
-        p = args.smet_dir / pattern
+        p = smet_dir / pattern
         if not p.exists():
             # try without zero-padding
-            candidates = list(args.smet_dir.glob(f"*{args.cluster}*.smet"))
+            candidates = list(smet_dir.glob(f"*{args.cluster}*.smet"))
             if not candidates:
                 raise SystemExit(f"No SMET file found for cluster {args.cluster} "
-                                 f"in {args.smet_dir}")
+                                 f"in {smet_dir}")
             p = candidates[0]
         n = append_cluster_smet(p, until=until, dry_run=args.dry_run,
                                 station_id=active_station_id)
         print(f"  {p.name}: {n} rows {'would be ' if args.dry_run else ''}appended")
     else:
-        append_all(args.smet_dir, until=until, dry_run=args.dry_run,
+        append_all(smet_dir, until=until, dry_run=args.dry_run,
                    station_id=active_station_id)
 
 

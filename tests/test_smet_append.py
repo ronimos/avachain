@@ -104,43 +104,51 @@ class TestFormatSmetRow:
     def _fields(self):
         return ["timestamp", "TA", "RH", "VW", "DW", "ISWR", "ILWR", "HS"]
 
-    def test_ta_converted_to_kelvin(self):
+    def test_ta_written_in_celsius_not_kelvin(self):
+        """The header carries units_offset=273.15; SNOWPACK adds it on read.
+
+        Converting here too put a 0 C row at 273.15 in the file and 546.3 K
+        inside SNOWPACK. See tests/test_smet_append_units.py.
+        """
         ts = pd.Timestamp("2020-01-01T06:00", tz="UTC")
         row = {"TA": 0.0, "RH": 80.0, "VW": 2.0, "DW": 270.0,
                "ISWR": 0.0, "ILWR": 250.0, "HS": 0.5}
         line = _format_smet_row(ts, row, self._fields())
         parts = line.split("\t")
         ta_idx = self._fields().index("TA")
-        assert float(parts[ta_idx]) == pytest.approx(273.15, abs=0.01)
+        assert float(parts[ta_idx]) == pytest.approx(0.0, abs=0.01)
 
-    def test_ta_negative_celsius_converted_correctly(self):
+    def test_ta_negative_celsius_written_unchanged(self):
         ts = pd.Timestamp("2020-01-01T06:00", tz="UTC")
         row = {"TA": -10.0, "RH": 80.0, "VW": 2.0, "DW": 270.0,
                "ISWR": 0.0, "ILWR": 250.0, "HS": 0.5}
         line = _format_smet_row(ts, row, self._fields())
         parts = line.split("\t")
         ta_idx = self._fields().index("TA")
-        assert float(parts[ta_idx]) == pytest.approx(263.15, abs=0.01)
+        assert float(parts[ta_idx]) == pytest.approx(-10.0, abs=0.01)
 
-    def test_rh_converted_to_fraction(self):
+    def test_rh_written_in_percent_not_fraction(self):
+        """units_multiplier=0.01 makes SNOWPACK do the percent->fraction step."""
         ts = pd.Timestamp("2020-01-01T06:00", tz="UTC")
         row = {"TA": 0.0, "RH": 75.0, "VW": 2.0, "DW": 270.0,
                "ISWR": 0.0, "ILWR": 250.0, "HS": 0.5}
         line = _format_smet_row(ts, row, self._fields())
         parts = line.split("\t")
         rh_idx = self._fields().index("RH")
-        assert float(parts[rh_idx]) == pytest.approx(0.75, abs=1e-5)
+        assert float(parts[rh_idx]) == pytest.approx(75.0, abs=1e-5)
 
-    def test_rh_100pct_becomes_1_0(self):
+    def test_rh_100pct_stays_100(self):
         ts = pd.Timestamp("2020-01-01T06:00", tz="UTC")
         row = {"TA": 0.0, "RH": 100.0, "VW": 2.0, "DW": 270.0,
                "ISWR": 0.0, "ILWR": 250.0, "HS": 0.5}
         line = _format_smet_row(ts, row, self._fields())
         parts = line.split("\t")
         rh_idx = self._fields().index("RH")
-        assert float(parts[rh_idx]) == pytest.approx(1.0, abs=1e-5)
+        assert float(parts[rh_idx]) == pytest.approx(100.0, abs=1e-5)
 
-    def test_hs_written_in_metres_no_conversion(self):
+    def test_hs_written_without_conversion(self):
+        # The file unit is cm (units_multiplier=0.01); the value passes through
+        # in whatever unit the caller supplied, which must be the file's.
         ts = pd.Timestamp("2020-01-01T06:00", tz="UTC")
         row = {"TA": 0.0, "RH": 80.0, "VW": 2.0, "DW": 270.0,
                "ISWR": 0.0, "ILWR": 250.0, "HS": 1.234}
@@ -179,28 +187,29 @@ class TestFormatSmetRow:
         val = float(parts[vw_idx])
         assert val == pytest.approx(3.1416, abs=1e-4)
 
-    def test_nwp_ingest_convention_differs(self):
-        """Regression guard: smet_append stores K; nwp_ingest stores C. Must stay different."""
+    def test_agrees_with_nwp_ingest_convention(self):
+        """Both writers append to the SAME file, so they must agree.
+
+        This replaces an earlier guard asserting the two conventions had to
+        stay DIFFERENT (smet_append K/fraction vs nwp_ingest C/percent). That
+        cannot be right: one SMET file carries one units_offset /
+        units_multiplier header, so only one convention survives SNOWPACK's
+        read. nwp_ingest matched smet_writer.write_smet -- the sole producer
+        of these files, whose output holds C/percent/cm -- so smet_append was
+        the side that was wrong.
+        """
         from nwp_ingest import _format_nwp_row as nwp_fmt
         ts = pd.Timestamp("2020-01-01T06:00", tz="UTC")
-        fields = ["timestamp", "TA", "RH", "HS"]
-        row = {"TA": 0.0, "RH": 80.0, "HS": 0.5}
+        fields = ["timestamp", "TA", "RH"]
+        row = {"TA": 0.0, "RH": 80.0}
 
-        smet_line = _format_smet_row(ts, row, fields)
-        nwp_line = nwp_fmt(ts, row, fields)
+        smet_parts = _format_smet_row(ts, row, fields).split("\t")
+        nwp_parts = nwp_fmt(ts, row, fields).split("\t")
 
-        smet_parts = smet_line.split("\t")
-        nwp_parts = nwp_line.split("\t")
-
-        ta_idx = fields.index("TA")
-        rh_idx = fields.index("RH")
-
-        # TA: smet_append writes K (~273), nwp_ingest writes C (0.0)
-        assert float(smet_parts[ta_idx]) != float(nwp_parts[ta_idx]), \
-            "smet_append and nwp_ingest must use different TA units (K vs C)"
-        # RH: smet_append writes fraction (~0.8), nwp_ingest writes percent (80.0)
-        assert float(smet_parts[rh_idx]) != float(nwp_parts[rh_idx]), \
-            "smet_append and nwp_ingest must use different RH units (frac vs %)"
+        for name in ("TA", "RH"):
+            i = fields.index(name)
+            assert float(smet_parts[i]) == pytest.approx(float(nwp_parts[i])), \
+                f"{name}: both writers target one file and must share a unit"
 
 
 # ---------------------------------------------------------------------------

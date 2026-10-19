@@ -11,6 +11,7 @@ dependencies = [
     "matplotlib>=3.10.8",
     "opencv-python>=5.0.0.93",
     "pandas>=3.0.2",
+    "pyarrow>=26.0.0",
     "pymysql>=1.1.2",
     "pyproj>=3.7.2",
     "python-dotenv>=1.2.2",

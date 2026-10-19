@@ -168,7 +168,7 @@ export LD_LIBRARY_PATH=${{LD_LIBRARY_PATH:-}}:{snowpack_lib}
 
 REPO_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")/../.." && pwd)"
 SLOPE_DIR=${{SLOPE_DIR:-$REPO_DIR/{slope_dir_rel}}}
-SMET_DIR=${{SMET_DIR:-$REPO_DIR/outputs/smet}}
+SMET_DIR=${{SMET_DIR:-$SLOPE_DIR/input/smet}}
 SNOW_IN_DIR=$SLOPE_DIR/input/snow
 OUTPUT_DIR=$SLOPE_DIR/output
 MASTER_CFG=$REPO_DIR/slopes/{slope_name}/config/master_config.ini

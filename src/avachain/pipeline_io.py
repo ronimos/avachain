@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import rasterio
 
-from config import ProjectConfig
+from config import ProjectConfig, replay_as_of
 from smet_writer import load_and_convert, station_config_from_cfg
 
 
@@ -33,11 +33,25 @@ def parse_survey_date(filename: str) -> datetime.date:
     return datetime.date(2000 + int(ds[:2]), int(ds[2:4]), int(ds[4:6]))
 
 
-def discover_surveys(cfg: ProjectConfig) -> list:
-    """Find all survey files and return sorted (date, path) list."""
+def discover_surveys(cfg: ProjectConfig, as_of=None) -> list:
+    """Find all survey files and return sorted (date, path) list.
+
+    Surveys dated after `as_of` (default: the replay clock $AVACHAIN_AS_OF, else
+    no cutoff) are hidden. This is the single seam that keeps a replay from
+    seeing the future: step_transport, step_avalanche and fetch_avalanche_obs
+    each re-glob independently, so gating here covers all of them at once.
+    """
     survey_files = sorted(cfg.survey_dir.glob(cfg.survey_glob))
     surveys = [(parse_survey_date(f.name), f) for f in survey_files]
     surveys.sort(key=lambda x: x[0])
+
+    cutoff = replay_as_of(as_of)
+    if cutoff is not None:
+        hidden = [d for d, _ in surveys if d > cutoff.date()]
+        surveys = [(d, f) for d, f in surveys if d <= cutoff.date()]
+        print(f"Replay cutoff {cutoff.date().isoformat()}: "
+              f"hiding {len(hidden)} survey(s) after it")
+
     print(f"Found {len(surveys)} surveys:")
     for d, f in surveys:
         print(f"  {d.isoformat()}  {f.name}")

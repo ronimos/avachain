@@ -65,7 +65,8 @@ def stations_from_cfg(cfg) -> dict:
     }
 
 # Expected columns in the cache (SMET-compatible names + timestamp).
-# Unit conventions match smet_writer.py — conversions happen at ingest.
+# Units are exactly smet_writer.load_and_convert's output, which is also what
+# gets written into the SMET files unconverted — so HS is cm, not m.
 CACHE_COLS = [
     "timestamp",   # UTC, timezone-aware
     "TA",          # air temperature (°C)
@@ -75,7 +76,7 @@ CACHE_COLS = [
     "ISWR",        # incoming shortwave radiation (W/m²)
     "ILWR",        # incoming longwave radiation (W/m²)
     "PSUM",        # precipitation sum (mm/h)
-    "HS",          # snow height (m)
+    "HS",          # snow height (cm) — SMET units_multiplier=0.01 gives m
 ]
 
 WEATHER_CACHE_DIR = Path(__file__).parent.parent.parent / "outputs" / "weather"
@@ -133,6 +134,37 @@ def _fetch_station(station_id: str, since: pd.Timestamp | None,
     return pd.DataFrame(columns=CACHE_COLS)
 
 
+def seed_cache_from_csv(station_id: str, csv_path: Path, cfg,
+                        role: str = "summit", dry_run: bool = False) -> int:
+    """Seed the station cache from the archived CAIC weather CSV.
+
+    The live fetch is still a stub, so this is how an operational replay gets
+    station forcing: convert the whole archived season once, then gate it with
+    `smet_append --until`. Conversion is delegated to
+    smet_writer.load_and_convert so the cache carries exactly the units the
+    SMET files are written in (TA °C, RH %, HS cm) — hand-rolling it here is
+    how a 100x HS error gets in.
+    """
+    from smet_writer import load_and_convert, station_config_from_cfg
+
+    station = station_config_from_cfg(cfg, role=role)
+    df = load_and_convert(str(csv_path), tz_output="UTC", station=station)
+    df = df.reset_index().rename(columns={"time": "timestamp"})
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+
+    span = f"{df['timestamp'].min()} → {df['timestamp'].max()}"
+    print(f"    [{station_id}] {len(df)} rows from {csv_path.name}  ({span})")
+    if dry_run:
+        print(f"    [{station_id}] dry-run: not written")
+        return 0
+
+    WEATHER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(cache_path(station_id), index=False)
+    print(f"    [{station_id}] wrote {cache_path(station_id)}")
+    return len(df)
+
+
 def fetch_and_cache(station_id: str,
                     since: pd.Timestamp | None = None,
                     dry_run: bool = False) -> int:
@@ -185,23 +217,40 @@ def main() -> None:
                         help="Force refetch from this date (YYYY-MM-DD)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would be fetched without writing")
+    parser.add_argument("--toml", default=None,
+                        help="Slope config TOML; supplies stations and weather cache")
+    parser.add_argument("--from-csv", nargs="?", const=True, default=None,
+                        help="Seed the cache from an archived CAIC weather CSV "
+                             "(default: cfg.weather_csv). Used to stage station "
+                             "forcing for an operational replay.")
     parser.add_argument("--project-dir", default=None,
                         help="Project directory; resolves slope_config.toml automatically")
     parser.add_argument("--slope-name", default=None,
                         help="Slope name (used with --project-dir to select config)")
     args = parser.parse_args()
 
-    # Resolve station registry from config if a slope is specified
+    # Resolve station registry and weather cache from config.
+    global WEATHER_CACHE_DIR
     active_stations = STATIONS
-    if args.project_dir and args.slope_name:
-        from pathlib import Path as _Path
+    toml_path = Path(args.toml) if args.toml else None
+    if toml_path is None and args.project_dir and args.slope_name:
+        toml_path = Path(args.project_dir) / "slopes" / args.slope_name / "slope_config.toml"
+    if toml_path and toml_path.exists():
         from config import ProjectConfig
-        toml_path = _Path(args.project_dir) / "slopes" / args.slope_name / "slope_config.toml"
-        if toml_path.exists():
-            cfg = ProjectConfig.from_toml(toml_path)
-            active_stations = stations_from_cfg(cfg)
+        cfg = ProjectConfig.from_toml(toml_path)
+        active_stations = stations_from_cfg(cfg)
+        WEATHER_CACHE_DIR = cfg.weather_cache_dir
 
     since_ts = pd.Timestamp(args.since, tz="UTC") if args.since else None
+
+    if args.from_csv:
+        if not (toml_path and toml_path.exists()):
+            raise SystemExit("--from-csv needs --toml (for station metadata)")
+        csv_path = Path(args.from_csv) if args.from_csv is not True else cfg.weather_csv
+        n = seed_cache_from_csv(cfg.summit_id, csv_path, cfg,
+                                role="summit", dry_run=args.dry_run)
+        print(f"\n  Seeded {n} rows for {cfg.summit_id}")
+        return
 
     if args.station:
         fetch_and_cache(args.station, since=since_ts, dry_run=args.dry_run)

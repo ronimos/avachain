@@ -5,6 +5,8 @@ For multi-slope deployments, use ProjectConfig.from_toml() instead of editing
 this file directly.  See slopes/template/slope_config.toml for the format.
 """
 
+import datetime as _dt
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -13,6 +15,27 @@ from typing import Optional
 # NAD83(2011) / UTM zone 13N — the actual files are COMPD with NAVD88 vertical.
 # rasterio returns EPSG=None for compound CRS; the horizontal component is 6342.
 RASTER_EPSG = 6342
+
+# Environment variable holding the simulated "now" for operational replay.
+AS_OF_ENV = "AVACHAIN_AS_OF"
+
+
+def replay_as_of(explicit: "str | _dt.datetime | None" = None) -> Optional[_dt.datetime]:
+    """Simulated UTC 'now' for operational replay, or None in live operation.
+
+    Resolution order: the explicit argument, then $AVACHAIN_AS_OF. The env var
+    is the harness's lever because the operational shell scripts spawn many
+    Python subprocesses, and an exported variable reaches all of them without
+    threading a flag through every call site.
+
+    Returns a naive datetime; callers that need tz-awareness treat it as UTC.
+    """
+    val = explicit if explicit is not None else os.environ.get(AS_OF_ENV)
+    if val is None or val == "":
+        return None
+    if isinstance(val, _dt.datetime):
+        return val
+    return _dt.datetime.fromisoformat(str(val))
 
 
 @dataclass

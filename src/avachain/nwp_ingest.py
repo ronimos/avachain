@@ -49,6 +49,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from config import replay_as_of
+
 
 # Sentinel comment written before forecast rows so prune_nwp_rows() can find them.
 NWP_FLAG = "# NWP_FORECAST CAIC_WRF"
@@ -64,9 +66,16 @@ WRF_COLS = ["TA", "RH", "VW", "DW", "ISWR", "ILWR", "MS_Snow"]
 # WRF SMET helpers
 # ---------------------------------------------------------------------------
 
-def get_stable_ts(wrf_smet_path: Path) -> pd.Timestamp | None:
-    """Return the last timestamp in the WRF SMET file that is ≤ now (UTC)."""
-    now = pd.Timestamp("now", tz="UTC")
+def get_stable_ts(wrf_smet_path: Path, now=None) -> pd.Timestamp | None:
+    """Return the last timestamp in the WRF SMET file that is ≤ now (UTC).
+
+    `now` defaults to the replay clock ($AVACHAIN_AS_OF) when set, else the
+    wall clock. Replay caveat: this season has no per-cycle WRF archive, only
+    one rolling file, so rows after a historical T_stable were written later
+    than that date and are not the forecast that was actually issued then.
+    """
+    now = replay_as_of(now)
+    now = pd.Timestamp(now, tz="UTC") if now else pd.Timestamp("now", tz="UTC")
     last: pd.Timestamp | None = None
     in_data = False
     with open(wrf_smet_path) as f:
