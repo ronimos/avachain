@@ -50,6 +50,11 @@ PSUM_PH::PRECSPLITTING::SNOW = 274.35
 PSUM_PH::PRECSPLITTING::TYPE = THRESH
 
 [INPUT]
+; METEO and SNOW name the MeteoIO plugins for the forcing .smet and the
+; restart .sno. Without them SNOWPACK aborts with "No plugin defined for
+; METEO" before reading any data; the per-cluster .ini only supplies paths.
+METEO      = SMET
+SNOW       = SMET
 TIME_ZONE  = 0
 COORDSYS   = UTM
 COORDPARAM = 10T
@@ -67,6 +72,7 @@ PSUM::RESAMPLE1    = ACCUMULATE
 [OUTPUT]
 TIME_ZONE            = 0
 METEO                = SMET
+SNOW                 = SMET
 EXPERIMENT           = res
 TS_WRITE             = TRUE
 TS_FORMAT            = SMET
