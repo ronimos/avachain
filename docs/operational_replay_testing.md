@@ -422,6 +422,8 @@ chain actually run for the first time:
 
 1. ~~**Tier 1 restart-exactness experiment** (§7)~~ — **done, PASS.**
 2. Replay slope + seed procedure (§3, §5), ending in a frozen seed snapshot.
+   Slope **done** (`slopes/little_prof_replay/`); seed commands verified on 3
+   clusters, full-domain warmup not yet run. Runbook in §13.4-13.5.
 3. Tick driver with mode dispatch and per-tick archiving (§6).
 4. Tier 3 assertions (§7) — these are the module's real output.
 5. Tier 2 comparison and reporting (§7, §10).
@@ -429,7 +431,213 @@ chain actually run for the first time:
 
 ---
 
-## 13. Open questions
+## 13. How to run
+
+Status labels are literal. **[VERIFIED]** means it was run and the output in
+this document came from it. **[NOT BUILT]** means the command is the intended
+interface and does not exist yet — those blocks are the implementation spec.
+
+### 13.1 Environment and the one lever
+
+```bash
+cd /home/ron/avachain
+source .venv/bin/activate
+```
+
+Everything is gated by one environment variable:
+
+```bash
+export AVACHAIN_AS_OF=2026-02-14    # simulated UTC "now"
+unset  AVACHAIN_AS_OF               # live behaviour (surveys unbounded, wall clock)
+```
+
+Confirm it is doing something before trusting a run:
+
+```bash
+python - <<'EOF'
+import os, sys; sys.path.insert(0, 'src/avachain')
+from pathlib import Path
+from config import ProjectConfig
+import pipeline_io
+cfg = ProjectConfig.from_toml(Path('slopes/little_prof_replay/slope_config.toml'))
+print(len(pipeline_io.discover_surveys(cfg)), "surveys visible")
+EOF
+```
+23 unset, 14 at 2026-02-14, 11 at 2026-02-05. **[VERIFIED]**
+
+### 13.2 One-time prerequisites
+
+Already done on this checkout (§11). On a fresh clone, in this order:
+
+```bash
+# Zarr: deduplicate, verify, swap. Keeps the original as .duplicated.
+python src/avachain/dedup_zarr.py --toml slopes/little_prof/slope_config.toml \
+    --skip-write --swap --verify-clusters 32 --verify-times 8
+
+# Weather cache from the archived CAIC CSV (the live fetch is still a stub).
+python src/avachain/aws_ingest.py --toml slopes/little_prof/slope_config.toml \
+    --from-csv            # add --dry-run first to see the span
+
+# Season full-chain baseline, regenerated with current code. ~19 s + ~7 min.
+unset AVACHAIN_AS_OF
+python src/avachain/analysis_pipeline.py analyze \
+    --toml slopes/little_prof/slope_config.toml --snapshot-date 2026-03-07
+python src/avachain/analysis_pipeline.py scenarios \
+    --toml slopes/little_prof/slope_config.toml --snapshot-date 2026-03-07 \
+    --n-triggers 5 --size-factors 0.7 0.85 1.0 1.15 1.3 --depth-pcts 10 50 90
+```
+**[VERIFIED]** — archive any pre-existing 03-07 artifacts first; see §10.
+
+### 13.3 Tier 1 — restart exactness. Run this before anything else.
+
+```bash
+python src/avachain/tier1_restart_check.py \
+    --toml slopes/little_prof/slope_config.toml \
+    --clusters 8 --start 2026-02-05 --end 2026-02-13 --steps 1,2,4,8
+```
+
+Exit 0 = pass. Results in §7. Takes a few minutes; the warmup dominates, and
+`--keep-warmup` reuses it across reruns. **[VERIFIED]**
+
+Read the *drift vs restart count* table, not just the verdict. The verdict can
+pass while the trend turns super-linear, and the trend is the thing a 32-tick
+replay depends on.
+
+### 13.4 Create the replay slope
+
+Already exists as `slopes/little_prof_replay/`. To recreate:
+
+```bash
+mkdir -p slopes/little_prof_replay
+sed -e 's/^name             = "little_prof"/name             = "little_prof_replay"/' \
+    -e 's/^display_name     = "Little Professor"/display_name     = "Little Professor (replay)"/' \
+    -e 's|^output_dir            = "outputs/little_prof"|output_dir            = "outputs/little_prof_replay"|' \
+    -e 's|^slope_dir             = "snowpack/little_prof"|slope_dir             = "snowpack/little_prof_replay"|' \
+    slopes/little_prof/slope_config.toml > slopes/little_prof_replay/slope_config.toml
+
+python install.py slopes/little_prof_replay/slope_config.toml
+```
+
+Then check isolation — nothing may point at the live slope:
+
+```bash
+grep -nE "little_prof[^_]" slopes/little_prof_replay/run_snowpack.sh \
+    run_little_prof_replay.sh | grep -v little_prof_replay    # expect no output
+```
+**[VERIFIED]**
+
+### 13.5 Seed the replay
+
+The seed produces one coherent restart state at `T_start`. Required because the
+live `.sno` are ragged (§5).
+
+```bash
+export AVACHAIN_AS_OF=2026-02-05
+export SLOPE_DIR=$PWD/snowpack/little_prof_replay
+export SMET_DIR=$SLOPE_DIR/input/smet
+T=2026-02-05T12:00
+```
+
+**Stage SMETs truncated to `T_start`.** Copying the live SMETs and cutting them
+is correct, not a shortcut: rows up to 02-05 depend only on the 01-27 and 02-05
+surveys, both of which are known at `T_start`. Cutting is also mandatory — an
+untruncated SMET makes `smet_append` short-circuit on `last_ts >= until` and
+every tick silently appends nothing (§8.2).
+
+```bash
+for src in snowpack/little_prof/input/smet/cluster_*.smet; do
+  awk -v cut="$T" '
+    /^\[DATA\]/ {print; indata=1; next}
+    !indata      {print; next}
+    { if (substr($1,1,16) <= cut) print }
+  ' "$src" > "$SMET_DIR/$(basename "$src")"
+done
+```
+**[VERIFIED on 3 clusters]** — 3001 rows → 1699, last row exactly
+`2026-02-05T12:00:00`, header byte-identical. The full 6565 run has not been
+done.
+
+**Warm up SNOWPACK to `T_start`.** Begin date defaults to the first SMET row.
+
+```bash
+bash slopes/little_prof_replay/run_snowpack.sh "" "$T"
+```
+Expect `OK: <n>  Failed: 0` and `ProfileDate = 2026-02-05T12:00:00` in each
+`output/cluster_*_cluster_*.sno`. **[VERIFIED on 3 clusters]** — the full-domain
+warmup (~71 simulated days × 6565 clusters) has not been run and is the first
+genuinely expensive step.
+
+**Freeze the seed.** Every later experiment restores from this, so it is not
+optional — and `run_snowpack.sh` is not idempotent (§13.8).
+
+```bash
+tar -C snowpack/little_prof_replay -czf \
+    outputs/replay_seed_2026-02-05.tgz input output
+```
+**[NOT BUILT]** as a script; the command works.
+
+### 13.6 Run the replay ticks — **[NOT BUILT]**
+
+```bash
+python src/avachain/replay_run.py \
+    --toml slopes/little_prof_replay/slope_config.toml \
+    --seed outputs/replay_seed_2026-02-05.tgz \
+    --start 2026-02-06 --end 2026-03-08 \
+    --scenarios-on surveys,2026-03-07 \
+    --no-cluster-split \
+    --archive outputs/little_prof_replay/ticks
+```
+
+Per tick it must: set `AVACHAIN_AS_OF`, classify the day (survey / detected
+event / plain), dispatch to `run_little_prof.sh` or `run_daily.sh`, archive to
+`ticks/<date>/`, and assert the Tier 3 invariants (§7). Event detection runs
+`detect_minkernel` on the newly visible survey pair — whether it fires on
+02-20 is a result, not an input.
+
+A second run with `--cluster-split` and a separate archive covers the
+splits-on pass.
+
+### 13.7 Compare — **[NOT BUILT]**
+
+Per §8.1b the reference is a **full-knowledge replay**, not the season Zarr:
+same binary, same tick pattern, gating off. That isolates the information
+deficit from the 3.7.0 → 3.7.1 version change and from restart drift.
+
+```bash
+# reference arm: identical, but with the survey cutoff disabled
+python src/avachain/replay_run.py ... --no-gating --archive .../ticks_fullknowledge
+
+python src/avachain/replay_compare.py \
+    --gated outputs/little_prof_replay/ticks \
+    --reference outputs/little_prof_replay/ticks_fullknowledge \
+    --sanity-zarr snowpack/little_prof/output/slope_snowpack.zarr \
+    --report outputs/little_prof_replay/replay_report.md
+```
+
+Expect the Tier 2 sawtooth (§7). Do not tune anything to flatten it.
+
+### 13.8 Gotchas that cost time
+
+- **`run_snowpack.sh` is not idempotent.** It restarts from the output `.sno`
+  whenever one exists, so repeating a window asks SNOWPACK to simulate from a
+  state already at the end date and it fails with `Cannot generate Xdata`. To
+  redo a step, restore the seed. Each tick must advance.
+- **Pass full timestamps or bare dates, consistently.** `EDATE` used to append
+  `T18:00` unconditionally, producing `2026-02-05T12:00T18:00` and
+  `Date object is undefined!`. Fixed, but the asymmetry is easy to reintroduce.
+- **A `| tail` pipeline hides a non-zero exit.** Capture to a file and echo
+  `$?`, or use `${PIPESTATUS[0]}`.
+- **`export SMET_DIR` and `SLOPE_DIR` for the replay slope.** The generated
+  defaults are correct now, but being explicit removes any chance of writing
+  into the live slope.
+- **Logs live in the slope output dir**, one per cluster:
+  `snowpack/little_prof_replay/output/cluster_XXXX.log`. Filter the warnings:
+  `grep -vE "^\[WARNING\]" <log> | tail`.
+- **The weather cache is shared and that is intentional** — raw station
+  observations, identical for every slope; gating happens via
+  `smet_append --until`.
+
+## 14. Open questions
 
 - How are CAIC `res.smet` rows maintained — written once at first forecast, or
   rewritten each cycle? Are per-cycle issuances retained anywhere? Decides
