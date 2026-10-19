@@ -29,7 +29,12 @@ if [[ -n "${1:-}" ]]; then
 else
     BDATE=$(awk '/^\[DATA\]/{found=1; next} found{print $1; exit}' "${first_smet[0]}")
 fi
-EDATE="${2:-2026-03-31}T18:00"
+EDATE="${2:-2026-03-31}"
+# Conditional, exactly like BDATE above: callers pass full timestamps
+# (run_daily.sh passes $STABLE_TS / $NWP_EDATE as %Y-%m-%dT%H:%M), and
+# unconditionally appending T18:00 produced "2026-02-05T12:00T18:00",
+# which SNOWPACK rejects with "Date object is undefined!".
+[[ "$EDATE" != *T* ]] && EDATE="${EDATE}T18:00"
 
 # Optional: run only specific clusters (plain text or reinit_stats JSON)
 CLUSTERS_FILE="${3:-}"
@@ -135,20 +140,27 @@ wait
 echo "=== Run complete: $(date -u) ==="
 
 n_ok=0; n_fail=0
+failed_list=()
 for log in "$OUTPUT_DIR"/cluster_*.log; do
-    if grep -q "done!" "$log" 2>/dev/null; then
+    cid=$(basename "$log" .log)
+    # SNOWPACK 3.7.x prints "FINISHED running ..." when it completes; it has
+    # never printed "done!", so the old check reported every cluster as failed
+    # even on a fully successful run -- the 2026-05-12 season logs contain zero
+    # matches for it. The restart file is the stronger signal, so require both:
+    # a log that reached the end AND a non-empty .sno to restart from.
+    if grep -q "FINISHED running" "$log" 2>/dev/null \
+       && [[ -s "$OUTPUT_DIR/${cid}_${cid}.sno" ]]; then
         n_ok=$((n_ok + 1))
     else
         n_fail=$((n_fail + 1))
+        failed_list+=("$cid")
     fi
 done
 echo "    OK: $n_ok   Failed: $n_fail"
 if [[ $n_fail -gt 0 ]]; then
     echo "    Failed clusters:"
-    for log in "$OUTPUT_DIR"/cluster_*.log; do
-        if ! grep -q "done!" "$log" 2>/dev/null; then
-            echo "      $(basename "$log" .log)"
-        fi
+    for cid in "${failed_list[@]}"; do
+        echo "      $cid"
     done
 fi
 
