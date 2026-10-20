@@ -8,7 +8,8 @@ treat HS as metres. But these SMET files declare
 
 and SNOWPACK applies those on read, so the values must be written in the
 file's own units — °C, percent, cm — exactly as smet_writer.write_smet (the
-only producer of these files) and nwp_ingest._format_nwp_row already do.
+only producer of these files) already does, and as nwp_ingest declares for its
+separate forecast SMETs.
 Converting here as well double-converted: a -10.7 °C row landed as 262.4 in
 the file and 535.6 K inside SNOWPACK.
 

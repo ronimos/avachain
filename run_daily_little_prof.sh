@@ -7,8 +7,11 @@
 # when a new survey lands.
 #
 #   1. aws_ingest      fetch the latest station records into the parquet cache
-#   2. smet_append     drop yesterday's NWP rows, append observations to now
-#   3. nwp_ingest      cut at T_stable, append 48 h of WRF rows
+#   2. smet_append     append observations to now (and drop NWP rows an older
+#                      version wrote into observed SMETs)
+#   3. nwp_ingest      write per-cluster forecast SMETs (input/smet_forecast/,
+#                      PSUM from WRF) from T_stable to +48 h; observed SMETs
+#                      are not touched
 #   4. SNOWPACK daily cycle (snowpack_cycle.py): restart from the daily
 #      anchor (yesterday's T_stable, never the +48 h forecast state), run to
 #      today's T_stable, save the new anchor, replace the main Zarr after the

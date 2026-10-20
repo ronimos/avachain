@@ -166,7 +166,8 @@ def _format_smet_row(ts: pd.Timestamp, row: dict, fields: list[str]) -> str:
 
     Values go out in the file's own units, unconverted — TA in °C, RH in
     percent, HS in cm — matching smet_writer.write_smet (the only producer of
-    these files) and nwp_ingest._format_nwp_row. The header declares
+    these files), and the convention nwp_ingest declares in its forecast SMETs
+    (FC_OFFSET / FC_MULT). The header declares
     units_offset=273.15 for TA and units_multiplier=0.01 for RH and HS, and
     SNOWPACK applies them on read, so converting here as well double-converts:
     a -10.7 °C row became 262.4 in the file and 535.6 K inside SNOWPACK.

@@ -43,7 +43,9 @@ SLOPE_DIR=${SLOPE_DIR:-$REPO_DIR/snowpack/little_prof_replay_jan}
 SMET_DIR=${SMET_DIR:-$SLOPE_DIR/input/smet}
 SNOW_IN_DIR=$SLOPE_DIR/input/snow
 OUTPUT_DIR=$SLOPE_DIR/output
-MASTER_CFG=$REPO_DIR/slopes/little_prof_replay_jan/config/master_config.ini
+# MASTER_CFG can be overridden: the NWP forecast pass uses
+# master_config_forecast.ini (precipitation-driven) with SMET_DIR=input/smet_forecast.
+MASTER_CFG=${MASTER_CFG:-$REPO_DIR/slopes/little_prof_replay_jan/config/master_config.ini}
 TEMPLATE_SNO=$SNOW_IN_DIR/template.sno
 
 # --- Date range ---

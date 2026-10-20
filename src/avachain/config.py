@@ -352,6 +352,13 @@ class ProjectConfig:
         return self._dir("resampled_dir", self.output_dir / "resampled_1m")
 
     @property
+    def smet_forecast_dir(self) -> Path:
+        """Per-cluster NWP forecast SMETs (nwp_ingest), read only by the
+        forecast pass. Kept apart from smet_dir so observed forcing never
+        carries forecast rows."""
+        return self.slope_dir / "input" / "smet_forecast"
+
+    @property
     def pro_dir(self) -> Path:
         return self.slope_dir / "output"
 
