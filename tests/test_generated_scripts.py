@@ -50,6 +50,11 @@ class TestOnDiskMatchesTemplate:
             f"slopes/{slope}/run_snowpack.sh has drifted from install.py's "
             f"template -- a hand edit here is reverted by --force")
 
+    def test_run_daily_matches(self, install, slope):
+        on_disk = (REPO / f"run_daily_{slope}.sh").read_text()
+        assert on_disk == install._render_run_daily(_cfg(slope)), (
+            f"run_daily_{slope}.sh has drifted from install.py's template")
+
     def test_run_operational_matches(self, install, slope):
         on_disk = (REPO / f"run_{slope}.sh").read_text()
         assert on_disk == install._render_run_operational(_cfg(slope)), (
@@ -187,3 +192,33 @@ class TestSuccessDetection:
     def test_also_requires_the_restart_artifact(self, install, slope):
         sh = install._render_run_snowpack(_cfg(slope))
         assert '-s "$OUTPUT_DIR/${cid}_${cid}.sno"' in sh
+
+
+class TestDailyFlow:
+    """The daily forward was a hand-written run_daily.sh hardwired to little_prof."""
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    def test_daily_is_slope_namespaced(self, install, slope):
+        sh = install._render_run_daily(_cfg(slope))
+        assert f"slopes/{slope}/slope_config.toml" in sh
+        assert f"outputs/{slope}/logs" in sh
+        assert "outputs/analysis/" not in sh
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    def test_daily_restarts_through_the_cycle(self, install, slope):
+        sh = install._render_run_daily(_cfg(slope))
+        assert 'CYCLE_ARGS="daily"' in sh
+        assert "run_snowpack.sh" not in sh
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    def test_daily_appends_before_nwp_and_scenarios_are_optional(self, install, slope):
+        sh = install._render_run_daily(_cfg(slope))
+        assert sh.index("$SMET_APPEND\n") < sh.index("$NWP --lead-hours")
+        assert "--no-scenarios" in sh
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    def test_every_daily_python_entry_point_gets_toml(self, install, slope):
+        sh = install._render_run_daily(_cfg(slope))
+        for mod in ("analysis_pipeline", "aws_ingest", "smet_append",
+                    "nwp_ingest", "snowpack_cycle"):
+            assert f"src/avachain/{mod}.py --toml $TOML" in sh, mod

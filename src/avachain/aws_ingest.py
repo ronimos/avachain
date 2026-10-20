@@ -17,7 +17,7 @@ Usage (standalone):
     python aws_ingest.py --since 2026-01-01    # force refetch from a date
     python aws_ingest.py --dry-run             # print what would be fetched
 
-Called by run_daily.sh as the first step before smet_append.py.
+Called by run_daily_<slope>.sh as the first step before smet_append.py.
 
 TODO: replace the stub _fetch_station() with the real CAIC API / CDOT RWIS
       call once the endpoint and auth token are confirmed.

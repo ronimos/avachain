@@ -31,7 +31,7 @@ python src/avachain/analysis_pipeline.py {zarr_build|analyze|scenarios|all} \
 
 # Orchestration
 ./run_little_prof.sh --snapshot YYYY-MM-DD   # survey arrival
-./run_daily.sh                                # between-survey daily forward
+./run_daily_little_prof.sh                     # between-survey daily forward
 ./run_full_pipeline.sh                        # full rebuild
 ```
 
@@ -282,7 +282,7 @@ CAIC conversions (the raw CSV is tenths of °F, tenths of mph, tenths of W/m²).
 
 `config.replay_as_of()` resolves a simulated UTC "now" from an explicit
 argument, else `$AVACHAIN_AS_OF`, else `None` (live behaviour). It is an env
-var rather than a flag because `run_daily.sh` / `run_little_prof.sh` spawn a
+var rather than a flag because `run_daily_<slope>.sh` / `run_<slope>.sh` spawn a
 dozen Python subprocesses; exporting once reaches all of them.
 
 Two seams consume it, and they are the only two places the pipeline can see

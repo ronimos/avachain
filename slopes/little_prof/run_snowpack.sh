@@ -47,7 +47,7 @@ else
 fi
 EDATE="${2:-2026-03-31}"
 # Conditional, exactly like BDATE above: callers pass full timestamps
-# (run_daily.sh passes $STABLE_TS / $NWP_EDATE as %Y-%m-%dT%H:%M), and
+# (snowpack_cycle.py passes %Y-%m-%dT%H:%M timestamps), and
 # unconditionally appending T18:00 produced "2026-02-05T12:00T18:00",
 # which SNOWPACK rejects with "Date object is undefined!".
 [[ "$EDATE" != *T* ]] && EDATE="${EDATE}T18:00"

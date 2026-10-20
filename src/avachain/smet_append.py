@@ -25,7 +25,7 @@ Usage:
     python smet_append.py --until 2026-01-18   # stop at a specific date
     python smet_append.py --dry-run            # report gaps without writing
 
-Called by run_daily.sh after aws_ingest.py confirms new data is available.
+Called by run_daily_<slope>.sh after aws_ingest.py, and by run_<slope>.sh after smet.
 """
 
 from __future__ import annotations
