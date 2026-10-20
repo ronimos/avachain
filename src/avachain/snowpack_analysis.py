@@ -130,7 +130,11 @@ WL_TYPES   = set(range(400, 500)) | set(range(500, 600))  # FC (4xx), DH (5xx)
 SLAB_TYPES = set(range(200, 300)) | set(range(300, 400))  # DF (2xx), RG (3xx)
 
 # Zarr variable holding SNOWPACK code 0606 (critical cut length r_c, m).
-RC_VAR = 'critical_cut_length'
+# xsnow names it 'rc_flat'; 'critical_cut_length' is only an xsnow alias and
+# is NOT a variable in the store, so using it made rc_wl NaN everywhere.
+RC_VAR = 'rc_flat'
+# SNOWPACK's Constants::undefined, left on the basal element.
+RC_UNDEFINED = -999.0
 
 EVENT_DATE = pd.Timestamp("2026-01-18")
 
@@ -493,12 +497,22 @@ def profile_features(ds_t_loc, min_depth_cm: float) -> dict:
         # profile, which could land on a different (e.g. near-surface) layer.
         # Onset / propagation-propensity metric (Gaume 2017; Richter 2019);
         # used on the initiation side, complementary to the Meloche A_ca arrest.
-        try:
+        # The -999 basal element is undefined and is dropped. r_c <= 0 is
+        # clamped to 0 rather than dropped: StabilityAlgorithms::CriticalCutLength
+        # goes negative when tau_p < tau_g and returns 0 when its sqrt argument
+        # is negative, i.e. the WL cannot carry the slab — the most unstable
+        # case, not bad data.
+        if RC_VAR in ds_t_loc:
             rc_v    = ds_t_loc[RC_VAR].values.ravel()       # per-element, m
-            rc_vals = rc_v[wl_m & ~np.isnan(rc_v)]
-            result['rc_wl'] = float(np.nanmean(rc_vals)) if len(rc_vals) else np.nan
-            # (swap nanmean -> nanmin if you want the most propagation-prone element)
-        except Exception:
+            defined = wl_m & ~np.isnan(rc_v) & (rc_v > RC_UNDEFINED + 1.0)
+            rc_vals = np.clip(rc_v[defined], 0.0, None)
+            result['rc_wl'] = float(np.mean(rc_vals)) if len(rc_vals) else np.nan
+            # (swap mean -> min if you want the most propagation-prone element)
+        else:
+            # Warn, don't swallow: a silent NaN here is how the wrong RC_VAR
+            # went unnoticed. Python shows this once per call site.
+            warnings.warn(f"{RC_VAR!r} not in dataset — rc_wl is NaN",
+                          stacklevel=2)
             result['rc_wl'] = np.nan
     else:
         for k in ('wl_shear_strength', 'wl_grain_size', 'wl_density',

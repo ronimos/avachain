@@ -360,3 +360,53 @@ def test_feature_floor_sits_above_the_trigger_gate():
     from snowpack_analysis import TAU_G_FEATURE_FLOOR
     trigger_gate = 40.0
     assert TAU_G_FEATURE_FLOOR > trigger_gate
+
+
+# ---------------------------------------------------------------------------
+# profile_features — critical cut length r_c at the weak layer
+# ---------------------------------------------------------------------------
+#
+# Until 2026-10-20 rc_wl was NaN for every cluster: RC_VAR named the variable
+# 'critical_cut_length', but xsnow stores SNOWPACK code 0606 as 'rc_flat' (the
+# old name is only an alias). The KeyError was swallowed by a bare except, so
+# nothing reported it. SNOWPACK also leaves the basal element undefined (-999),
+# and writes r_c <= 0 where the WL cannot carry the slab (tau_p < tau_g in
+# StabilityAlgorithms::CriticalCutLength) — that is the MOST unstable case, so
+# it must count as 0 m, not be dropped as bad data.
+
+_WL3_SLAB = [520] * 3 + [320] * 9      # WL = bottom three elements
+
+
+def _rc_profile(rc_wl_elements):
+    ds = _profile(_WL3_SLAB)
+    rc = np.full(len(_Z_GRID), 0.9)    # slab values, must never be read
+    rc[:3] = rc_wl_elements
+    return ds.assign(rc_flat=('e', rc))
+
+
+def test_rc_wl_reads_the_rc_flat_variable():
+    feat = profile_features(_rc_profile([-999.0, 0.4, 0.2]), 0.0)
+    assert feat['rc_wl'] == pytest.approx(0.3)
+
+
+def test_rc_wl_excludes_the_undefined_basal_element():
+    """-999 is SNOWPACK's undefined marker, not a length."""
+    feat = profile_features(_rc_profile([-999.0, 0.5, 0.5]), 0.0)
+    assert feat['rc_wl'] == pytest.approx(0.5)
+
+
+def test_rc_wl_counts_non_positive_values_as_zero():
+    """r_c <= 0 means tau_p < tau_g: self-propagating, i.e. r_c = 0 m."""
+    feat = profile_features(_rc_profile([-999.0, -0.13, 0.6]), 0.0)
+    assert feat['rc_wl'] == pytest.approx(0.3)
+
+
+def test_rc_wl_is_nan_when_every_wl_element_is_undefined():
+    feat = profile_features(_rc_profile([-999.0, -999.0, -999.0]), 0.0)
+    assert np.isnan(feat['rc_wl'])
+
+
+def test_rc_wl_missing_variable_warns_instead_of_silent_nan():
+    with pytest.warns(UserWarning, match='rc_flat'):
+        feat = profile_features(_profile(_WL3_SLAB), 0.0)
+    assert np.isnan(feat['rc_wl'])
