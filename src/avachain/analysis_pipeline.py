@@ -35,7 +35,7 @@ import rasterio
 # ---------------------------------------------------------------------------
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config import ProjectConfig, RASTER_EPSG
+from config import ProjectConfig, RASTER_EPSG, replay_as_of
 from snowpack_io import load_dataset, load_boundaries, kml_to_mask
 from snowpack_analysis import (
     assign_cluster_groups,
@@ -62,9 +62,24 @@ from scenario_writer import (
 
 # ---------------------------------------------------------------------------
 # Defaults — path and parameter defaults are in config.py.
-# Only the snapshot date stays here (event-specific CLI default).
 # ---------------------------------------------------------------------------
-DEFAULT_SNAPSHOT = "2026-01-18"  # YYYY-MM-DD
+
+def default_snapshot_date() -> str:
+    """"Now" as YYYY-MM-DD: the replay clock if set, else today's UTC date.
+
+    The default used to be the hard-coded validation date 2026-01-18, and the
+    operational scripts call analyze/scenarios without --snapshot-date, so
+    every operational run would have analysed January 18.
+    """
+    as_of = replay_as_of()
+    if as_of is not None:
+        return as_of.date().isoformat()
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def resolve_snapshot_date(value) -> str:
+    return value if value else default_snapshot_date()
 
 
 # ---------------------------------------------------------------------------
@@ -1019,8 +1034,9 @@ def main():
     parser.add_argument('--project-dir', type=Path, default=Path('.'))
     parser.add_argument('--pro-dir',     type=Path, default=None)
     parser.add_argument('--zarr-path',   type=Path, default=None)
-    parser.add_argument('--snapshot-date', default=DEFAULT_SNAPSHOT,
-                        help='SNOWPACK snapshot date YYYY-MM-DD')
+    parser.add_argument('--snapshot-date', default=None,
+                        help='SNOWPACK snapshot date YYYY-MM-DD (default: the '
+                             'replay clock $AVACHAIN_AS_OF, else today UTC)')
 
     # zarr_build
     parser.add_argument('--batch-size', type=int, default=100)
@@ -1083,6 +1099,7 @@ def main():
                         help="Path to slope_config.toml; overrides --project-dir when provided")
 
     args = parser.parse_args()
+    args.snapshot_date = resolve_snapshot_date(args.snapshot_date)
     if args.toml:
         cfg = ProjectConfig.from_toml(args.toml)
     else:
