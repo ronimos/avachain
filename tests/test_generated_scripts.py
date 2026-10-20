@@ -189,9 +189,12 @@ class TestSuccessDetection:
         assert 'grep -q "done!"' not in sh
 
     @pytest.mark.parametrize("slope", SLOPES)
-    def test_also_requires_the_restart_artifact(self, install, slope):
+    def test_also_requires_the_restart_artifact_at_the_end_date(self, install, slope):
+        """A non-empty .sno is not enough: a run stalled on HS=-999 leaves one
+        at its begin date and still prints FINISHED (behaviour pinned in
+        test_run_snowpack_restart.py)."""
         sh = install._render_run_snowpack(_cfg(slope))
-        assert '-s "$OUTPUT_DIR/${cid}_${cid}.sno"' in sh
+        assert '[[ "$pdate" == "${EDATE:0:16}" ]]' in sh
 
 
 class TestDailyFlow:

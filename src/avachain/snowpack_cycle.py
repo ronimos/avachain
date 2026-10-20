@@ -292,6 +292,7 @@ def survey_cycle(cfg: ProjectConfig, new_survey: pd.Timestamp,
 
     if nwp_edate is not None:
         snowpack(cfg, nwp_edate, "anchor")
+        _require_coherent(cfg, "res", nwp_edate, n)   # a stalled forecast is not silent
         forecast_fn(cfg, obs_end)
     return {"survey_prev": s_prev, "survey_new": new_survey, "obs_end": obs_end,
             "events": [e.ts for e in events], "clusters": n}
@@ -317,6 +318,7 @@ def daily_cycle(cfg: ProjectConfig, obs_end: Optional[pd.Timestamp] = None,
         print("    No new observations since the anchor; state unchanged")
     if nwp_edate is not None:
         snowpack(cfg, nwp_edate, "anchor")
+        _require_coherent(cfg, "res", nwp_edate, n)   # a stalled forecast is not silent
         forecast_fn(cfg, max(obs_end, a))
     return {"anchor_prev": a, "obs_end": obs_end, "clusters": n}
 

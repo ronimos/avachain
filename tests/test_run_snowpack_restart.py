@@ -35,7 +35,15 @@ out=$(awk -F'= *' '/^\[Output\]/{o=1} o && /^SNOWPATH/{print $2; exit}' "$ini")
 snin=$(awk -F'= *' '/^\[Input\]/{i=1} i && /^SNOWPATH/{print $2; exit}' "$ini")
 echo "BEGIN=$b END=$e"
 echo "INPUT_PROFILEDATE=$(awk -F'= *' '/^ProfileDate/{print $2}' "$snin/$exp.sno")"
-printf 'ProfileDate      = %s\n' "$e" > "$out/${exp}_${exp}.sno"
+if [[ -n "${STUB_STALL:-}" ]]; then
+  # SNOWPACK with ENFORCE_MEASURED_SNOW_HEIGHTS and HS=-999 in the forcing:
+  # logs "missing { HS }", leaves the restart file where it was, and still
+  # prints FINISHED.
+  echo "[E] $exp missing { HS }"
+  [[ -f "$out/${exp}_${exp}.sno" ]] || printf 'ProfileDate      = %s\n' "$b" > "$out/${exp}_${exp}.sno"
+else
+  printf 'ProfileDate      = %s\n' "$e" > "$out/${exp}_${exp}.sno"
+fi
 echo "FINISHED running stub"
 """
 
@@ -156,3 +164,22 @@ def test_unknown_restart_mode_is_rejected(slope):
     _add_cluster(d, "cluster_0001")
     r = _run(d, stub, "", "2026-02-06T12:00", RESTART_FROM="yesterday")
     assert r.returncode == 1
+
+
+def test_a_run_that_does_not_reach_the_end_date_is_a_failure(slope):
+    """FINISHED + a non-empty .sno is not success: the forecast pass stalled on
+    HS=-999 at its first step, printed FINISHED, and was counted OK."""
+    d, stub = slope
+    _add_cluster(d, "cluster_0001")
+    _sno(d, "cluster_0001_cluster_0001.sno", "2026-02-06T12:00:00")
+    r = _run(d, stub, "", "2026-02-08T12:00", STUB_STALL="1")
+    assert "OK: 0   Failed: 1" in r.stdout
+    assert "did not reach 2026-02-08T12:00" in r.stdout
+
+
+def test_a_run_that_reaches_the_end_date_is_ok(slope):
+    d, stub = slope
+    _add_cluster(d, "cluster_0001")
+    _sno(d, "cluster_0001_cluster_0001.sno", "2026-02-06T12:00:00")
+    r = _run(d, stub, "", "2026-02-08T12:00")
+    assert "OK: 1   Failed: 0" in r.stdout

@@ -222,6 +222,7 @@ case "$RESTART_FROM" in
 esac
 n_restart=0; n_fresh=0
 missing_anchor=()
+ran=()
 
 MAX_JOBS={max_jobs}
 
@@ -345,6 +346,7 @@ SNOWPATH   = $OUTPUT_DIR
 EXPERIMENT = $cid
 EOF
 
+    ran+=("$cid")
     "$SNOWPACK_BIN" -c "$cluster_ini" -b "$cbdate" -e "$EDATE" \\
         > "$OUTPUT_DIR/${{cid}}.log" 2>&1 &
 
@@ -366,19 +368,24 @@ fi
 
 n_ok=0; n_fail=0
 failed_list=()
-for log in "$OUTPUT_DIR"/cluster_*.log; do
-    cid=$(basename "$log" .log)
-    # SNOWPACK 3.7.x prints "FINISHED running ..." when it completes; it has
-    # never printed "done!", so the old check reported every cluster as failed
-    # even on a fully successful run -- the 2026-05-12 season logs contain zero
-    # matches for it. The restart file is the stronger signal, so require both:
-    # a log that reached the end AND a non-empty .sno to restart from.
+for cid in "${{ran[@]}}"; do
+    log="$OUTPUT_DIR/${{cid}}.log"
+    res="$OUTPUT_DIR/${{cid}}_${{cid}}.sno"
+    # SNOWPACK 3.7.x prints "FINISHED running ..." when it stops, but that is
+    # not success. With ENFORCE_MEASURED_SNOW_HEIGHTS and HS=-999 in the
+    # forcing, it logs "[E] ... missing {{ HS }}" at the first step, leaves the
+    # restart file where it was, and still prints FINISHED. That is how every
+    # NWP forecast pass "succeeded" without simulating anything. Require the
+    # restart file to have reached EDATE.
+    pdate=$(awk -F'=' '/^ProfileDate/{{gsub(/ /,"",$2); print substr($2,1,16); exit}}' "$res" 2>/dev/null)
     if grep -q "FINISHED running" "$log" 2>/dev/null \
-       && [[ -s "$OUTPUT_DIR/${{cid}}_${{cid}}.sno" ]]; then
+       && [[ "$pdate" == "${{EDATE:0:16}}" ]]; then
         n_ok=$((n_ok + 1))
     else
         n_fail=$((n_fail + 1))
         failed_list+=("$cid")
+        [[ -n "$pdate" && "$pdate" != "${{EDATE:0:16}}" ]] && \
+            echo "    $cid did not reach ${{EDATE:0:16}} (restart file at $pdate)"
     fi
 done
 echo "    OK: $n_ok   Failed: $n_fail"
