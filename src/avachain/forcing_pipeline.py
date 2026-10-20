@@ -93,7 +93,7 @@ def _mask_to_geojson_wgs84(mask: np.ndarray, transform, crs, out_path: Path) -> 
     out_path.write_text(_json.dumps(gj))
 
 
-from config import ProjectConfig
+from config import ProjectConfig, replay_as_of
 from spatial_model import (
     create_reference_dem, load_and_resample,
     compute_terrain_features, compute_transport_field,
@@ -590,6 +590,10 @@ def step_avalanche(cfg: ProjectConfig):
                         - _td(days=cfg.caic_obs_window_days))
         season_end   = (_dt.strptime(all_dates[-1], '%Y-%m-%d')
                         + _td(days=cfg.caic_obs_window_days))
+        # A replay must not see observations reported after its clock.
+        _as_of = replay_as_of()
+        if _as_of is not None and season_end > _as_of:
+            season_end = _as_of
         raw_obs = fetch_observations(season_start, season_end)
         all_caic_obs = [extract_observation(r) for r in raw_obs]
         if cfg.boundary_kml.exists():
@@ -735,8 +739,10 @@ def step_avalanche(cfg: ProjectConfig):
             }
             print(f"    → Loss mask: {event_mask.sum()} cells  [no transport correction]")
 
-        # --- Export event GeoJSON ---
-        gj_out = cfg.boundaries_dir / f"avalanche_release_area_{event_date_str}.geojson"
+        # --- Export event GeoJSON (slope-namespaced; never into boundaries_dir,
+        # which holds the observed polygons) ---
+        cfg.event_masks_dir.mkdir(parents=True, exist_ok=True)
+        gj_out = cfg.event_masks_dir / f"avalanche_release_area_{event_date_str}.geojson"
         if not gj_out.exists():
             _mask_to_geojson_wgs84(event_mask, transform, crs, gj_out)
             print(f"    → Event mask exported: {gj_out.name}")
@@ -1200,10 +1206,8 @@ def step_reinit(cfg: ProjectConfig):
                 event_date = d_b
                 event_time = '12:00:00'
 
-            event_date_str = event_date.replace('-', '')
-            gj_path = (cfg.boundaries_dir /
-                       f"avalanche_release_area_{event_date_str}.geojson")
-            release_geojson = str(gj_path) if gj_path.exists() else None
+            gj_path = cfg.event_mask_for(pd.Timestamp(event_date))
+            release_geojson = str(gj_path) if gj_path else None
 
             print(f"\n  Event {pair_id}  ({event_date} {event_time})"
                   + (f"  GeoJSON: {gj_path.name}" if release_geojson else

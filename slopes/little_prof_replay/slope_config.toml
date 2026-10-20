@@ -21,6 +21,10 @@ release_geojson       = "data/boundaries/avalanche_release_area.geojson"
 output_dir            = "outputs/little_prof_replay"
 windninja_library_dir = "windninja/library"
 slope_dir             = "snowpack/little_prof_replay"
+# Own known-events file: the avalanche step appends its detections to it,
+# and the live copy holds the whole season's later events. Seeded with the
+# events whose survey pair ended by T_start (2026-02-05).
+avalanche_events      = "outputs/little_prof_replay/known_avalanche_events.json"
 
 [snowpack]
 binary     = "/home/caic/caic/rtsys/snowpack/exe/snowpack"

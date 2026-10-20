@@ -189,8 +189,8 @@ def events_between(cfg: ProjectConfig, t0: pd.Timestamp,
             continue
         t = _ts(ts)
         if t0 < t <= t1:
-            gj = cfg.boundaries_dir / f"avalanche_release_area_{t:%Y%m%d}.geojson"
-            out.append(Event(t, pair_id, str(gj) if gj.exists() else None))
+            gj = cfg.event_mask_for(t)
+            out.append(Event(t, pair_id, str(gj) if gj else None))
     return sorted(out, key=lambda e: e.ts)
 
 

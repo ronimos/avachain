@@ -78,7 +78,8 @@ def cfg(tmp_path, monkeypatch):
         slope_dir=slope, pro_dir=slope / "output", smet_dir=slope / "input/smet",
         analysis_dir=analysis, boundaries_dir=tmp_path / "boundaries",
         slopes_config_dir=REPO / "slopes" / "little_prof_replay",
-        flight_hour_utc=18, toml_path=None)
+        flight_hour_utc=18, toml_path=None,
+        event_mask_for=lambda ts: None)
 
 
 class Rec:

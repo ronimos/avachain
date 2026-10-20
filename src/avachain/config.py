@@ -136,6 +136,11 @@ class ProjectConfig:
     # The slope_config.toml this was loaded from, so orchestrators can pass
     # --toml on to subprocesses (None for the default config).
     toml_path: Optional[Path] = None
+    # Known-avalanche-events file ([paths] avalanche_events). The avalanche
+    # step reads it as manual labels AND appends its auto-detected events to
+    # it, so a replay must not share the live slope's copy. None = the
+    # historical default, <boundaries_dir>/avalanche_events.json.
+    avalanche_events_file: Optional[Path] = None
 
     def __post_init__(self):
         """Resolve paths relative to project_dir."""
@@ -148,6 +153,8 @@ class ProjectConfig:
         self.windninja_library_dir = self.project_dir / self.windninja_library_dir
         self.slope_dir = self.project_dir / self.slope_dir
         self.release_geojson = self.project_dir / self.release_geojson
+        if self.avalanche_events_file is not None:
+            self.avalanche_events_file = self.project_dir / self.avalanche_events_file
 
     @property
     def boundaries_dir(self) -> Path:
@@ -160,7 +167,27 @@ class ProjectConfig:
 
     @property
     def avalanche_events_path(self) -> Path:
-        return self.boundaries_dir / "avalanche_events.json"
+        return self.avalanche_events_file or self.boundaries_dir / "avalanche_events.json"
+
+    @property
+    def event_masks_dir(self) -> Path:
+        """Auto-detected event masks (avalanche_release_area_<YYYYMMDD>.geojson).
+
+        Slope-namespaced output, unlike boundaries_dir, which holds hand-drawn
+        and observed polygons (the Jan 18 crown among them). The avalanche step
+        used to write its masks there, where a replay's masks would have been
+        read back by a later live reinit as if they were observed.
+        """
+        return self.output_dir / "event_masks"
+
+    def event_mask_for(self, event_date) -> Optional[Path]:
+        """Release polygon for an event: an observed/hand-drawn one in
+        boundaries_dir wins over this slope's auto-detected mask."""
+        name = f"avalanche_release_area_{event_date:%Y%m%d}.geojson"
+        for d in (self.boundaries_dir, self.event_masks_dir):
+            if (d / name).exists():
+                return d / name
+        return None
 
     def release_geojsons_for_date(self, snapshot_date: str) -> list:
         """
@@ -294,6 +321,8 @@ class ProjectConfig:
             release_geojson=Path(paths.get("release_geojson",
                                            "data/boundaries/avalanche_release_area.geojson")),
             output_dir=Path(paths.get("output_dir", "outputs")),
+            avalanche_events_file=(Path(paths["avalanche_events"])
+                                   if "avalanche_events" in paths else None),
             windninja_library_dir=Path(paths.get("windninja_library_dir", "windninja/library")),
             slope_name=slope_name,
             slope_dir=Path(paths.get("slope_dir", f"snowpack/{slope_name}")),
