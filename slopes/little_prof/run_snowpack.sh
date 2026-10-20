@@ -5,12 +5,28 @@
 # Usage:
 #   ./run_snowpack.sh                          # full season (default dates)
 #   ./run_snowpack.sh 2025-11-26 2026-04-15   # explicit start/end (YYYY-MM-DD)
+#   RESTART_FROM=survey ./run_snowpack.sh "" 2026-02-10T12:00
 #
-# On first run:  each cluster gets a copy of template.sno as initial conditions.
-# On reruns:     each cluster restarts from its own _res.sno (written by SNOWPACK).
+# On first run:  each cluster gets a copy of template.sno and starts at BDATE.
+# On reruns:     each cluster restarts from a restart .sno chosen by
+#                RESTART_FROM, and starts at THAT FILE'S ProfileDate:
+#                  res    (default) output/<cid>_<cid>.sno, the latest state
+#                  anchor output/<cid>_anchor.sno, the daily observed state
+#                  survey output/<cid>_survey.sno, the last-survey state
+#                A named anchor that is missing is a failure, never a silent
+#                fall back to another state.
+#
+# The begin date of a restart is never BDATE. Passing the first SMET row as
+# -b while input/snow held a 02-05 restart made SNOWPACK simulate the whole
+# season again on top of it (cluster 2859: HS 1.82 -> 2.03 m, 91 -> 107
+# elements), with ProfileDate still looking right. Every operational caller
+# passed an empty BDATE, so every incremental run did this.
+#
+# SKIP_ZARR=1 leaves the Zarr alone; callers that know the restart time
+# update it themselves.
 
 # --- Paths ---
-SNOWPACK_BIN=/home/caic/caic/rtsys/snowpack/exe/snowpack
+SNOWPACK_BIN=${SNOWPACK_BIN:-/home/caic/caic/rtsys/snowpack/exe/snowpack}
 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}:/home/caic/caic/rtsys/snowpack/src/snowpack/lib
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -39,6 +55,15 @@ EDATE="${2:-2026-03-31}"
 # Optional: run only specific clusters (plain text or reinit_stats JSON)
 CLUSTERS_FILE="${3:-}"
 
+RESTART_FROM=${RESTART_FROM:-res}
+case "$RESTART_FROM" in
+    res|anchor|survey) ;;
+    *) echo "ERROR: RESTART_FROM must be res, anchor or survey (got '$RESTART_FROM')" >&2
+       exit 1 ;;
+esac
+n_restart=0; n_fresh=0
+missing_anchor=()
+
 MAX_JOBS=30
 
 # Per-cluster terrain, substituted into template.sno from each SMET header.
@@ -65,7 +90,8 @@ fi
 mkdir -p "$OUTPUT_DIR"
 
 echo "=== Little Professor SNOWPACK run ==="
-echo "    Start:    $BDATE"
+echo "    Start:    $BDATE (fresh clusters; restarts begin at their own ProfileDate)"
+echo "    Restart:  $RESTART_FROM"
 echo "    End:      $EDATE"
 echo "    Clusters: ${#smets[@]}"
 [[ -n "$CLUSTERS_FILE" ]] && echo "    Filter:   $CLUSTERS_FILE"
@@ -117,11 +143,22 @@ for smet in "${smets[@]}"; do
         n_clamped=$((n_clamped + 1))
     fi
 
-    res_sno="$OUTPUT_DIR/${cid}_${cid}.sno"
+    case "$RESTART_FROM" in
+        res)    restart_sno="$OUTPUT_DIR/${cid}_${cid}.sno" ;;
+        anchor) restart_sno="$OUTPUT_DIR/${cid}_anchor.sno" ;;
+        survey) restart_sno="$OUTPUT_DIR/${cid}_survey.sno" ;;
+    esac
     cluster_sno="$SNOW_IN_DIR/${cid}.sno"
-    if [[ -f "$res_sno" ]]; then
-        cp "$res_sno" "$cluster_sno"
+    cbdate=$BDATE
+    if [[ -f "$restart_sno" ]]; then
+        cp "$restart_sno" "$cluster_sno"
+        cbdate=$(awk -F'=' '/^ProfileDate/{gsub(/ /,"",$2); print $2; exit}' "$restart_sno")
+        n_restart=$((n_restart + 1))
+    elif [[ "$RESTART_FROM" != res ]]; then
+        missing_anchor+=("$cid")
+        continue
     else
+        n_fresh=$((n_fresh + 1))
         sed -e "s/WRFPT/$cid/g"  \
             -e "s/WRFNAME/$cid/g" \
             -e "s/WRFLAT/$lat/g"  \
@@ -149,7 +186,7 @@ SNOWPATH   = $OUTPUT_DIR
 EXPERIMENT = $cid
 EOF
 
-    "$SNOWPACK_BIN" -c "$cluster_ini" -b "$BDATE" -e "$EDATE" \
+    "$SNOWPACK_BIN" -c "$cluster_ini" -b "$cbdate" -e "$EDATE" \
         > "$OUTPUT_DIR/${cid}.log" 2>&1 &
 
     ct=$(ps aux | grep "[s]nowpack.*exe" | wc -l)
@@ -161,6 +198,12 @@ done
 
 wait
 echo "=== Run complete: $(date -u) ==="
+echo "    Restarted: $n_restart   Fresh from template: $n_fresh"
+if [[ ${#missing_anchor[@]} -gt 0 ]]; then
+    echo "    ERROR: RESTART_FROM=$RESTART_FROM but ${#missing_anchor[@]} cluster(s) have no such .sno; not run:" >&2
+    printf '      %s
+' "${missing_anchor[@]}" >&2
+fi
 [[ $n_clamped -gt 0 ]] && echo "    Slope clamped to ${MAX_SLOPE_DEG} deg for $n_clamped cluster(s)"
 
 n_ok=0; n_fail=0
@@ -187,8 +230,16 @@ if [[ $n_fail -gt 0 ]]; then
     done
 fi
 
-echo ""
-echo "=== Aggregating results to Zarr ==="
-$REPO_DIR/.venv/bin/python3 $REPO_DIR/src/avachain/build_zarr_chunked.py \
-    --pro-dir "$OUTPUT_DIR" --zarr-out "$OUTPUT_DIR/slope_snowpack.zarr"
-echo "=== Zarr Build Complete ==="
+if [[ "${SKIP_ZARR:-0}" != 1 ]]; then
+    echo ""
+    echo "=== Aggregating results to Zarr ==="
+    $REPO_DIR/.venv/bin/python3 $REPO_DIR/src/avachain/build_zarr_chunked.py \
+        --pro-dir "$OUTPUT_DIR" --zarr-out "$OUTPUT_DIR/slope_snowpack.zarr"
+    echo "=== Zarr Build Complete ==="
+fi
+
+# A missing named anchor is a configuration error, not a cluster failure:
+# exit non-zero so a `set -e` caller stops instead of carrying on with part of
+# the domain at a different date.
+[[ ${#missing_anchor[@]} -gt 0 ]] && exit 2
+exit 0
