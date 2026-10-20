@@ -128,6 +128,27 @@ def _load_groups(cfg, dem, transform, snapshot_date=None):
     return groups
 
 
+def _rank_triggers(cand_df: pd.DataFrame, n: int, sk38_col: str,
+                   rc_col: str = 'rc_wl') -> pd.DataFrame:
+    """
+    Top-n trigger candidates: lowest Sk38 first, ties broken by lowest r_c.
+
+    SNOWPACK reports Sk38 to two decimals, so places 3-5 regularly sit inside
+    a tie (4-way at 0.79 on 2026-01-18, 10-way on 2026-03-07). nsmallest()
+    settled those by CSV row order, i.e. by nothing physical. The critical
+    cut length r_c at the same weak layer breaks them by propagation
+    propensity instead (lower = more propagation-prone). Only exact Sk38 ties
+    are affected; Sk38 still decides every place it separates. Clusters with
+    no r_c sort after those with one; anything still tied keeps row order (the
+    multi-column sort is stable).
+
+    rc_col is optional so older feature CSVs without it still rank by Sk38.
+    """
+    ranked = cand_df.dropna(subset=[sk38_col])
+    keys = [sk38_col] + ([rc_col] if rc_col in ranked.columns else [])
+    return ranked.sort_values(keys, na_position='last').head(n)
+
+
 def _trigger_weights(n: int, sk38_values: list) -> list:
     """
     Inverse-Sk38 weights for trigger locations.
@@ -512,12 +533,20 @@ def step_scenarios(cfg, args):
     MIN_SLOPE   = 30.0   # degrees — well above the 27° friction angle
     MAX_SK38    = 1.0    # Sk38 >= 1.0 = stable for skier triggering (Schweizer & Jamieson 2007)
     MIN_SLAB_THICKNESS = 0.5  # metres — too thin = D1 at most
-    MAX_SLAB_THICKNESS = args.max_slab_thickness  # metres — too thick = skier can't trigger
+    # metres — the deepest slab we expect explosive control to trigger at the
+    # basal WL. This is an operational choice, not a physical result, and it
+    # binds hard. Sk38 at the WL falls almost monotonically with slab
+    # thickness (Spearman -0.93 within the 2026-01-18 pool), so ranking by
+    # Sk38 picks the thickest slabs under this cap. 2.0 -> 2.5 m replaced all
+    # five triggers on both 2026-01-18 and 2026-03-07. 1.5 m left only two
+    # candidates on 2026-03-07 (median slab 1.8 m). Change it only for an
+    # operational reason.
+    MAX_SLAB_THICKNESS = args.max_slab_thickness
 
     # All clusters that overlap the start zone mask.
-    # Iterate the feature index, not the set: nsmallest() breaks Sk38 ties by
-    # position, and set iteration order would hand a tie to a different
-    # cluster than the standalone repo does.
+    # Iterate the feature index, not the set: ties that survive the r_c
+    # tie-break in _rank_triggers fall back to row order, and set iteration
+    # order would hand them to a different cluster than the standalone does.
     sz_cids = set(int(c) for c in np.unique(cluster_map[start_zone_mask])
                   if c > 0)
     candidate_ids = [cid for cid in snap_features.index
@@ -625,8 +654,7 @@ def step_scenarios(cfg, args):
                   f"mean {pi1_mean:.2f}): "
                   f"{pre_gate} → {cand_df.shape[0]} candidates")
 
-    triggers = (cand_df.dropna(subset=[sk38_col])
-                       .nsmallest(args.n_triggers, sk38_col))
+    triggers = _rank_triggers(cand_df, args.n_triggers, sk38_col)
 
     # Validate triggers: drop any that can't produce a release polygon
     # Test with median size_factor — if it fails at median, it fails at all

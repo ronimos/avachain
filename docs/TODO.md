@@ -160,13 +160,28 @@ pipeline.** Do that before trusting any avachain release polygon.
   observed crown's aspect (major axis 119°, L/W 3.51), a sharper test than IoU,
   and do not tune the ratio to this event.
 
-- [ ] **Trigger-set stability — the top-N ranking is decided by Sk38 ties.**
-  Places 3–5 turn on Sk38 agreeing to 2–3 significant figures, so the set is not
-  stable against θ. In the standalone's §6 2×2 the ranking moved 2858/1068 →
-  6191/5817; in one run an Sk38 tie at 0.75 put cluster 3020 in fifth place and
-  that scenario collapsed to 434 m² at IoU 0.061, dragging the mean on its own.
-  Any comparison must be read trigger-matched, and a tie-break less brittle
-  than raw Sk38 ordering would be worth having.
+- [x] **Sk38 ties are now broken by r_c** (2026-10-20, `_rank_triggers`). Places
+  3–5 used to turn on CSV row order inside two-decimal Sk38 ties (4-way at 0.79
+  on Jan 18, 10-way on Mar 7). They now go to the lowest critical cut length at
+  the same WL. Needed the `rc_flat` fix (782575c); rc_wl had been NaN everywhere.
+
+- [ ] **Trigger ranking is decided by the slab-thickness cap, not by stability.**
+  Within the eligible pool, Sk38 at the WL is almost a function of slab
+  thickness (Spearman −0.93 on Jan 18), so the ranking picks the thickest slabs
+  under `--max-slab-thickness`. Moving the cap 2.0 → 2.5 m replaced all five
+  triggers on both Jan 18 and Mar 7. 1.5 m left two candidates on Mar 7. Tried
+  2026-10-20, none adopted:
+  - SSI: it is exactly Sk38 + 2 here.
+  - r_c as the primary key, or Sk38 × r_c: r_c also tracks thickness (−0.70).
+  - Sk38 residuals after a quadratic fit on slab thickness: whole-zone fit
+    (cap-stable, but drifts to thin slabs with Sk38 0.92–0.99); pool fit
+    (thickness-neutral, but the fit moves with the cap); pre-cap fit (3–4 of
+    5 triggers kept across caps on Jan 18, only 2/5 on Mar 7).
+  None beat the current Jan 18 IoU (0.46 mean, 0.70 best); alternatives scored
+  0.34–0.41. The likely real fix is a metric that is not depth-driven. Next
+  candidate: skier stability evaluated at each cluster's own slope angle rather
+  than the fixed 38° of Sk38. Keep the weak-layer definition unchanged. Judge on
+  cap stability and Mar 7, not on Jan 18 IoU alone.
 
 - [ ] **θ validity is the strongest open objection to the whole arrest route.**
   Under `plane_fit`, **97.2%** of Jan 18 start-zone clusters fall below

@@ -114,7 +114,17 @@ Sk38 is extracted per cluster by `profile_features()` in `snowpack_analysis.py` 
 **Bug fix (2026-05):** The original `split_wl_slab()` used `grain_type // 100 >= 4`, which classified grain types 600–999 (RG, SH, MF, IF) as WL. This caused the WL to extend from the ground through nearly the entire profile, producing slab_thickness ≈ 0.15 m (only the surface storm/wind slab was classified as "slab"). The fix restricts WL classification to `grain_type // 100 == 4 or == 5` (FC and DH only). With the correct filter, slab_thickness increases to median ≈ 1.57 m and Sk38 at the basal interface increases from ~0.05 to median ~0.89, reflecting the actual stability of a thick slab over thin basal facets.
 
 **Filter 4 — Slab thickness: 0.5 m ≤ slab_thickness ≤ MAX_SLAB_THICKNESS (default 2.0 m).**  
-The slab must be thick enough to produce a D2+ event (minimum 0.5 m) but thin enough for a skier to trigger at the basal WL (maximum 2.0 m). Schweizer & Jamieson (2007) show that skier-induced stress drops below ~0.1 kPa at depths > 1.5–2.0 m; beyond this, natural triggers (loading, wind, warming) are required. The upper bound is a CLI argument (`--max-slab-thickness`) to allow natural-trigger scenarios (`--max-slab-thickness 10.0`). Clusters with NaN slab_thickness are retained (don't filter what you can't measure).
+The slab must be thick enough to produce a D2+ event (minimum 0.5 m) but thin enough to be triggered at the basal WL. The 2.0 m default is the deepest slab we expect **explosive control** to trigger. Skier stress is negligible below about 1.5 m (Schweizer & Jamieson, 2007), so use `--max-slab-thickness 1.5` for skier-triggered scenarios and `10.0` for natural triggers (loading, wind, warming). Clusters with NaN slab_thickness are retained (don't filter what you can't measure).
+
+**The cap is an operational choice, and it binds.** Within the eligible pool, Sk38 at the WL falls almost monotonically with slab thickness (Spearman −0.93 on 2026-01-18, −0.82 on 2026-03-07). The Sk38 ranking (§3.4) therefore picks the thickest slabs the cap admits: all five 2026-01-18 triggers sit at 1.83–1.97 m under the 2.0 m cap. Measured 2026-10-20 on the per-cluster-terrain baseline:
+
+| Cap | Effect |
+|---|---|
+| 1.5 m | 2026-03-07 pool falls to **2 candidates** (median slab that day 1.8 m). Not viable late season. 2026-01-18 releases 2.0× the observed area. |
+| 2.0 m (default) | 2026-01-18 mean IoU 0.46, area/observed 0.92 with row-order ties; 0.48 and 1.15 with the r_c tie-break (§3.4) |
+| 2.5 m | Triggers move to 2.3–2.5 m slabs; **all five** replaced on both dates. 2026-01-18 mean IoU 0.28, area/observed 1.46 |
+
+So changing the cap changes *which* clusters trigger, not only how many qualify. Change it only for an operational reason (what the control method can reach), never to improve agreement with an observed event. Statistical detrending of Sk38 against slab thickness was tried and did not remove this dependence without introducing others; see `docs/TODO.md`.
 
 **Filter 5 — Elevation: ≥ P50 (operational) or ≥ P75 (validation).**  
 Crown fractures typically form in the upper portion of the start zone where the slab is thickest and wind-loading is greatest. The elevation filter restricts triggers to the upper half (operational mode) or upper quartile (validation mode) of the candidate elevation distribution. Elevation is computed as the mean DEM value over all pixels in each cluster.
@@ -127,9 +137,13 @@ When `--restrict-to-release-area` is set, an additional filter is applied before
 
 ### 3.4 Trigger ranking
 
-After filtering, remaining candidates are ranked by ascending Sk38 (most unstable first). The top `n_triggers` clusters are selected. With `--n-triggers 1`, only the single weakest cluster is used; with `--n-triggers 5`, the five weakest form a trigger-location ensemble axis.
+After filtering, remaining candidates are ranked by ascending Sk38 (most unstable first), and the top `n_triggers` are selected (`_rank_triggers` in `analysis_pipeline.py`). With `--n-triggers 1`, only the single weakest cluster is used; with `--n-triggers 5`, the five weakest form a trigger-location ensemble axis.
 
-**Trigger validation filter:** after initial ranking, each candidate trigger is tested with `propagate_release()` at the median size_factor. If the BFS returns None (the trigger cannot produce a valid release polygon), the trigger is dropped and the next candidate is promoted. This prevents the scenario pipeline from reporting triggers at isolated clusters that can't produce physically meaningful release areas.
+**Tie-break: critical cut length r_c (since 2026-10-20).** SNOWPACK reports Sk38 to two decimals, so the top-N cut regularly falls *inside* a tie: a 4-way tie at 0.79 for 5th place on 2026-01-18, and a 10-way tie on 2026-03-07. Ties used to be settled by CSV row order, i.e. by nothing physical. They are now broken by `rc_wl`, the SNOWPACK critical cut length (code 0606, Richter et al. 2019) averaged over the same WL elements. Lower r_c means more propagation-prone. Sk38 still decides every place it separates. Clusters with no r_c sort after those with one, and full ties keep row order.
+
+r_c was not adopted as a primary ranking key. Within the pool it also falls with slab thickness (Spearman −0.70), so ranking on it, or on an Sk38 × r_c combination, left the triggers just as tied to the cap.
+
+**Trigger validation filter:** after ranking, each trigger is tested with `propagate_release()` at the median size_factor. If the BFS returns None (the trigger cannot produce a valid release polygon), the trigger is **dropped, and the next candidate is not promoted**, so a run can end up with fewer than `n_triggers` triggers. If every trigger fails, the original set is kept with a rectangle fallback. This prevents reporting triggers at isolated clusters that can't produce physically meaningful release areas.
 
 For the Jan 18 validation (snapshot at 18:00 UTC, ~1 hour before the observed skier trigger), the top-ranked trigger is located in the upper portion of the release area, consistent with the observed crown position. Cluster IDs are not stable across DEM changes — the specific cid varies with each full pipeline rebuild.
 
@@ -481,10 +495,10 @@ These are flow dynamics parameters **independent of SNOWPACK**. SNOWPACK provide
 | Parameter | Value | Basis |
 |-----------|-------|-------|
 | `stauchwall_deg` | 28° | Perzl 2007, Veitinger 2016, Swiss ALIP |
-| `MIN_TAU_G` | 50 Pa | Meloche scaling validity lower bound |
+| `MIN_TAU_G` | 40 Pa | Trigger gate (`analysis_pipeline`). Distinct from `TAU_G_FEATURE_FLOOR` = 50 Pa, which gates computing arrest indices |
 | `MAX_SK38` | 1.0 | Human-triggering threshold (Schweizer & Jamieson, 2007) |
 | `MIN_SLAB_THICKNESS` | 0.5 m | Minimum slab for D2+ events |
-| `MAX_SLAB_THICKNESS` | 2.0 m | Skier stress negligible below ~2m (CLI `--max-slab-thickness`) |
+| `MAX_SLAB_THICKNESS` | 2.0 m | Deepest slab explosive control is expected to trigger; operational choice that decides which clusters trigger (§3.2 Filter 4). CLI `--max-slab-thickness`; 1.5 for skier scenarios |
 | `LAMBDA_JUMP_FACTOR` | 0.5 | Relative Λ discontinuity threshold |
 | `THICKNESS_JUMP_FACTOR` | 0.25 | Relative slab thickness discontinuity threshold |
 | `TAU_G_DROP_FACTOR` | 0.40 | Relative tau_g arrest (downslope/lateral only) |
