@@ -220,6 +220,15 @@ class ProjectConfig:
         return self.pro_dir / "slope_snowpack.zarr"
 
     @property
+    def forecast_zarr_path(self) -> Path:
+        """NWP-forced profiles after T_stable, rebuilt every cycle.
+
+        Kept apart from zarr_path so a forecast step can never be read as
+        analysis: the main store only ever holds observation-driven profiles.
+        """
+        return self.pro_dir / "forecast_snowpack.zarr"
+
+    @property
     def slopes_config_dir(self) -> Path:
         return self.project_dir / "slopes" / self.slope_name
 

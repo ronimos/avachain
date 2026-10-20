@@ -17,6 +17,7 @@ import time
 import tempfile
 import os
 import warnings
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -164,12 +165,174 @@ def _chunk_encoding(ds, max_layers: int, loc_chunk: int = 256) -> dict:
     return enc
 
 
+def _pro_block_time(line: str):
+    """Timestamp of a `0500,dd.mm.yyyy HH:MM:SS` profile-block line."""
+    return np.datetime64(datetime.strptime(line[5:].strip(), "%d.%m.%Y %H:%M:%S"))
+
+
+def _write_pro_tail(src: Path, dst: Path, since) -> list:
+    """Copy the header of `src` plus only the profile blocks dated after `since`.
+
+    Returns the timestamps written. xsnow then parses only the window, so an
+    incremental update costs time proportional to the re-run, not the season.
+    """
+    since = np.datetime64(since)
+    times, keep, in_data = [], True, False
+    with open(src) as fin, open(dst, "w") as fout:
+        for line in fin:
+            if not in_data:
+                fout.write(line)
+                in_data = line.strip() == "[DATA]"
+                continue
+            if line.startswith("0500,"):
+                t = _pro_block_time(line)
+                keep = t > since
+                if keep:
+                    times.append(t)
+            if keep:
+                fout.write(line)
+    return times
+
+
+def _read_pro_batch(files: list, n_cpus: int, max_layers: int, since=None):
+    """xsnow-read a batch of .pro files, squeezed and padded to max_layers.
+
+    With `since`, each file is first cut to its blocks after `since`. Returns
+    None when no file has any such block.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        n_blocks = 0
+        for f in files:
+            dst = os.path.join(tmp, f.name)
+            if since is None:
+                os.symlink(str(f.resolve()), dst)
+                n_blocks = 1
+            else:
+                n_blocks += len(_write_pro_tail(f, Path(dst), since))
+        if n_blocks == 0:
+            return None
+        ds = xsnow.read(tmp, lazy=False, n_cpus_use=n_cpus, max_layers=max_layers)
+
+    sq_dims = [d for d in ['slope', 'realization'] if d in ds.dims]
+    if sq_dims:
+        ds = ds.squeeze(sq_dims, drop=True)
+    n_layers = ds.sizes.get('layer', 0)
+    if n_layers < max_layers:
+        ds = ds.pad(layer=(0, max_layers - n_layers),
+                    mode='constant', constant_values=np.nan)
+    elif n_layers > max_layers:
+        ds = ds.isel(layer=slice(0, max_layers))
+    return ds
+
+
+def _resize_time(zarr_out: Path, n: int) -> None:
+    """Resize every array that has a time dimension to n timesteps."""
+    import zarr
+    g = zarr.open_group(str(zarr_out), mode='r+')
+    for _, arr in g.arrays():
+        names = getattr(arr.metadata, 'dimension_names', None) \
+            or arr.attrs.get('_ARRAY_DIMENSIONS')
+        if names and 'time' in names:
+            shape = list(arr.shape)
+            shape[list(names).index('time')] = n
+            arr.resize(tuple(shape))
+    zarr.consolidate_metadata(str(zarr_out))
+
+
+def update_zarr_since(pro_dir: Path,
+                      zarr_out: Path,
+                      since,
+                      batch_size: int = 256,
+                      n_cpus: int = 31,
+                      max_layers: int = 338) -> int:
+    """
+    Replace everything in the store after `since` with the .pro blocks after it.
+
+    This is the incremental update for a SNOWPACK re-run from a restart point:
+    the daily anchor (yesterday's T_stable) or the survey anchor (the previous
+    survey). SNOWPACK rewrites each .pro from its begin date, so the blocks
+    after `since` are the new truth and everything the store held after
+    `since` is discarded. That includes earlier inter-survey estimates and
+    forecast steps, which must never survive as analysis.
+
+    build_zarr_cache cannot do this: it resumes by skipping locations already
+    in the store and only appends along location, so after the first build no
+    incremental run ever extended the store in time, and analyze silently read
+    the latest stored profile.
+
+    The time axis is shrunk to the last step <= since, grown by the new steps,
+    and filled by region writes in location batches aligned to the 256-location
+    chunks. Locations without a block at some new step stay NaN there. Returns
+    the number of timesteps written.
+    """
+    since = np.datetime64(since)
+    with xr.open_zarr(str(zarr_out)) as ex:
+        old_times = ex['time'].values
+        locs = [str(v) for v in ex['location'].values]
+    keep_n = int((old_times <= since).sum())
+    if keep_n == 0:
+        raise ValueError(f"{zarr_out} has no timestep <= {since}; rebuild it "
+                         f"with build_zarr_cache instead")
+
+    pro_by_loc = {f.stem.split('_cluster_')[0]: f
+                  for f in pro_dir.glob("cluster_*_cluster_*.pro")}
+    new_times = set()
+    with tempfile.TemporaryDirectory() as tmp:
+        for loc in locs:
+            if loc in pro_by_loc:
+                new_times.update(_write_pro_tail(
+                    pro_by_loc[loc], Path(tmp) / "probe.pro", since))
+    new_times = np.array(sorted(new_times), dtype='datetime64[ns]')
+    n_new = len(new_times)
+
+    _resize_time(zarr_out, keep_n + n_new)
+    if n_new == 0:
+        print(f"update_zarr_since: no profiles after {since}; store cut to "
+              f"{keep_n} timesteps")
+        return 0
+
+    # The time coordinate, written in the store's own encoding.
+    import zarr
+    import pandas as pd
+    g = zarr.open_group(str(zarr_out), mode='r+')
+    units = g['time'].attrs['units']                     # "<unit> since <origin>"
+    unit, origin = units.split(' since ')
+    step = {'hours': 'h', 'minutes': 'm', 'seconds': 's', 'days': 'D'}[unit]
+    vals = (new_times - np.datetime64(pd.Timestamp(origin))) / np.timedelta64(1, step)
+    g['time'][keep_n:] = vals.astype(g['time'].dtype)
+
+    region_t = slice(keep_n, keep_n + n_new)
+    t_total = time.time()
+    for i0 in range(0, len(locs), batch_size):
+        batch_locs = locs[i0:i0 + batch_size]
+        files = [pro_by_loc[l] for l in batch_locs if l in pro_by_loc]
+        ds = _read_pro_batch(files, n_cpus, max_layers, since) if files else None
+        if ds is None:
+            continue
+        ds = ds.reindex(location=batch_locs, time=new_times)
+        ds = ds.reset_coords([c for c in ds.coords
+                              if 'time' in ds[c].dims and c != 'time'])
+        ds = ds[[v for v in ds.data_vars if 'time' in ds[v].dims]]
+        ds = ds.drop_vars([c for c in ('location', 'time', 'layer') if c in ds.coords])
+        for v in ds.variables.values():
+            v.encoding = {}
+        ds.to_zarr(str(zarr_out), mode='r+',
+                   region={'location': slice(i0, i0 + len(batch_locs)),
+                           'time': region_t})
+    zarr.consolidate_metadata(str(zarr_out))
+    print(f"update_zarr_since: kept {keep_n} timesteps <= {since}, wrote "
+          f"{n_new} ({str(new_times[0])[:16]} -> {str(new_times[-1])[:16]}) in "
+          f"{time.time() - t_total:.0f}s")
+    return n_new
+
+
 def build_zarr_cache(pro_dir: Path,
                      zarr_out: Path,
                      batch_size: int = 100,
                      n_cpus: int = 31,
                      max_layers: int = 338,
-                     rebuild: bool = False) -> None:
+                     rebuild: bool = False,
+                     since=None) -> None:
     """
     Build a Zarr cache from .pro files, processing in batches.
 
@@ -184,6 +347,10 @@ def build_zarr_cache(pro_dir: Path,
     n_cpus     : parallel workers passed to xsnow.read()
     max_layers : pad all datasets to this layer count (use global max)
     rebuild    : overwrite an existing store instead of resuming into it
+    since      : if given, keep only profiles dated after it. This is how the
+                 NWP forecast store is built from the forecast pass; pass
+                 rebuild=True with it, since resuming a windowed store makes
+                 no sense.
     """
     pro_files = sorted(pro_dir.glob("cluster_*_cluster_*.pro"))
     n_total   = len(pro_files)
@@ -227,29 +394,16 @@ def build_zarr_cache(pro_dir: Path,
               f"{batch_files[0].name} … {batch_files[-1].name}"
               + (f"  ({n_skipped} already written, skipped)" if n_skipped else ""))
 
-        with tempfile.TemporaryDirectory() as tmp:
-            for f in batch_files:
-                os.symlink(str(f.resolve()), os.path.join(tmp, f.name))
-            t0 = time.time()
-            try:
-                ds = xsnow.read(tmp, lazy=False, n_cpus_use=n_cpus,
-                                max_layers=max_layers)
-            except Exception as exc:
-                print(f"    ERROR reading batch: {exc}")
-                continue
-            t_read = time.time() - t0
-
-        # Normalise dims
-        sq_dims = [d for d in ['slope', 'realization'] if d in ds.dims]
-        if sq_dims:
-            ds = ds.squeeze(sq_dims, drop=True)
-
-        n_layers = ds.sizes.get('layer', 0)
-        if n_layers < max_layers:
-            ds = ds.pad(layer=(0, max_layers - n_layers),
-                        mode='constant', constant_values=np.nan)
-        elif n_layers > max_layers:
-            ds = ds.isel(layer=slice(0, max_layers))
+        t0 = time.time()
+        try:
+            ds = _read_pro_batch(batch_files, n_cpus, max_layers, since)
+        except Exception as exc:
+            print(f"    ERROR reading batch: {exc}")
+            continue
+        if ds is None:
+            print(f"    no profiles after {since}; nothing to write")
+            continue
+        t_read = time.time() - t0
 
         t1 = time.time()
         # Append only once we know the store holds a recovered resume state:

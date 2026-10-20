@@ -84,3 +84,5 @@ ffmpeg*/
 
 # ISSW reinit comparison runs (large SNOWPACK output, not source-controlled)
 snowpack/*/comparison/
+# Test fixtures are small, synthetic and must be tracked.
+!tests/fixtures/*.pro
