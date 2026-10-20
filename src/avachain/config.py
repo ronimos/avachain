@@ -133,6 +133,9 @@ class ProjectConfig:
     n_pca_components: float = 0.99  # Explained variance threshold for PCA dimensionality reduction before clustering
     n_clusters_override: Optional[int] = None  # set to force a specific initial count
     max_cluster_std_m: float = 0.08  # 8 cm
+    # The slope_config.toml this was loaded from, so orchestrators can pass
+    # --toml on to subprocesses (None for the default config).
+    toml_path: Optional[Path] = None
 
     def __post_init__(self):
         """Resolve paths relative to project_dir."""
@@ -281,6 +284,7 @@ class ProjectConfig:
         slope_name = slope.get("name", "slope")
 
         return cls(
+            toml_path=Path(toml_path).resolve(),
             project_dir=Path(paths.get("project_dir", ".")),
             dem_path=Path(paths.get("dem", "data/dem/dem.tif")),
             survey_dir=Path(paths.get("survey_dir", "data/surveys")),

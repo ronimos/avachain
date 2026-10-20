@@ -123,11 +123,40 @@ class TestPerClusterTerrain:
 
 class TestSlopeNamespacedPaths:
     @pytest.mark.parametrize("slope", SLOPES)
-    def test_reinit_stats_is_namespaced(self, install, slope):
-        """Un-namespaced, pass 2 reruns every cluster instead of the scoured set."""
+    def test_no_unnamespaced_output_paths(self, install, slope):
+        """outputs/analysis/ (no slope) once made reinit pass 2 rerun everything."""
         sh = install._render_run_operational(_cfg(slope))
-        assert f"outputs/{slope}/analysis/reinit_stats_" in sh
-        assert "outputs/analysis/reinit_stats_" not in sh
+        assert "outputs/analysis/" not in sh
+        assert f"outputs/{slope}/analysis/cluster_map.npy" in sh
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    def test_every_python_entry_point_gets_toml(self, install, slope):
+        """Without --toml a subprocess silently uses the default slope's paths."""
+        sh = install._render_run_operational(_cfg(slope))
+        for mod in ("forcing_pipeline", "analysis_pipeline", "nwp_ingest",
+                    "smet_append", "snowpack_cycle"):
+            assert f"src/avachain/{mod}.py --toml $TOML" in sh, mod
+
+
+class TestSurveyFlow:
+    """Survey arrival: detect events on the new pair, re-run from the last survey."""
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    def test_detection_runs_before_gap_fill(self, install, slope):
+        sh = install._render_run_operational(_cfg(slope))
+        i_tr, i_av = sh.index("$PIPELINE transport"), sh.index("$PIPELINE avalanche")
+        assert i_tr < i_av < sh.index("$PIPELINE gap_fill")
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    def test_snowpack_goes_through_the_survey_cycle(self, install, slope):
+        sh = install._render_run_operational(_cfg(slope))
+        assert "survey --survey-date $SURVEY_DATE" in sh
+        assert "run_snowpack.sh" not in sh          # no direct, unanchored runs
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    def test_observations_after_the_survey_are_appended(self, install, slope):
+        sh = install._render_run_operational(_cfg(slope))
+        assert sh.index("$PIPELINE smet") < sh.index("$SMET_APPEND") < sh.index("$NWP --lead-hours")
 
     @pytest.mark.parametrize("slope", SLOPES)
     def test_smet_dir_default_exists(self, install, slope):
