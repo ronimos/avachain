@@ -59,6 +59,10 @@ from config import ProjectConfig                                  # noqa: E402
 
 SURVEY_ANCHOR_META = "survey_anchor.json"
 TS_FMT = "%Y-%m-%dT%H:%M"
+# SNOWPACK writes a profile every PROF_DAYS_BETWEEN = 0.25 d (master_config.ini).
+# Restart points must sit on that grid, or the store, which only has those
+# steps, cannot end at its own restart point.
+OUTPUT_STEP = pd.Timedelta(hours=6)
 
 
 class CycleError(RuntimeError):
@@ -142,6 +146,11 @@ def read_survey_anchor(cfg: ProjectConfig) -> pd.Timestamp:
 def _write_survey_anchor(cfg: ProjectConfig, ts: pd.Timestamp) -> None:
     (cfg.pro_dir / SURVEY_ANCHOR_META).write_text(json.dumps(
         {"survey_ts": ts.strftime(TS_FMT)}, indent=2) + "\n")
+
+
+def on_output_grid(t: pd.Timestamp) -> pd.Timestamp:
+    """Latest SNOWPACK profile step at or before t."""
+    return t.floor(OUTPUT_STEP)
 
 
 def survey_ts(cfg: ProjectConfig, survey_date: str) -> pd.Timestamp:
@@ -261,7 +270,7 @@ def survey_cycle(cfg: ProjectConfig, new_survey: pd.Timestamp,
         raise CycleError(f"new survey {new_survey:{TS_FMT}} is not after the "
                          f"survey anchor {s_prev:{TS_FMT}}")
     n = _require_coherent(cfg, "survey", s_prev)
-    obs_end = obs_end or last_observed_ts(cfg)
+    obs_end = on_output_grid(obs_end or last_observed_ts(cfg))
     if obs_end < new_survey:
         raise CycleError(f"forcing ends {obs_end:{TS_FMT}}, before the new survey "
                          f"{new_survey:{TS_FMT}}")
@@ -307,7 +316,7 @@ def daily_cycle(cfg: ProjectConfig, obs_end: Optional[pd.Timestamp] = None,
         raise CycleError(f"no daily anchors in {cfg.pro_dir}")
     a = _profile_date(next(iter(files.values())))
     n = _require_coherent(cfg, "anchor", a)
-    obs_end = obs_end or last_observed_ts(cfg)
+    obs_end = on_output_grid(obs_end or last_observed_ts(cfg))
     print(f"  Daily cycle: {a:{TS_FMT}} -> {obs_end:{TS_FMT}}", flush=True)
     if obs_end > a:
         snowpack(cfg, obs_end, "anchor")

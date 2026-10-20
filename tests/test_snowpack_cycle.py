@@ -206,3 +206,25 @@ def test_last_observed_ts_ignores_nwp_rows(cfg):
     p = cfg.smet_dir / "cluster_0001.smet"
     p.write_text(p.read_text() + NWP_FLAG + "\n2026-02-13T00:00:00 -9\n")
     assert sc.last_observed_ts(cfg) == pd.Timestamp("2026-02-11T00:00")
+
+
+def test_restart_points_snap_to_the_6h_profile_grid(cfg):
+    """SNOWPACK writes profiles every 6 h (PROF_DAYS_BETWEEN = 0.25). An anchor
+    at the last hourly observation (14:00) left the main store ending at 12:00,
+    two hours before its own restart point (replay tick 2026-02-07)."""
+    rec = Rec()
+    a = pd.Timestamp("2026-02-10T18:00")
+    for cid in CIDS:
+        (cfg.pro_dir / f"{cid}_anchor.sno").write_text(
+            f"ProfileDate      = {a:%Y-%m-%dT%H:%M:%S}\n")
+    out = sc.daily_cycle(cfg, pd.Timestamp("2026-02-11T14:00"),
+                         zarr_fn=rec.zarr, forecast_fn=rec.forecast)
+    assert out["obs_end"] == pd.Timestamp("2026-02-11T12:00")
+    assert _hist(cfg, "cluster_0001")[0][1] == "2026-02-11T12:00"
+    assert _pd(cfg, "cluster_0001_anchor.sno") == pd.Timestamp("2026-02-11T12:00")
+
+
+def test_grid_floor():
+    assert sc.on_output_grid(pd.Timestamp("2026-02-07T14:00")) == pd.Timestamp("2026-02-07T12:00")
+    assert sc.on_output_grid(pd.Timestamp("2026-02-07T18:00")) == pd.Timestamp("2026-02-07T18:00")
+    assert sc.on_output_grid(pd.Timestamp("2026-02-08T05:59")) == pd.Timestamp("2026-02-08T00:00")
