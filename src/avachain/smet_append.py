@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 
 from config import replay_as_of
+from nwp_ingest import NWP_FLAG, prune_nwp_rows
 
 
 # Both are resolved from ProjectConfig in main() when --toml is given. The
@@ -220,6 +221,17 @@ def append_cluster_smet(smet_path: Path,
 
     Returns the number of rows appended (0 if already current or dry-run).
     """
+    # Drop the previous cycle's NWP forecast rows first. Otherwise the last row
+    # is the forecast end (T_stable + 48 h), last_ts >= until short-circuits,
+    # and nwp_ingest later cuts at the new T_stable, so the first 24 h of
+    # yesterday's forecast stays in the file as if it had been observed. HS
+    # must also continue from the last OBSERVED row, not the forecast's.
+    if NWP_FLAG in smet_path.read_text():
+        if dry_run:
+            print(f"    {smet_path.name}: would drop NWP forecast rows, then append")
+            return 0
+        prune_nwp_rows(smet_path)
+
     last_ts = _read_smet_last_timestamp(smet_path)
     if last_ts is None:
         print(f"    WARNING: could not read last timestamp from {smet_path.name}")
