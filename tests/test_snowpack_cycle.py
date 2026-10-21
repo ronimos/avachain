@@ -92,6 +92,9 @@ class Rec:
     def forecast(self, cfg, since):
         self.calls.append(("forecast", since))
 
+    def scour_check(self, cfg, ev):
+        self.calls.append(("scour_check", ev.ts))
+
     def analyze(self, cfg, date):
         self.calls.append(("analyze", date))
 
@@ -118,7 +121,7 @@ def _events(cfg, **evs):
 def _survey(cfg, rec, obs_end, nwp=None):
     return sc.survey_cycle(cfg, S1, obs_end, nwp, analyze_fn=rec.analyze,
                            reinit_fn=rec.reinit, zarr_fn=rec.zarr,
-                           forecast_fn=rec.forecast)
+                           forecast_fn=rec.forecast, scour_check_fn=rec.scour_check)
 
 
 def test_survey_reruns_from_the_previous_survey_not_the_latest_state(cfg):
@@ -228,3 +231,47 @@ def test_grid_floor():
     assert sc.on_output_grid(pd.Timestamp("2026-02-07T14:00")) == pd.Timestamp("2026-02-07T12:00")
     assert sc.on_output_grid(pd.Timestamp("2026-02-07T18:00")) == pd.Timestamp("2026-02-07T18:00")
     assert sc.on_output_grid(pd.Timestamp("2026-02-08T05:59")) == pd.Timestamp("2026-02-08T00:00")
+
+
+# ---------------------------------------------------------------------------
+# A reinit must survive the restart (check_scour_held)
+# ---------------------------------------------------------------------------
+
+def test_scour_checked_after_the_segment_that_restarts_from_it(cfg):
+    rec = Rec()
+    _events(cfg, **{"a__b": "2026-02-07T12:00:00Z", "c__d": "2026-02-09T12:00:00Z"})
+    _survey(cfg, rec, pd.Timestamp("2026-02-11T00:00"))
+    t1, t2 = pd.Timestamp("2026-02-07T12:00"), pd.Timestamp("2026-02-09T12:00")
+    names = [c for c in rec.calls if c[0] in ("reinit", "scour_check")]
+    assert names == [("reinit", t1), ("scour_check", t1),
+                     ("reinit", t2), ("scour_check", t2)]
+
+
+def _scour_fixture(cfg, hs_mod_cm, hs_after_m=0.60, slope=60.0, stamp="2026-02-08T12:00"):
+    (cfg.analysis_dir / "reinit_stats_2026-02-08.json").write_text(
+        json.dumps([{"cid": 2, "hs_after_m": hs_after_m}]))
+    rows = f"{stamp}:00   1.0   {hs_mod_cm}   3.0\n" if hs_mod_cm is not None else ""
+    (cfg.pro_dir / "cluster_0002_cluster_0002.smet").write_text(
+        f"SMET 1.1 ASCII\n[HEADER]\nslope_angle = {slope}\n"
+        f"fields = timestamp MS_Snow HS_mod HS_meas\n[DATA]\n{rows}"
+        "2026-02-08T18:00:00   1.0   999.0   3.0\n")
+
+
+EV = sc.Event(pd.Timestamp("2026-02-08T12:00"), "a__b", None)
+
+
+def test_scour_held_passes(cfg):
+    _scour_fixture(cfg, 120.0)                 # 1.20 m * cos 60 = 0.60 m layer sum
+    assert sc.check_scour_held(cfg, EV)["max_deposition_m"] == pytest.approx(0.0)
+
+
+def test_scour_refilled_stops_the_cycle(cfg):
+    _scour_fixture(cfg, 140.0)                 # +10 cm deposited at the restart
+    with pytest.raises(sc.CycleError, match="cluster_0002 \\+10 cm"):
+        sc.check_scour_held(cfg, EV)
+
+
+def test_scour_missing_restart_row_stops_the_cycle(cfg):
+    _scour_fixture(cfg, None)
+    with pytest.raises(sc.CycleError, match="without a restart row"):
+        sc.check_scour_held(cfg, EV)

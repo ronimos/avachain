@@ -63,6 +63,10 @@ TS_FMT = "%Y-%m-%dT%H:%M"
 # Restart points must sit on that grid, or the store, which only has those
 # steps, cannot end at its own restart point.
 OUTPUT_STEP = pd.Timedelta(hours=6)
+# Deposition allowed at the restart that follows a reinit (check_scour_held).
+# On the 2026-03-03 replay event: unaligned forcing, median 37.9 cm and 3028
+# of 4022 clusters above 5 cm; aligned, 0.00 cm max over 64 sampled clusters.
+SCOUR_HOLD_TOL_M = 0.02
 
 
 class CycleError(RuntimeError):
@@ -245,6 +249,53 @@ def reinit(cfg: ProjectConfig, ev: Event) -> None:
     _py(cfg, "forcing_pipeline.py", *args)
 
 
+def check_scour_held(cfg: ProjectConfig, ev: Event) -> dict:
+    """After the segment that restarts from a reinit, check SNOWPACK kept it.
+
+    With ENFORCE_MEASURED_SNOW_HEIGHTS any forcing HS above the scoured layer
+    sum is deposited at the first step, and nothing else reports it: the
+    2026-03-05 replay tick refilled a median 80% of every scour and only
+    stopped because one cluster crashed. The restart row of each scoured
+    cluster's output .smet must still hold the scoured state. HS_mod is
+    reported as layer sum / cos(slope), so it is scaled back before comparing.
+    """
+    import math
+    stats = json.loads((cfg.analysis_dir / f"reinit_stats_{ev.date}.json").read_text())
+    stamp = ev.ts.strftime("%Y-%m-%dT%H:%M")
+    gains, missing = {}, []
+    for s in stats:
+        name = f"cluster_{s['cid']:04d}"
+        p = cfg.pro_dir / f"{name}_{name}.smet"
+        hs = cos = None
+        if p.exists():
+            with open(p) as f:
+                for line in f:
+                    key = line.split("=", 1)[0].strip()
+                    if key == "slope_angle":
+                        cos = math.cos(math.radians(float(line.split("=", 1)[1])))
+                    elif key == "fields":
+                        j = line.split("=", 1)[1].split().index("HS_mod")
+                    elif line.startswith(stamp):
+                        hs = float(line.split()[j]) / 100.0
+                        break
+        if hs is None or cos is None:
+            missing.append(name)
+            continue
+        gains[name] = hs * cos - s["hs_after_m"]
+    bad = {k: v for k, v in gains.items() if v > SCOUR_HOLD_TOL_M}
+    worst = max(gains.values(), default=0.0)
+    print(f"    scour held at {stamp}: {len(gains) - len(bad)}/{len(stats)} clusters, "
+          f"max deposition {100 * worst:.1f} cm", flush=True)
+    if missing or bad:
+        top = sorted(bad.items(), key=lambda kv: -kv[1])[:5]
+        raise CycleError(
+            f"reinit {stamp} not held: {len(bad)} cluster(s) refilled by more than "
+            f"{100 * SCOUR_HOLD_TOL_M:.0f} cm at the restart "
+            f"({', '.join(f'{k} +{100 * v:.0f} cm' for k, v in top)}); "
+            f"{len(missing)} without a restart row ({', '.join(missing[:5])})")
+    return {"clusters": len(gains), "max_deposition_m": worst}
+
+
 def update_zarr(cfg: ProjectConfig, since: pd.Timestamp) -> None:
     from snowpack_io import update_zarr_since
     update_zarr_since(cfg.pro_dir, cfg.zarr_path, since)
@@ -264,7 +315,8 @@ def survey_cycle(cfg: ProjectConfig, new_survey: pd.Timestamp,
                  nwp_edate: Optional[pd.Timestamp] = None,
                  *, snowpack: Callable = run_snowpack, analyze_fn: Callable = analyze,
                  reinit_fn: Callable = reinit, zarr_fn: Callable = update_zarr,
-                 forecast_fn: Callable = build_forecast) -> dict:
+                 forecast_fn: Callable = build_forecast,
+                 scour_check_fn: Callable = check_scour_held) -> dict:
     s_prev = read_survey_anchor(cfg)
     if new_survey <= s_prev:
         raise CycleError(f"new survey {new_survey:{TS_FMT}} is not after the "
@@ -279,17 +331,23 @@ def survey_cycle(cfg: ProjectConfig, new_survey: pd.Timestamp,
           f"{obs_end:{TS_FMT}}; {len(events)} event(s) to reinit", flush=True)
 
     restart = "survey"
+    scoured = None                           # event whose reinit the next segment starts from
     for ev in events:
         snowpack(cfg, ev.ts, restart)
         restart = "res"
         _require_coherent(cfg, "res", ev.ts, n)
+        if scoured is not None:
+            scour_check_fn(cfg, scoured)
         zarr_fn(cfg, s_prev)                 # analyze needs the event-date state
         analyze_fn(cfg, ev.date)
         reinit_fn(cfg, ev)                   # scours res .sno, dated ev.ts
         _require_coherent(cfg, "res", ev.ts, n)
+        scoured = ev
 
     snowpack(cfg, new_survey, restart)
     _require_coherent(cfg, "res", new_survey, n)
+    if scoured is not None:
+        scour_check_fn(cfg, scoured)
     _save_as(cfg, "survey")
     _write_survey_anchor(cfg, new_survey)
 

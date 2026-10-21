@@ -31,6 +31,7 @@ Called from forcing_pipeline.py as step_reinit(), or standalone:
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -211,6 +212,149 @@ def sanitize_sno_dir(sno_dir: Path, dry_run: bool = False) -> int:
     return n_fixed
 
 
+def align_smet_hs(smet_path: Path,
+                  event_ts: pd.Timestamp,
+                  hs_event_m: float,
+                  survey_ts: pd.Timestamp = None,
+                  hs_survey_m: float = None) -> int:
+    """Shift a cluster's HS forcing so it agrees with its scoured .sno.
+
+    SNOWPACK runs with ENFORCE_MEASURED_SNOW_HEIGHTS, so any excess of the
+    forcing HS over the modelled HS is deposited as new snow. Reinit scours
+    the .sno to the post-event survey HS, but the gap-fill forcing is not
+    pinned to that survey (endpoint RMSE ~65 cm) and its avalanche dHS is a
+    different, usually much smaller, field. Left alone, the restart deposits
+    the difference straight back: on the 2026-03-03 replay event, a median
+    80% of each scour was refilled within 6 h, and cluster 5859 crashed on
+    the 78 cm "snowfall".
+
+    The rows from event_ts on are shifted by an offset that makes the forcing
+    equal hs_event_m at event_ts and hs_survey_m at survey_ts, varies
+    linearly between, and stays constant after survey_ts, so the forcing's
+    own increments (snowfall, settlement) are kept. Without a survey target
+    the event offset is held throughout. The file stores HS in cm (header
+    units_multiplier 0.01), targets are in m, both in the layer-sum frame that
+    SNOWPACK enforces HS in (see scour_cluster). Only the HS token of each row
+    is rewritten, keeping every other byte.
+
+    Returns the number of rows changed.
+    """
+    lines = smet_path.read_text().splitlines(keepends=True)
+    i_data = next(i for i, l in enumerate(lines) if l.strip() == '[DATA]')
+    fields = next(l.split('=', 1)[1].split() for l in lines[:i_data]
+                  if l.split('=', 1)[0].strip() == 'fields')
+    nodata = next((float(l.split('=', 1)[1]) for l in lines[:i_data]
+                   if l.split('=', 1)[0].strip() == 'nodata'), -999.0)
+    j = fields.index('HS')
+
+    rows = []                                   # (line index, ts, hs_cm)
+    for i in range(i_data + 1, len(lines)):
+        parts = lines[i].split()
+        if len(parts) <= j or parts[0].startswith('#'):
+            continue
+        rows.append((i, pd.Timestamp(parts[0]), float(parts[j])))
+
+    def hs_at(t):
+        """Forcing HS (cm) at t, linear between rows."""
+        ts = [r[1] for r in rows if r[2] != nodata]
+        hs = [r[2] for r in rows if r[2] != nodata]
+        k = np.searchsorted(np.array(ts, dtype='datetime64[ns]'),
+                            np.datetime64(t), side='left')
+        if k < len(ts) and ts[k] == t:
+            return hs[k]
+        if k == 0 or k == len(ts):
+            return None
+        w = (t - ts[k - 1]) / (ts[k] - ts[k - 1])
+        return hs[k - 1] + w * (hs[k] - hs[k - 1])
+
+    f_event = hs_at(event_ts)
+    if f_event is None:
+        return 0
+    d_event = f_event - 100.0 * hs_event_m
+    d_survey = d_event
+    if survey_ts is not None and hs_survey_m is not None and survey_ts > event_ts:
+        f_survey = hs_at(survey_ts)
+        if f_survey is not None:
+            d_survey = f_survey - 100.0 * hs_survey_m
+
+    n = 0
+    for i, t, hs in rows:
+        if t < event_ts or hs == nodata:
+            continue
+        if survey_ts is not None and t < survey_ts:
+            w = (t - event_ts) / (survey_ts - event_ts)
+            d = d_event + w * (d_survey - d_event)
+        else:
+            d = d_survey
+        tokens = re.split(r'(\s+)', lines[i])   # keeps the separators
+        tok = tokens[2 * j]
+        decimals = len(tok.split('.')[1]) if '.' in tok else 0
+        tokens[2 * j] = f"{max(0.0, hs - d):.{decimals}f}"
+        lines[i] = ''.join(tokens)
+        n += 1
+    smet_path.write_text(''.join(lines))
+    return n
+
+
+def scour_cluster(sno_data: dict, event_ts: str,
+                  survey_hs_m: float = None,
+                  slab_thickness_m: float = None,
+                  cid: int = 0):
+    """Choose a cluster's scour depth and apply it.
+
+    Scour sources, in order: the post-event survey HS (only passed in a clean
+    window, and only when it is below the modelled HS), the slab thickness
+    from the features CSV, else 80% of HS.
+
+    Frames: SNOWPACK enforces the forcing HS against the slope-normal layer
+    sum (a forcing step from 66.27 to 144.08 cm deposited hn = 77.8 cm), and
+    reports both scaled by 1/cos(slope) as HS_meas and HS_mod. So the survey
+    HS, which is what the forcing carries, is compared with the layer sum
+    as is. The .pro heights behind slab_thickness are the 1/cos-scaled ones
+    (PERP_TO_SLOPE = false), so that depth is multiplied by cos(slope) before
+    the cut. All depths returned are in layer-sum (forcing) terms.
+
+    Returns (scoured sno_data, hs_before_m, scour_m, source), or None when
+    the scour is 1 cm or less.
+    """
+    hs_before = sum(float(l['Layer_Thick']) for l in sno_data['layers'])
+
+    if survey_hs_m is not None and hs_before - survey_hs_m > 0:
+        scour_m = hs_before - survey_hs_m
+        source = 'survey_HS'
+    elif slab_thickness_m is not None:
+        scour_m = slab_thickness_m * pro_to_layer_sum(sno_data)
+        source = 'features'
+    else:
+        scour_m = hs_before * 0.80
+        source = 'HS×0.80'
+
+    # Cap scour at current HS — can't remove more snow than exists.
+    # This handles timing mismatches where slab_thickness is from
+    # the snapshot date but the .sno is from a different time
+    # (e.g., end of season with melt/settlement).
+    if scour_m > hs_before:
+        print(f"  {cid:04d}: scour {scour_m:.2f}m > HS {hs_before:.2f}m "
+              f"— capping at HS")
+        scour_m = hs_before
+
+    if scour_m <= 0.01:
+        return None
+
+    scoured = scour_sno(sno_data, scour_m, event_ts)
+    return scoured, hs_before, scour_m, source
+
+
+def pro_to_layer_sum(sno_data: dict) -> float:
+    """cos(slope): a .pro height or HS_mod × this = slope-normal layer sum.
+
+    SNOWPACK reports HS_mod = sum(Layer_Thick) / cos(SlopeAngle), checked to
+    0.01 cm on the replay restarts.
+    """
+    angle = float(sno_data['header'].get('SlopeAngle', 0.0))
+    return float(np.cos(np.radians(angle)))
+
+
 def _update_header_line(sno_data, key, new_value):
     """Update a header value in both the parsed dict and raw lines."""
     sno_data['header'][key] = new_value
@@ -237,6 +381,7 @@ def run_reinit(cfg,
                kernel_size: int = 7,
                threshold_sigma: float = 1.2,
                sno_dir: Path = None,
+               smet_dir: Path = None,
                dry_run: bool = False,
                no_backup: bool = False,
                clean_window_max_stn_dhs_m: float = 0.05) -> dict:
@@ -256,6 +401,7 @@ def run_reinit(cfg,
     kernel_size : min-kernel filter size
     threshold_sigma : min-kernel threshold in std devs
     sno_dir : directory with _res.sno files (default: cfg.pro_dir)
+    smet_dir : cluster forcing SMETs to align to the scour (default: cfg.smet_dir)
     dry_run : if True, report without modifying files
     no_backup : if True, skip .sno.bak creation
     clean_window_max_stn_dhs_m : max station dHS (m) between event_date and
@@ -436,41 +582,13 @@ def run_reinit(cfg,
             continue
 
         sno_data = read_sno(str(sno_path))
-        hs_before_scour = sum(float(l['Layer_Thick'])
-                              for l in sno_data['layers'])
-
-        if clean_window and cid in post_survey_hs:
-            candidate = hs_before_scour - post_survey_hs[cid]
-            if candidate > 0:
-                scour_m = candidate
-                source = 'survey_HS'
-            elif cid in slab_thickness:
-                scour_m = slab_thickness[cid]
-                source = 'features'
-            else:
-                scour_m = hs_before_scour * 0.80
-                source = 'HS×0.80'
-        elif cid in slab_thickness:
-            scour_m = slab_thickness[cid]
-            source = 'features'
-        else:
-            scour_m = hs_before_scour * 0.80
-            source = 'HS×0.80'
-
-        # Cap scour at current HS — can't remove more snow than exists.
-        # This handles timing mismatches where slab_thickness is from
-        # the snapshot date but the .sno is from a different time
-        # (e.g., end of season with melt/settlement).
-        if scour_m > hs_before_scour:
-            print(f"  {cid:04d}: scour {scour_m:.2f}m > HS {hs_before_scour:.2f}m "
-                  f"— capping at HS")
-            scour_m = hs_before_scour
-
-        if scour_m <= 0.01:
+        survey_hs = post_survey_hs.get(cid) if clean_window else None
+        plan = scour_cluster(sno_data, event_ts, survey_hs,
+                             slab_thickness.get(cid), cid=cid)
+        if plan is None:
             n_skipped += 1
             continue
-
-        scoured = scour_sno(sno_data, scour_m, event_ts)
+        scoured, hs_before_scour, scour_m, source = plan
         ss = scoured['scour_stats']
 
         stats.append({
@@ -560,6 +678,26 @@ def run_reinit(cfg,
         with open(str(stats_path), 'w') as f:
             json.dump(stats, f, indent=2)
         print(f"  Stats saved: {stats_path}")
+
+    # Make the HS forcing agree with the scoured state, or SNOWPACK deposits
+    # the scour straight back as new snow (see align_smet_hs).
+    if stats and not dry_run:
+        smet_dir = smet_dir or cfg.smet_dir
+        t_event = pd.Timestamp(event_ts)
+        t_survey = (pd.Timestamp(date_after)
+                    + pd.Timedelta(hours=cfg.flight_hour_utc))
+        n_files = n_rows = 0
+        for s in stats:
+            p = smet_dir / f"cluster_{s['cid']:04d}.smet"
+            if not p.exists():
+                continue
+            k = align_smet_hs(p, t_event, s['hs_after_m'],
+                              t_survey, s.get('survey_hs_m'))
+            n_files += k > 0
+            n_rows += k
+        print(f"  HS forcing aligned to the scoured state: {n_files}/"
+              f"{len(stats)} SMET file(s), {n_rows} row(s), "
+              f"ramping to the survey at {t_survey:%Y-%m-%dT%H:%M}")
 
     # Strip zero-thickness layers from all .sno files — prevents SIGFPE on
     # restart when SNOWPACK wrote a layer that compacted to zero thickness.
