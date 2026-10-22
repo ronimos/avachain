@@ -214,9 +214,7 @@ def sanitize_sno_dir(sno_dir: Path, dry_run: bool = False) -> int:
 
 def align_smet_hs(smet_path: Path,
                   event_ts: pd.Timestamp,
-                  hs_event_m: float,
-                  survey_ts: pd.Timestamp = None,
-                  hs_survey_m: float = None) -> int:
+                  hs_event_m: float) -> int:
     """Shift a cluster's HS forcing so it agrees with its scoured .sno.
 
     SNOWPACK runs with ENFORCE_MEASURED_SNOW_HEIGHTS, so any excess of the
@@ -225,17 +223,21 @@ def align_smet_hs(smet_path: Path,
     pinned to that survey (endpoint RMSE ~65 cm) and its avalanche dHS is a
     different, usually much smaller, field. Left alone, the restart deposits
     the difference straight back: on the 2026-03-03 replay event, a median
-    80% of each scour was refilled within 6 h, and cluster 5859 crashed on
-    the 78 cm "snowfall".
+    37.9 cm per cluster, and cluster 5859 crashed on a 78 cm "snowfall".
 
-    The rows from event_ts on are shifted by an offset that makes the forcing
-    equal hs_event_m at event_ts and hs_survey_m at survey_ts, varies
-    linearly between, and stays constant after survey_ts, so the forcing's
-    own increments (snowfall, settlement) are kept. Without a survey target
-    the event offset is held throughout. The file stores HS in cm (header
-    units_multiplier 0.01), targets are in m, both in the layer-sum frame that
-    SNOWPACK enforces HS in (see scour_cluster). Only the HS token of each row
-    is rewritten, keeping every other byte.
+    Every row from event_ts on is lowered by one constant offset, so the
+    forcing equals hs_event_m at the event and keeps its own increments
+    (snowfall, settlement) after it. A ramp that also pinned the forcing to
+    the survey HS at the survey time was tried and removed: the survey HS
+    already set the scoured state, so pinning it again cancels the
+    settlement in between and SNOWPACK deposits that as fresh snow. On
+    cluster 0727 (36 deg, 4.1 m) the forcing rose 14 cm in 30 h with no
+    snowfall, and the surface node failed at 207 K under midday sun.
+
+    The file stores HS in cm (header units_multiplier 0.01), hs_event_m is
+    in m, both in the layer-sum frame SNOWPACK enforces HS in (see
+    scour_cluster). Only the HS token of each row is rewritten, keeping
+    every other byte.
 
     Returns the number of rows changed.
     """
@@ -252,48 +254,52 @@ def align_smet_hs(smet_path: Path,
         parts = lines[i].split()
         if len(parts) <= j or parts[0].startswith('#'):
             continue
-        rows.append((i, pd.Timestamp(parts[0]), float(parts[j])))
+        hs = float(parts[j])
+        if hs != nodata:
+            rows.append((i, pd.Timestamp(parts[0]), hs))
 
-    def hs_at(t):
-        """Forcing HS (cm) at t, linear between rows."""
-        ts = [r[1] for r in rows if r[2] != nodata]
-        hs = [r[2] for r in rows if r[2] != nodata]
-        k = np.searchsorted(np.array(ts, dtype='datetime64[ns]'),
-                            np.datetime64(t), side='left')
-        if k < len(ts) and ts[k] == t:
-            return hs[k]
-        if k == 0 or k == len(ts):
-            return None
-        w = (t - ts[k - 1]) / (ts[k] - ts[k - 1])
-        return hs[k - 1] + w * (hs[k] - hs[k - 1])
-
-    f_event = hs_at(event_ts)
-    if f_event is None:
+    # Forcing HS at event_ts, linear between rows
+    k = next((k for k, r in enumerate(rows) if r[1] >= event_ts), len(rows))
+    if k == len(rows):
         return 0
-    d_event = f_event - 100.0 * hs_event_m
-    d_survey = d_event
-    if survey_ts is not None and hs_survey_m is not None and survey_ts > event_ts:
-        f_survey = hs_at(survey_ts)
-        if f_survey is not None:
-            d_survey = f_survey - 100.0 * hs_survey_m
+    if rows[k][1] == event_ts:
+        f_event = rows[k][2]
+    elif k == 0:
+        return 0
+    else:
+        (_, t0, h0), (_, t1, h1) = rows[k - 1], rows[k]
+        f_event = h0 + (event_ts - t0) / (t1 - t0) * (h1 - h0)
+    d = f_event - 100.0 * hs_event_m
 
-    n = 0
-    for i, t, hs in rows:
-        if t < event_ts or hs == nodata:
-            continue
-        if survey_ts is not None and t < survey_ts:
-            w = (t - event_ts) / (survey_ts - event_ts)
-            d = d_event + w * (d_survey - d_event)
-        else:
-            d = d_survey
+    for i, t, hs in rows[k:]:
         tokens = re.split(r'(\s+)', lines[i])   # keeps the separators
         tok = tokens[2 * j]
         decimals = len(tok.split('.')[1]) if '.' in tok else 0
         tokens[2 * j] = f"{max(0.0, hs - d):.{decimals}f}"
         lines[i] = ''.join(tokens)
-        n += 1
     smet_path.write_text(''.join(lines))
-    return n
+    return len(rows) - k
+
+
+def align_scoured_forcing(smet_dir: Path, stats: list,
+                          event_ts: pd.Timestamp) -> int:
+    """align_smet_hs for every scoured cluster, to its scoured HS only.
+
+    stats may carry survey_hs_m; it is deliberately not a forcing target
+    (see align_smet_hs for why a ramp to it was removed). Returns the number
+    of files changed.
+    """
+    n_files = n_rows = 0
+    for s in stats:
+        p = smet_dir / f"cluster_{s['cid']:04d}.smet"
+        if not p.exists():
+            continue
+        k = align_smet_hs(p, event_ts, s['hs_after_m'])
+        n_files += k > 0
+        n_rows += k
+    print(f"  HS forcing aligned to the scoured state: {n_files}/"
+          f"{len(stats)} SMET file(s), {n_rows} row(s)")
+    return n_files
 
 
 def scour_cluster(sno_data: dict, event_ts: str,
@@ -682,22 +688,8 @@ def run_reinit(cfg,
     # Make the HS forcing agree with the scoured state, or SNOWPACK deposits
     # the scour straight back as new snow (see align_smet_hs).
     if stats and not dry_run:
-        smet_dir = smet_dir or cfg.smet_dir
-        t_event = pd.Timestamp(event_ts)
-        t_survey = (pd.Timestamp(date_after)
-                    + pd.Timedelta(hours=cfg.flight_hour_utc))
-        n_files = n_rows = 0
-        for s in stats:
-            p = smet_dir / f"cluster_{s['cid']:04d}.smet"
-            if not p.exists():
-                continue
-            k = align_smet_hs(p, t_event, s['hs_after_m'],
-                              t_survey, s.get('survey_hs_m'))
-            n_files += k > 0
-            n_rows += k
-        print(f"  HS forcing aligned to the scoured state: {n_files}/"
-              f"{len(stats)} SMET file(s), {n_rows} row(s), "
-              f"ramping to the survey at {t_survey:%Y-%m-%dT%H:%M}")
+        align_scoured_forcing(smet_dir or cfg.smet_dir, stats,
+                              pd.Timestamp(event_ts))
 
     # Strip zero-thickness layers from all .sno files — prevents SIGFPE on
     # restart when SNOWPACK wrote a layer that compacted to zero thickness.

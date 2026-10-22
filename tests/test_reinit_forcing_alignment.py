@@ -7,7 +7,9 @@ Run with:  pytest tests/test_reinit_forcing_alignment.py -v
 Two defects, both found on the 2026-03-05 replay survey tick:
 
 1. Reinit scoured the .sno to the post-event survey HS but left the SMET HS
-   forcing at the gap-fill value. SNOWPACK enforces measured HS, so it put
+   forcing at the gap-fill value. (A first fix that also ramped the forcing
+   back to the survey HS at the survey time turned settlement into fresh
+   snow and crashed cluster 0727.) SNOWPACK enforces measured HS, so it put
    the difference straight back as new snow: a median 80% of each scour
    within 6 h, and a 78 cm "snowfall" that crashed cluster 5859.
 2. Frames. SNOWPACK enforces the forcing HS against the slope-normal layer
@@ -29,7 +31,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "avachain"))
 
-from reinitialize_snowpack import align_smet_hs, read_sno, scour_cluster
+from reinitialize_snowpack import (align_scoured_forcing, align_smet_hs,
+                                   read_sno, scour_cluster)
 
 
 # ---------------------------------------------------------------------------
@@ -70,13 +73,12 @@ def _read_hs(p: Path) -> dict:
 
 
 T_EVENT = pd.Timestamp("2026-03-03T12:00")
-T_SURVEY = pd.Timestamp("2026-03-03T16:00")
 
 
 @pytest.fixture
 def forcing(tmp_path):
-    # 144 cm at the event, +2 cm/h of snowfall afterwards
-    hs = {f"2026-03-03T{h:02d}:00": 144.0 + 2.0 * max(0, h - 12)
+    # 144 cm at the event, settling 2 cm/h afterwards (no snowfall)
+    hs = {f"2026-03-03T{h:02d}:00": 144.0 - 2.0 * max(0, h - 12)
           for h in range(10, 19)}
     return _make_smet(tmp_path, hs)
 
@@ -84,40 +86,32 @@ def forcing(tmp_path):
 class TestAlignSmetHs:
 
     def test_forcing_equals_scoured_hs_at_event(self, forcing):
-        align_smet_hs(forcing, T_EVENT, 0.66, T_SURVEY, 0.80)
+        align_smet_hs(forcing, T_EVENT, 0.66)
         assert _read_hs(forcing)["2026-03-03T12:00"] == pytest.approx(66.0)
 
-    def test_forcing_equals_survey_at_survey(self, forcing):
-        align_smet_hs(forcing, T_EVENT, 0.66, T_SURVEY, 0.80)
-        assert _read_hs(forcing)["2026-03-03T16:00"] == pytest.approx(80.0)
-
-    def test_offset_linear_between_event_and_survey(self, forcing):
-        before = _read_hs(forcing)
-        align_smet_hs(forcing, T_EVENT, 0.66, T_SURVEY, 0.80)
-        after = _read_hs(forcing)
-        d_event, d_survey = 144.0 - 66.0, 152.0 - 80.0
-        d_mid = after["2026-03-03T14:00"] - before["2026-03-03T14:00"]
-        assert d_mid == pytest.approx(-(d_event + d_survey) / 2)
-
-    def test_increments_kept_after_survey(self, forcing):
-        before = _read_hs(forcing)
-        align_smet_hs(forcing, T_EVENT, 0.66, T_SURVEY, 0.80)
-        after = _read_hs(forcing)
-        for h in (17, 18):
-            t = f"2026-03-03T{h:02d}:00"
-            assert after[t] - after["2026-03-03T16:00"] == \
-                pytest.approx(before[t] - before["2026-03-03T16:00"])
-
-    def test_no_survey_holds_event_offset(self, forcing):
+    def test_constant_offset_keeps_settlement(self, forcing):
+        # A ramp back to the survey HS turned settlement into a rising
+        # forcing, which SNOWPACK deposited as fresh snow (cluster 0727).
         before = _read_hs(forcing)
         align_smet_hs(forcing, T_EVENT, 0.66)
         after = _read_hs(forcing)
-        for t in ("2026-03-03T12:00", "2026-03-03T15:00", "2026-03-03T18:00"):
+        for h in range(12, 19):
+            t = f"2026-03-03T{h:02d}:00"
             assert before[t] - after[t] == pytest.approx(78.0)
+        rising = [after[f"2026-03-03T{h + 1:02d}:00"] - after[f"2026-03-03T{h:02d}:00"]
+                  for h in range(12, 18)]
+        assert max(rising) <= 0.0
+
+    def test_event_between_rows_is_interpolated(self, forcing):
+        align_smet_hs(forcing, pd.Timestamp("2026-03-03T13:30"), 0.66)
+        after = _read_hs(forcing)
+        # forcing at 13:30 was 141 cm, so the offset is 75 cm from 14:00 on
+        assert after["2026-03-03T14:00"] == pytest.approx(140.0 - 75.0)
+        assert after["2026-03-03T13:00"] == pytest.approx(142.0)
 
     def test_rows_before_event_untouched(self, forcing):
         before = forcing.read_text().splitlines()
-        align_smet_hs(forcing, T_EVENT, 0.66, T_SURVEY, 0.80)
+        align_smet_hs(forcing, T_EVENT, 0.66)
         after = forcing.read_text().splitlines()
         for b, a in zip(before, after):
             if b.startswith("2026-03-03T1") and b[:16] < "2026-03-03T12:00":
@@ -125,7 +119,7 @@ class TestAlignSmetHs:
 
     def test_only_hs_token_changes(self, forcing):
         before = forcing.read_text().splitlines()
-        align_smet_hs(forcing, T_EVENT, 0.66, T_SURVEY, 0.80)
+        align_smet_hs(forcing, T_EVENT, 0.66)
         after = forcing.read_text().splitlines()
         assert len(after) == len(before)
         for b, a in zip(before, after):
@@ -137,11 +131,24 @@ class TestAlignSmetHs:
                 assert len(bt[-1].split(".")[1]) == len(at[-1].split(".")[1])
 
     def test_clipped_at_zero(self, forcing):
-        align_smet_hs(forcing, T_EVENT, 0.0, T_SURVEY, 0.0)
+        align_smet_hs(forcing, T_EVENT, 0.0)
         assert min(_read_hs(forcing).values()) >= 0.0
 
     def test_returns_rows_changed(self, forcing):
-        assert align_smet_hs(forcing, T_EVENT, 0.66, T_SURVEY, 0.80) == 7
+        assert align_smet_hs(forcing, T_EVENT, 0.66) == 7
+
+    def test_reinit_does_not_pin_forcing_to_the_survey(self, forcing):
+        # The stats carry the survey HS; aligning to it at the survey time
+        # (the first fix) made this settling forcing rise.
+        stats = [{"cid": 1, "hs_after_m": 0.66, "survey_hs_m": 0.66}]
+        assert align_scoured_forcing(forcing.parent, stats, T_EVENT) == 1
+        after = _read_hs(forcing)
+        assert after["2026-03-03T18:00"] == pytest.approx(66.0 - 12.0)
+
+    def test_event_after_last_row_changes_nothing(self, forcing):
+        before = forcing.read_text()
+        assert align_smet_hs(forcing, pd.Timestamp("2026-03-04T00:00"), 0.66) == 0
+        assert forcing.read_text() == before
 
 
 # ---------------------------------------------------------------------------
