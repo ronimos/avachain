@@ -10,11 +10,17 @@ Handles unit conversions from CAIC raw sensor units to SMET/SI:
   - Snow height: cm → cm (stored in SMET, multiplier 0.01 for m)
 """
 
+import os
+
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
+
+# build_cluster_smet(since=...) rebuilds from this far before `since`; it
+# must exceed the gap fill's max_gap_hours (48 h). See build_cluster_smet.
+SINCE_MARGIN = pd.Timedelta(days=7)
 
 
 # --- Unit conversion functions ---
@@ -502,12 +508,26 @@ def _augment_frame(station_header: dict, station_df: pd.DataFrame,
     return header, df, add_fields
 
 
-def _write_smet_frame(output_path: str, header: dict, df: pd.DataFrame) -> None:
-    """Write a header (as read_smet returns it) and frame back to a SMET file.
+def _smet_header_text(header: dict) -> str:
+    """The header block of a SMET file, through the [DATA] line."""
+    fields = header['fields_list']
+    lines = ["SMET 1.1 ASCII\n", "[HEADER]\n"]
+    for key in header['_header_order']:
+        if key == 'fields':
+            lines.append(f"fields           = timestamp {' '.join(fields)}\n")
+        elif key == 'units_offset':
+            vals_str = ' '.join(f"{v:g}" for v in header['units_offset_list'])
+            lines.append(f"units_offset     = 0 {vals_str}\n")
+        elif key == 'units_multiplier':
+            vals_str = ' '.join(f"{v:g}" for v in header['units_multiplier_list'])
+            lines.append(f"units_multiplier = 1 {vals_str}\n")
+        else:
+            lines.append(f"{key:<16} = {header[key]}\n")
+    lines.append("[DATA]\n")
+    return ''.join(lines)
 
-    Header keys keep their original order; fields and units come from the
-    header's *_list entries. NaN is written as nodata.
-    """
+
+def _smet_row_lines(header: dict, df: pd.DataFrame):
     fields = header['fields_list']
     nodata = float(header.get('nodata', -999))
     arr = df[fields].to_numpy()
@@ -515,28 +535,55 @@ def _write_smet_frame(output_path: str, header: dict, df: pd.DataFrame) -> None:
     def _fmt(v: float) -> str:
         return f"{nodata:.3f}" if np.isnan(v) else f"{v:.3f}"
 
+    for i, ts in enumerate(df.index):
+        ts_str = ts.strftime("%Y-%m-%dT%H:%M:%S")
+        yield f"{ts_str}  {'  '.join(_fmt(v) for v in arr[i])}\n"
+
+
+def _row_ts(line: bytes) -> str:
+    """A data row's timestamp as YYYY-MM-DDTHH:MM:SS. smet_append writes rows
+    without seconds, write_smet with."""
+    tok = line.split(None, 1)[0].decode()
+    return tok if len(tok) == 19 else tok + ":00"
+
+
+def _write_smet_frame(output_path: str, header: dict, df: pd.DataFrame,
+                      since: Optional[pd.Timestamp] = None) -> bool:
+    """Write a header (as read_smet returns it) and frame back to a SMET file.
+
+    Header keys keep their original order; fields and units come from the
+    header's *_list entries. NaN is written as nodata.
+
+    With `since`, only the rows from `since` on are rewritten: the existing
+    file is truncated at its first row at or after `since` and the frame's
+    rows from there are appended. The earlier rows are kept byte for byte.
+    This falls back to a full write unless the file exists with the same
+    header and its kept rows end on the frame row just before `since`.
+    Returns True if it spliced, False if it wrote the whole file.
+    """
+    head = _smet_header_text(header)
+    if since is not None and os.path.exists(output_path):
+        since_s = since.strftime("%Y-%m-%dT%H:%M:%S")
+        before = df.index[df.index < since]
+        want_last = before[-1].strftime("%Y-%m-%dT%H:%M:%S") if len(before) else None
+        with open(output_path, 'r+b') as f:
+            if f.read(len(head)) == head.encode():
+                offset, last = f.tell(), None
+                for line in f:
+                    if line.strip() and _row_ts(line) >= since_s:
+                        break
+                    if line.strip():
+                        last = _row_ts(line)
+                    offset += len(line)
+                if want_last is not None and last == want_last:
+                    f.seek(offset)
+                    f.truncate()
+                    f.write(''.join(_smet_row_lines(header, df[df.index >= since])).encode())
+                    return True
     with open(output_path, 'w') as f:
-        f.write("SMET 1.1 ASCII\n")
-        f.write("[HEADER]\n")
-
-        for key in header['_header_order']:
-            if key == 'fields':
-                f.write(f"fields           = timestamp {' '.join(fields)}\n")
-            elif key == 'units_offset':
-                vals_str = ' '.join(f"{v:g}" for v in header['units_offset_list'])
-                f.write(f"units_offset     = 0 {vals_str}\n")
-            elif key == 'units_multiplier':
-                vals_str = ' '.join(f"{v:g}" for v in header['units_multiplier_list'])
-                f.write(f"units_multiplier = 1 {vals_str}\n")
-            else:
-                f.write(f"{key:<16} = {header[key]}\n")
-
-        f.write("[DATA]\n")
-
-        for i, ts in enumerate(df.index):
-            ts_str = ts.strftime("%Y-%m-%dT%H:%M:%S")
-            vals = [_fmt(v) for v in arr[i]]
-            f.write(f"{ts_str}  {'  '.join(vals)}\n")
+        f.write(head)
+        f.writelines(_smet_row_lines(header, df))
+    return False
 
 
 def fill_smet_gaps_from_refill(smet_path: str,
@@ -638,7 +685,8 @@ def build_cluster_smet(df: pd.DataFrame, output_path: str,
                        refill_df: Optional[pd.DataFrame] = None,
                        max_gap_hours: int = 48,
                        fields: Optional[list] = None,
-                       ilwr_source: str = "parameterized") -> dict:
+                       ilwr_source: str = "parameterized",
+                       since: Optional[pd.Timestamp] = None) -> dict:
     """
     write_smet, augment_smet_with_refill, fill_smet_gaps_from_refill — in
     memory, with one write instead of three full-file writes and two parses.
@@ -652,16 +700,50 @@ def build_cluster_smet(df: pd.DataFrame, output_path: str,
 
     Without a refill this is write_smet.
 
+    With `since`, only the rows from `since` on are rebuilt and rewritten
+    (see _write_smet_frame), from a window starting SINCE_MARGIN earlier.
+    The margin must exceed max_gap_hours: a station gap that reaches `since`
+    and is cut by the window start is then still longer than max_gap_hours
+    inside the window, so it stays unfilled exactly as in the full build,
+    and the HS interpolation (forward, limit max_gap_hours) has the same
+    anchors. If the splice is refused, the whole file is rebuilt. Without a
+    refill, `since` is ignored and the whole file is written.
+
+    Rows from `since` on are byte-identical to a full rebuild. Earlier rows
+    are kept, which a full rebuild does not always match: missing hours that
+    straddle `since` have their HS interpolated toward the first row after
+    them, so new data moves the part before `since` as well. The survey
+    cycle restarts SNOWPACK at `since`, so it never reads those as forcing.
+
     Returns
     -------
     dict with 'added' (refill fields added), 'n_rows_inserted', 'n_rows_filled'
+    (counted over the window when spliced), 'spliced'
     """
     if fields is None:
         fields = ["TA", "RH", "VW", "DW", "ISWR", "ILWR", "HS"]
     if refill_df is None:
         write_smet(df, output_path, config, fields, ilwr_source)
-        return {'added': [], 'n_rows_inserted': 0, 'n_rows_filled': 0}
+        return {'added': [], 'n_rows_inserted': 0, 'n_rows_filled': 0,
+                'spliced': False}
+    if since is not None:
+        margin = max(SINCE_MARGIN, pd.Timedelta(hours=2 * max_gap_hours))
+        window = df[df.index >= pd.Timestamp(since) - margin]
+        if len(window) and window.index[0] < pd.Timestamp(since):
+            r = _build_frame(window, config, refill_header, refill_df,
+                             max_gap_hours, fields, ilwr_source)
+            if _write_smet_frame(output_path, r[0], r[1], pd.Timestamp(since)):
+                return {'added': r[2], **r[3], 'spliced': True}
+    header, frame, added, stats = _build_frame(
+        df, config, refill_header, refill_df, max_gap_hours, fields, ilwr_source)
+    _write_smet_frame(output_path, header, frame)
+    return {'added': added, **stats, 'spliced': False}
 
+
+def _build_frame(df, config, refill_header, refill_df, max_gap_hours,
+                 fields, ilwr_source):
+    """Header and frame of one cluster SMET: station values text-rounded,
+    then refill augmentation and gap fill (see build_cluster_smet)."""
     items = _smet_header_items(config, fields, ilwr_source)
     header = dict(items)
     header['_header_order'] = [k for k, _ in items]
@@ -677,8 +759,7 @@ def build_cluster_smet(df: pd.DataFrame, output_path: str,
 
     header, frame, added = _augment_frame(header, frame, refill_header, refill_df)
     frame, stats = _fill_frame(header, frame, refill_df, max_gap_hours)
-    _write_smet_frame(output_path, header, frame)
-    return {'added': added, **stats}
+    return header, frame, added, stats
 
 
 # --- Main: convert station CSV to single SMET file ---

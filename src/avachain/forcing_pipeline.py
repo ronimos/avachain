@@ -34,6 +34,7 @@ import json
 import pickle
 import datetime
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -1025,8 +1026,16 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
 # Step 8: Write SMET files
 # =====================================================================
 
-def step_smet(cfg: ProjectConfig):
-    """Generate per-cluster SMET forcing files from hourly grids + saved clusters."""
+def step_smet(cfg: ProjectConfig, since: Optional[pd.Timestamp] = None):
+    """Generate per-cluster SMET forcing files from hourly grids + saved clusters.
+
+    since: rewrite only the rows from this time on and keep each file's
+    earlier rows (smet_writer.build_cluster_smet). A survey tick passes the
+    previous survey: rows before it do not change when a new survey
+    arrives, and the survey cycle restarts SNOWPACK from it. A file that
+    cannot be spliced (missing, different header, rows not reaching
+    `since`) is written whole. None writes every file whole.
+    """
     cfg.ensure_dirs()
 
     from clustering import compute_cluster_representatives
@@ -1129,7 +1138,7 @@ def step_smet(cfg: ProjectConfig):
             tz_offset=0,
         )
         out_path = smet_dir / f"{cell_config.station_id}.smet"
-        tasks.append((str(out_path), cell_config, rep['hs_series']))
+        tasks.append((str(out_path), cell_config, rep['hs_series'], since))
 
     # Clusters are independent files, so they write in parallel. fork shares
     # the weather and refill frames with the workers instead of pickling them
@@ -1145,8 +1154,12 @@ def step_smet(cfg: ProjectConfig):
 
     sizes = [r['n_cells'] for r in representatives.values()]
     n_domain = int(np.sum(cluster_map > 0))
+    n_spliced = sum(r['spliced'] for r in results)
     print(f"\n{len(representatives)} SMET files written to {smet_dir} "
           f"({SMET_WORKERS} workers)")
+    if since is not None:
+        print(f"  From {since:%Y-%m-%dT%H:%M} only: {n_spliced} spliced, "
+              f"{len(results) - n_spliced} written whole")
     print(f"  Coverage: {sum(sizes)} / {n_domain} domain cells")
     print(f"  Cluster sizes: min={min(sizes)}, median={np.median(sizes):.0f}, "
           f"max={max(sizes)}")
@@ -1178,14 +1191,14 @@ def _init_smet_worker(wx_forcing, timestamps, refill_header, refill_df):
 def _write_cluster_smet(task) -> dict:
     """Build one cluster's SMET: weather forcing + its representative HS."""
     from smet_writer import build_cluster_smet
-    out_path, cell_config, hs_series = task
+    out_path, cell_config, hs_series, since = task
     w = _SMET_WORKER
     cell_df = w['wx_forcing'].copy()
     cell_df['HS'] = pd.Series(hs_series * 100.0, index=w['timestamps'])
     cell_df['HS'] = cell_df['HS'].interpolate(method='time').bfill().ffill()
     return build_cluster_smet(cell_df, out_path, cell_config,
                               w['refill_header'], w['refill_df'],
-                              max_gap_hours=48)
+                              max_gap_hours=48, since=since)
 
 
 # =====================================================================
@@ -1362,6 +1375,10 @@ def main():
                              "(ignores --event-date/--date-before/--date-after)")
     parser.add_argument('--toml', default=None,
                         help="Path to slope_config.toml; overrides --project-dir when provided")
+    parser.add_argument('--since-survey-anchor', action='store_true',
+                        help="smet: rewrite only the rows from the survey anchor "
+                             "(the previous survey) on, keeping the earlier rows. "
+                             "Without it every file is written whole.")
 
     args = parser.parse_args()
 
@@ -1388,6 +1405,15 @@ def main():
     elif args.step == 'cluster_update':
         from cluster_update import step_cluster_update
         step_cluster_update(cfg, args)
+    elif args.step == 'smet':
+        since = None
+        if args.since_survey_anchor:
+            from snowpack_cycle import read_survey_anchor, CycleError
+            try:
+                since = read_survey_anchor(cfg)
+            except CycleError as exc:
+                print(f"  {exc}\n  -> writing every SMET whole")
+        step_smet(cfg, since=since)
     elif args.step == 'reinit':
         # Stash args on cfg for step_reinit to access
         cfg._reinit_args = args
