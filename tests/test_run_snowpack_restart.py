@@ -35,7 +35,14 @@ out=$(awk -F'= *' '/^\[Output\]/{o=1} o && /^SNOWPATH/{print $2; exit}' "$ini")
 snin=$(awk -F'= *' '/^\[Input\]/{i=1} i && /^SNOWPATH/{print $2; exit}' "$ini")
 echo "BEGIN=$b END=$e"
 echo "INPUT_PROFILEDATE=$(awk -F'= *' '/^ProfileDate/{print $2}' "$snin/$exp.sno")"
-if [[ -n "${STUB_STALL:-}" ]]; then
+step=$(awk -F'= *' '/^CALCULATION_STEP_LENGTH/{print $2}' "$ini")
+echo "STEP=${step:-master}"
+if [[ -n "${STUB_CRASH:-}" && ( -z "$step" || "$STUB_CRASH" == always ) ]]; then
+  # SNOWPACK's surface-node failure: erases its output .sno, writes no new one.
+  echo "[E] [Snowpack.cc:1043] Temperature out of bound at beginning of iteration!"
+  rm -f "$out/${exp}_${exp}.sno"
+  exit 1
+elif [[ -n "${STUB_STALL:-}" ]]; then
   # SNOWPACK with ENFORCE_MEASURED_SNOW_HEIGHTS and HS=-999 in the forcing:
   # logs "missing { HS }", leaves the restart file where it was, and still
   # prints FINISHED.
@@ -183,3 +190,50 @@ def test_a_run_that_reaches_the_end_date_is_ok(slope):
     _sno(d, "cluster_0001_cluster_0001.sno", "2026-02-06T12:00:00")
     r = _run(d, stub, "", "2026-02-08T12:00")
     assert "OK: 1   Failed: 0" in r.stdout
+
+
+def test_a_temperature_bound_crash_is_retried_at_a_shorter_step(slope):
+    """Replay tick 2026-03-06: 4 clusters crashed at 15 min, all ran at 5."""
+    d, stub = slope
+    _add_cluster(d, "cluster_0001")
+    _sno(d, "cluster_0001_anchor.sno", "2026-02-05T12:00:00")
+    r = _run(d, stub, "", "2026-02-06T12:00", RESTART_FROM="anchor", STUB_CRASH="1")
+    assert "OK: 1   Failed: 0" in r.stdout, r.stdout
+    assert "Re-run at 5 min" in r.stdout
+    first = (d / "output" / "cluster_0001.log.first").read_text()
+    assert "STEP=master" in first and "out of bound" in first
+    log = _log(d, "cluster_0001")
+    assert "STEP=5" in log
+    # Same restart and begin date as the first attempt
+    assert "BEGIN=2026-02-05T12:00:00 " in log
+    assert "INPUT_PROFILEDATE=2026-02-05T12:00:00" in log
+
+
+def test_a_crash_that_persists_at_the_shorter_step_still_fails(slope):
+    d, stub = slope
+    _add_cluster(d, "cluster_0001")
+    _sno(d, "cluster_0001_anchor.sno", "2026-02-05T12:00:00")
+    r = _run(d, stub, "", "2026-02-06T12:00", RESTART_FROM="anchor",
+             STUB_CRASH="always")
+    assert "OK: 0   Failed: 1" in r.stdout
+
+
+def test_retry_can_be_disabled(slope):
+    d, stub = slope
+    _add_cluster(d, "cluster_0001")
+    _sno(d, "cluster_0001_anchor.sno", "2026-02-05T12:00:00")
+    r = _run(d, stub, "", "2026-02-06T12:00", RESTART_FROM="anchor",
+             STUB_CRASH="1", RETRY_STEP_MIN="0")
+    assert "OK: 0   Failed: 1" in r.stdout
+    assert not (d / "output" / "cluster_0001.log.first").exists()
+
+
+def test_only_crashed_clusters_are_retried(slope):
+    """A stalled forecast (HS=-999) fails the same way at any step: no retry."""
+    d, stub = slope
+    _add_cluster(d, "cluster_0001")
+    _sno(d, "cluster_0001_cluster_0001.sno", "2026-02-06T12:00:00")
+    r = _run(d, stub, "", "2026-02-08T12:00", STUB_STALL="1")
+    assert "OK: 0   Failed: 1" in r.stdout
+    assert "Re-run" not in r.stdout
+    assert not (d / "output" / "cluster_0001.log.first").exists()

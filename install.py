@@ -183,6 +183,15 @@ _RUN_SNOWPACK_TEMPLATE = """\
 #
 # SKIP_ZARR=1 leaves the Zarr alone; callers that know the restart time
 # update it themselves.
+#
+# A cluster whose log shows "out of bound" is re-run once from the same
+# restart at RETRY_STEP_MIN (default 5; 0 disables) instead of the master
+# config's 15 min step. New snow at the LEHNING_NEW density floor
+# (~30 kg/m3) over a wet pack sent the surface node to 206 K under night
+# cooling at 15 min: replay tick 2026-03-06, 4 of 6565 clusters. All 4 ran
+# at 5 and at 1 min, and those agree to ~1 mm HS and 0.01 K TSS, so the
+# retry is converged numerics, not a physics change. Only the crashed
+# clusters are re-run; every other cluster is untouched.
 
 # --- Paths ---
 SNOWPACK_BIN=${{SNOWPACK_BIN:-{snowpack_bin}}}
@@ -223,6 +232,8 @@ esac
 n_restart=0; n_fresh=0
 missing_anchor=()
 ran=()
+declare -A cbdates
+RETRY_STEP_MIN=${{RETRY_STEP_MIN:-5}}
 
 MAX_JOBS={max_jobs}
 
@@ -347,6 +358,7 @@ EXPERIMENT = $cid
 EOF
 
     ran+=("$cid")
+    cbdates[$cid]=$cbdate
     "$SNOWPACK_BIN" -c "$cluster_ini" -b "$cbdate" -e "$EDATE" \\
         > "$OUTPUT_DIR/${{cid}}.log" 2>&1 &
 
@@ -365,6 +377,32 @@ if [[ ${{#missing_anchor[@]}} -gt 0 ]]; then
     printf '      %s\n' "${{missing_anchor[@]}}" >&2
 fi
 [[ $n_clamped -gt 0 ]] && echo "    Slope clamped to ${{MAX_SLOPE_DEG}} deg for $n_clamped cluster(s)"
+
+# Retry numerical crashes at a shorter step (see header). input/snow still
+# holds the restart: SNOWPACK erases only its output .sno when it starts.
+retried=()
+if [[ "$RETRY_STEP_MIN" != 0 ]]; then
+    for cid in "${{ran[@]}}"; do
+        log="$OUTPUT_DIR/${{cid}}.log"
+        grep -q "out of bound" "$log" 2>/dev/null || continue
+        mv "$log" "$log.first"
+        printf '\n[Snowpack]\nCALCULATION_STEP_LENGTH = %s\n' "$RETRY_STEP_MIN" \\
+            >> "$OUTPUT_DIR/${{cid}}.ini"
+        retried+=("$cid")
+        "$SNOWPACK_BIN" -c "$OUTPUT_DIR/${{cid}}.ini" -b "${{cbdates[$cid]}}" -e "$EDATE" \\
+            > "$log" 2>&1 &
+        ct=$(ps aux | grep "[s]nowpack.*exe" | wc -l)
+        while [[ $ct -ge $MAX_JOBS ]]; do
+            sleep 1
+            ct=$(ps aux | grep "[s]nowpack.*exe" | wc -l)
+        done
+    done
+    wait
+    if [[ ${{#retried[@]}} -gt 0 ]]; then
+        echo "    Re-run at ${{RETRY_STEP_MIN}} min after a temperature-bound crash: ${{#retried[@]}} cluster(s)"
+        printf '      %s\n' "${{retried[@]}}"
+    fi
+fi
 
 n_ok=0; n_fail=0
 failed_list=()
