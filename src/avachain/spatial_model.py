@@ -175,6 +175,65 @@ def compute_terrain_features(dem: np.ndarray, resolution: float = 1.0) -> dict:
 # DEM I/O
 # =====================================================================
 
+# Survey pixels (4.6 cm) outside this range are errors, not snow: below the
+# photogrammetric noise band (the clean 03-05 survey's p5 is -33 cm) or above
+# any plausible HS. They are common: 22% of 03-02's pixels are below -0.5 m
+# and the p0.1 is -10.9 m even on clean surveys. Averaged into the 1 m cell
+# with the good pixels, they moved 5% of 03-02's cells by more than 5 cm
+# (p99 47 cm, max 7.1 m).
+SURVEY_PIXEL_MIN_M = -0.5
+# A 1 m cell needs at least this share of valid pixels, else it is NaN (no
+# data) rather than a value from a handful of pixels or 0 after clipping.
+SURVEY_MIN_PIXEL_SHARE = 0.5
+
+
+def load_and_resample_survey(src_path: str, ref_path: str,
+                             clip_min: float = None,
+                             clip_max: float = None,
+                             pixel_min: float = SURVEY_PIXEL_MIN_M,
+                             min_pixel_share: float = SURVEY_MIN_PIXEL_SHARE
+                             ) -> np.ndarray:
+    """Resample a UAS snow-height raster to the reference grid, cleaning it
+    at its native resolution first.
+
+    - nodata and pixels outside [pixel_min, clip_max] are dropped;
+    - each 1 m cell is the MEDIAN of its valid pixels, so a minority of
+      outliers of either sign cannot move it (the mean let a few -5 m
+      pixels shift a cell by metres);
+    - a cell with fewer than min_pixel_share of its pixels valid is NaN;
+    - clip_min/clip_max then apply as in load_and_resample, so small noisy
+      negatives near bare ground still become 0.
+    """
+    with rasterio.open(ref_path) as ref:
+        ref_transform = ref.transform
+        ref_shape = (ref.height, ref.width)
+        ref_crs = ref.crs
+
+    with rasterio.open(src_path) as src:
+        a = src.read(1).astype(np.float32)
+        if src.nodata is not None:
+            a[a == src.nodata] = np.nan
+        footprint = np.isfinite(a)
+        upper = np.inf if clip_max is None else clip_max
+        a[~footprint | (a < pixel_min) | (a > upper)] = np.nan
+        kw = dict(src_transform=src.transform, src_crs=src.crs,
+                  dst_transform=ref_transform, dst_crs=ref_crs,
+                  src_nodata=np.nan, dst_nodata=np.nan)
+        dst = np.full(ref_shape, np.nan, dtype=np.float32)
+        reproject(a, dst, resampling=Resampling.med, **kw)
+        share = np.full(ref_shape, np.nan, dtype=np.float32)
+        reproject(np.isfinite(a).astype(np.float32), share,
+                  resampling=Resampling.average,
+                  **{**kw, 'src_nodata': None})
+    dst[~(share >= min_pixel_share)] = np.nan
+
+    if clip_min is not None:
+        dst = np.where(~np.isnan(dst), np.maximum(dst, clip_min), np.nan)
+    if clip_max is not None:
+        dst = np.where(~np.isnan(dst) & (dst <= clip_max), dst, np.nan)
+    return dst
+
+
 def load_and_resample(src_path: str, ref_path: str,
                       clip_min: float = None,
                       clip_max: float = None) -> np.ndarray:

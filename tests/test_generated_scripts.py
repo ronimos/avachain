@@ -113,6 +113,17 @@ class TestPerClusterTerrain:
         assert 's/WRFAZI/$sazi/g' in sh
 
     @pytest.mark.parametrize("slope", SLOPES)
+    def test_hs_forcing_projected_on_the_run_slope(self, install, slope):
+        # Vertical HS must reach SNOWPACK x cos(slope), with the .sno's
+        # (clamped) SlopeAngle, or every pack is built 1/cos too thick.
+        text = install._render_run_snowpack(_cfg(slope))
+        assert "HS::filter1    = MULT" in text
+        assert "HS::arg1::CST  = $hs_factor" in text
+        assert "/^SlopeAngle/" in text and '"$cluster_sno")' in text
+        # the factor is read after the .sno for this run is in place
+        assert text.index('hs_factor=') > text.index('cp "$restart_sno" "$cluster_sno"')
+
+    @pytest.mark.parametrize("slope", SLOPES)
     def test_steep_slopes_are_clamped(self, install, slope):
         """46 of 6565 clusters exceed 55 deg; p99 is 49.7 deg."""
         sh = install._render_run_snowpack(_cfg(slope))

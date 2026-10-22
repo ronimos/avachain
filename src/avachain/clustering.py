@@ -143,14 +143,28 @@ def build_survey_hs_matrix(survey_grids: dict, valid_mask: np.ndarray) -> tuple:
         grid = survey_grids[d]
         hs_full[:, j] = grid[rows, cols]
 
-    # Filter out cells with any NaN across surveys
-    valid_rows = ~np.isnan(hs_full).any(axis=1)
+    # Cells with no data on some surveys (too few valid survey pixels; see
+    # spatial_model.load_and_resample_survey) take that survey's value from
+    # the same cell's neighbouring surveys. Dropping them, as before, would
+    # cut every cell missing on any one survey out of the cluster map: up
+    # to 6% of the domain per survey once bad pixels are masked. Only cells
+    # with no data on every survey are dropped.
+    nan = np.isnan(hs_full)
+    n_filled = int(nan.any(axis=1).sum())
+    valid_rows = ~nan.all(axis=1)
     hs_matrix = hs_full[valid_rows]
     cell_idx = candidate_idx[valid_rows]
+    if nan.any():
+        x = np.arange(n_surveys)
+        for i in np.flatnonzero(np.isnan(hs_matrix).any(axis=1)):
+            row = hs_matrix[i]
+            ok = ~np.isnan(row)
+            hs_matrix[i] = np.interp(x, x[ok], row[ok])
 
     n_dropped = len(candidate_idx) - len(cell_idx)
-    if n_dropped > 0:
-        print(f"  Dropped {n_dropped} cells with NaN in one or more surveys")
+    if n_filled or n_dropped:
+        print(f"  {n_filled} cells had no data on some surveys (filled from the "
+              f"cell's neighbouring surveys); {n_dropped} with none dropped")
 
     return hs_matrix, cell_idx, dates
 
@@ -366,7 +380,7 @@ def compute_cluster_representatives(cluster_map: np.ndarray,
     Returns
     -------
     dict mapping cluster_id -> {
-        'hs_series': 1D array (n_times,) mean HS in meters,
+        'hs_series': 1D array (n_times,) cell-median HS in meters,
         'n_cells': int,
         'centroid_row': float,
         'centroid_col': float,
@@ -392,8 +406,12 @@ def compute_cluster_representatives(cluster_map: np.ndarray,
 
         cell_hs = cell_hs[:, valid_cells]
 
-        with np.errstate(all='ignore'):
-            hs_series = np.nanmean(cell_hs, axis=1)
+        # Median, not mean: single cells read 0 or 4+ m against their
+        # neighbours (vegetation, rock, edge returns), and a mean let one of
+        # them move a small cluster's HS by metres.
+        with np.errstate(all='ignore'), warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            hs_series = np.nanmedian(cell_hs, axis=1)
 
         # Interpolate over any remaining all-NaN timesteps (isolated boundary
         # gaps), then fill any leading/trailing NaN with 0 (bare ground).
@@ -442,6 +460,177 @@ def adaptive_split_threshold(median_hs_m: float,
     At 120+ cm HS → threshold = 12 cm (max clamp, upper snowpack still matters).
     """
     return float(np.clip(rel_frac * median_hs_m, min_abs, max_abs))
+
+
+def persistent_split(X: np.ndarray, min_cluster_size: int = 4,
+                     min_surveys: int = 4) -> Optional[dict]:
+    """Test a cluster for a persistent two-way HS difference between its cells.
+
+    X is (n_cells, n_surveys) HS in metres, NaN where there is no data (exact
+    zeros and invalid cluster-surveys; see survey_validity). Each cell's
+    anomaly is its HS minus the cluster median of that survey; its persistent
+    anomaly is the median over surveys.
+
+    The single-survey std that assess_cluster_quality used flagged 3102 of
+    3102 eligible clusters: the median threshold (7.9 cm) is below the
+    median within-cluster std on clean surveys (8.2 cm), and the max over
+    23 surveys only grows. Noise and survey artefacts do not repeat; terrain
+    does. So the two groups are formed from one half of the surveys (even
+    or odd) and their difference is measured on the other half, both ways:
+    effect = the smaller of the two cross-validated median differences,
+    consistency = the smaller share of held-out surveys where the higher
+    group stays higher. Labels for the actual split use all surveys.
+
+    Returns None when there are too few cells or surveys; else a dict with
+    effect_m, consistency, labels (1 = higher group; -1 = no data) and the
+    cluster median HS.
+    """
+    n = X.shape[0]
+    if n < 2 * min_cluster_size:
+        return None
+    col_ok = (np.isfinite(X).sum(axis=0) >= max(2 * min_cluster_size, 0.5 * n))
+    cols = np.flatnonzero(col_ok)
+    if cols.size < min_surveys:
+        return None
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        med = np.nanmedian(X[:, cols], axis=0)
+        A = X[:, cols] - med
+
+        def groups(sub):
+            p = np.nanmedian(A[:, sub], axis=1)
+            ok = np.flatnonzero(np.isfinite(p))
+            if ok.size < 2 * min_cluster_size:
+                return None
+            order = ok[np.argsort(p[ok], kind='stable')]
+            v = p[order]
+            best, k_best = -1.0, None
+            for k in range(min_cluster_size, v.size - min_cluster_size + 1):
+                lo, hi = v[:k], v[k:]
+                score = k * (v.size - k) * (hi.mean() - lo.mean()) ** 2
+                if score > best:
+                    best, k_best = score, k
+            if k_best is None:
+                return None
+            lab = np.full(n, -1)
+            lab[order[:k_best]] = 0
+            lab[order[k_best:]] = 1
+            return lab
+
+        def effect(lab, sub):
+            d = []
+            for j in sub:
+                hi = X[lab == 1, cols[j]]
+                lo = X[lab == 0, cols[j]]
+                if np.isfinite(hi).any() and np.isfinite(lo).any():
+                    d.append(np.nanmedian(hi) - np.nanmedian(lo))
+            if not d:
+                return 0.0, 0.0
+            d = np.array(d)
+            return float(np.median(d)), float((d > 0).mean())
+
+        idx = np.arange(cols.size)
+        even, odd = idx[0::2], idx[1::2]
+        folds = []
+        for fit, test in ((even, odd), (odd, even)):
+            lab = groups(fit)
+            if lab is None:
+                return None
+            folds.append(effect(lab, test))
+        labels = groups(idx)
+        if labels is None:
+            return None
+    return {'effect_m': min(f[0] for f in folds),
+            'consistency': min(f[1] for f in folds),
+            'labels': labels,
+            'median_hs_m': float(np.nanmedian(X[:, cols]))}
+
+
+def assess_persistent_splits(cluster_map: np.ndarray, survey_grids: dict,
+                             invalid: dict = None, min_cluster_size: int = 4,
+                             rel_frac: float = 0.10, min_abs: float = 0.03,
+                             max_abs: float = 0.12, null_pct: float = 99.0,
+                             seed: int = 0) -> tuple:
+    """Which clusters have a persistent two-way HS split (persistent_split).
+
+    survey_grids: {date: HS grid}; exact zeros are no data. invalid: {date:
+    cluster ids the survey is biased for} (survey_validity); those
+    cluster-surveys are no data too.
+
+    The thresholds come from a null computed on the same data: each
+    cluster's cells shuffled independently within every survey, which keeps
+    each survey's noise and destroys persistence. A cluster splits when its
+    cross-validated effect exceeds both the null's null_pct percentile and
+    adaptive_split_threshold (10% of HS, 3-12 cm), and its consistency
+    exceeds the null's null_pct percentile. On the 2025-26 replay grids (23
+    surveys, 3076 testable clusters): null p99 5.2 cm / 0.78, 405 clusters
+    split (13%) with median effect 16 cm, against 4 (0.13%) on the null.
+    The null is recomputed each time, so with fewer surveys early in the
+    season the thresholds tighten on their own.
+
+    Returns (results, thresholds): results is a list of dicts per cluster
+    (cid, n_cells, effect_m, consistency, threshold_m, should_split, labels,
+    rows, cols); thresholds holds the null percentiles.
+    """
+    invalid = invalid or {}
+    dates = sorted(survey_grids)
+    inside = cluster_map > 0
+    ids = cluster_map[inside]
+    rr, cc = np.nonzero(inside)
+    order = np.argsort(ids, kind='stable')
+    ids, rr, cc = ids[order], rr[order], cc[order]
+    uniq, start = np.unique(ids, return_index=True)
+    ncell = np.diff(np.append(start, ids.size))
+    M = np.stack([survey_grids[d][rr, cc] for d in dates], axis=1).astype(float)
+    M[M == 0] = np.nan
+    for j, d in enumerate(dates):
+        bad = invalid.get(d)
+        if bad:
+            M[np.isin(ids, list(bad)), j] = np.nan
+
+    rng = np.random.default_rng(seed)
+    results, null = [], []
+    for i, cid in enumerate(uniq):
+        sl = slice(start[i], start[i] + ncell[i])
+        X = M[sl]
+        r = persistent_split(X, min_cluster_size)
+        Xn = X.copy()
+        for j in range(Xn.shape[1]):
+            Xn[:, j] = Xn[rng.permutation(Xn.shape[0]), j]
+        rn = persistent_split(Xn, min_cluster_size)
+        if rn is not None:
+            null.append((rn['effect_m'], rn['consistency']))
+        if r is None:
+            continue
+        results.append({'cid': int(cid), 'n_cells': int(ncell[i]),
+                        'effect_m': r['effect_m'], 'consistency': r['consistency'],
+                        'threshold_m': adaptive_split_threshold(
+                            r['median_hs_m'], rel_frac, min_abs, max_abs),
+                        'labels': r['labels'], 'rows': rr[sl], 'cols': cc[sl]})
+    if null:
+        null = np.array(null)
+        e_null = float(np.percentile(null[:, 0], null_pct))
+        c_null = float(np.percentile(null[:, 1], null_pct))
+    else:
+        e_null, c_null = np.inf, np.inf
+    for r in results:
+        r['should_split'] = bool(r['effect_m'] > max(e_null, r['threshold_m'])
+                                 and r['consistency'] > c_null)
+    return results, {'effect_null_m': e_null, 'consistency_null': c_null,
+                     'n_null': len(null)}
+
+
+def apply_split(cluster_map: np.ndarray, result: dict) -> tuple:
+    """Split one assessed cluster in place. The larger group keeps the parent
+    id, the smaller gets cluster_map.max() + 1; cells with no data (label -1)
+    stay with the parent. Returns (cluster_map, child_cid)."""
+    lab = result['labels']
+    n1, n0 = int((lab == 1).sum()), int((lab == 0).sum())
+    child_label = 1 if n1 < n0 else 0
+    child_cid = int(cluster_map.max()) + 1
+    sel = lab == child_label
+    cluster_map[result['rows'][sel], result['cols'][sel]] = child_cid
+    return cluster_map, child_cid
 
 
 def assess_cluster_quality(cluster_map: np.ndarray,
