@@ -1,6 +1,6 @@
 """
 tests/test_reinit_forcing_alignment.py — reinit must leave the scoured .sno
-and the HS forcing agreeing, in the frame SNOWPACK enforces HS in.
+and the HS forcing agreeing, in vertical HS.
 
 Run with:  pytest tests/test_reinit_forcing_alignment.py -v
 
@@ -13,10 +13,10 @@ Two defects, both found on the 2026-03-05 replay survey tick:
    the difference straight back as new snow: a median 80% of each scour
    within 6 h, and a 78 cm "snowfall" that crashed cluster 5859.
 2. Frames. SNOWPACK enforces the forcing HS against the slope-normal layer
-   sum (hn = forcing - sum, measured), and reports both scaled by 1/cos as
-   HS_meas / HS_mod. The survey HS (what the forcing carries) therefore
-   compares with the layer sum as is; the .pro-derived slab thickness is in
-   the 1/cos-scaled frame and must be multiplied by cos(slope).
+   sum (hn = forcing - sum, measured) and reports both scaled by 1/cos as
+   HS_meas / HS_mod. run_snowpack.sh now projects the vertical forcing x cos,
+   so the forcing, survey HS, HS_mod and .pro heights are all vertical and
+   only the .sno layers are slope-normal.
 """
 
 from __future__ import annotations
@@ -175,38 +175,51 @@ def _make_sno(tmp_path: Path, slope_deg: float, thick: list[float]) -> dict:
 
 
 class TestScourClusterFrame:
-    """SNOWPACK enforces forcing HS against the slope-normal layer sum, so
-    the survey HS is compared with that sum directly; only the .pro-derived
-    slab thickness (scaled by 1/cos) is converted."""
+    """.sno layers are slope-normal; survey HS, slab_thickness (.pro) and the
+    forcing (projected x cos by run_snowpack.sh) are vertical. scour_cluster
+    works in vertical and cuts in slope-normal."""
 
-    def test_survey_target_is_layer_sum(self, tmp_path):
+    def test_survey_target_reached_in_vertical(self, tmp_path):
+        # 60 deg: 1.0 m slope-normal = 2.0 m vertical
         sno = _make_sno(tmp_path, 60.0, [0.25] * 4)
         scoured, hs_before, scour_m, source = scour_cluster(
-            sno, "2026-03-03T12:00", survey_hs_m=0.6)
+            sno, "2026-03-03T12:00", survey_hs_m=1.2)
         assert source == "survey_HS"
-        assert hs_before == pytest.approx(1.0)
+        assert hs_before == pytest.approx(2.0)
+        assert scour_m == pytest.approx(0.8)
+        assert scoured["scour_stats"]["hs_new_m"] == pytest.approx(1.2)
+        # what SNOWPACK reports on restart: layer sum / cos(slope)
         normal = sum(float(l["Layer_Thick"]) for l in scoured["layers"])
-        # equal to what the aligned forcing will carry: no deposition
-        assert normal == pytest.approx(0.6)
+        assert normal / math.cos(math.radians(60.0)) == pytest.approx(1.2)
 
-    def test_survey_above_layer_sum_falls_back(self, tmp_path):
+    def test_survey_between_normal_and_vertical_hs_is_a_loss(self, tmp_path):
+        # 1.0 m normal = 2.0 m vertical, so a 1.5 m survey is a real loss
         sno = _make_sno(tmp_path, 60.0, [0.25] * 4)
-        _, _, _, source = scour_cluster(sno, "2026-03-03T12:00",
-                                        survey_hs_m=1.5, slab_thickness_m=0.3)
-        assert source == "features"
+        _, _, scour_m, source = scour_cluster(sno, "2026-03-03T12:00",
+                                              survey_hs_m=1.5, slab_thickness_m=0.3)
+        assert source == "survey_HS"
+        assert scour_m == pytest.approx(0.5)
 
-    def test_slab_thickness_scaled_by_cos(self, tmp_path):
-        # 0.5 m of .pro height on a 60 deg slope is 0.25 m of layer sum
+    def test_slab_thickness_is_vertical(self, tmp_path):
         sno = _make_sno(tmp_path, 60.0, [0.25] * 4)
         scoured, _, scour_m, source = scour_cluster(
             sno, "2026-03-03T12:00", slab_thickness_m=0.5)
         assert source == "features"
-        assert scour_m == pytest.approx(0.25)
+        assert scour_m == pytest.approx(0.5)
+        # 0.5 m vertical removes 0.25 m of slope-normal thickness
         normal = sum(float(l["Layer_Thick"]) for l in scoured["layers"])
         assert normal == pytest.approx(0.75)
 
-    def test_hs_fraction_fallback_frame_free(self, tmp_path):
+    def test_hs_fraction_fallback(self, tmp_path):
         sno = _make_sno(tmp_path, 45.0, [0.25] * 4)
-        _, _, scour_m, source = scour_cluster(sno, "2026-03-03T12:00")
+        scoured, hs_before, scour_m, source = scour_cluster(sno, "2026-03-03T12:00")
         assert source == "HS×0.80"
-        assert scour_m == pytest.approx(0.8)
+        assert scour_m == pytest.approx(0.8 * hs_before)
+        assert scoured["scour_stats"]["hs_new_m"] == pytest.approx(0.2 * hs_before)
+
+    def test_flat_slope_unchanged(self, tmp_path):
+        sno = _make_sno(tmp_path, 0.0, [0.25] * 4)
+        scoured, _, scour_m, _ = scour_cluster(
+            sno, "2026-03-03T12:00", survey_hs_m=0.6)
+        assert scour_m == pytest.approx(0.4)
+        assert scoured["scour_stats"]["hs_new_m"] == pytest.approx(0.6)

@@ -261,12 +261,12 @@ EV = sc.Event(pd.Timestamp("2026-02-08T12:00"), "a__b", None)
 
 
 def test_scour_held_passes(cfg):
-    _scour_fixture(cfg, 120.0)                 # 1.20 m * cos 60 = 0.60 m layer sum
+    _scour_fixture(cfg, 60.0)                  # HS_mod is vertical, like hs_after
     assert sc.check_scour_held(cfg, EV)["max_deposition_m"] == pytest.approx(0.0)
 
 
 def test_scour_refilled_stops_the_cycle(cfg):
-    _scour_fixture(cfg, 140.0)                 # +10 cm deposited at the restart
+    _scour_fixture(cfg, 70.0)                  # +10 cm deposited at the restart
     with pytest.raises(sc.CycleError, match="cluster_0002 \\+10 cm"):
         sc.check_scour_held(cfg, EV)
 

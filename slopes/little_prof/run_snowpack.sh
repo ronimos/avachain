@@ -171,6 +171,15 @@ for smet in "${smets[@]}"; do
             "$TEMPLATE_SNO" > "$cluster_sno"
     fi
 
+    # The SMET carries vertical HS (what the UAS measures). SNOWPACK enforces
+    # measured HS against the slope-normal layer sum and reports both scaled
+    # by 1/cos(slope), so a vertical HS fed in as is builds a pack 1/cos too
+    # thick (+15% at 30 deg). Project it onto the slope normal here, with the
+    # slope SNOWPACK actually runs: the .sno's (clamped) SlopeAngle, not the
+    # SMET's.
+    run_sang=$(awk -F'=' '/^SlopeAngle/{gsub(/ /,"",$2); print $2; exit}' "$cluster_sno")
+    hs_factor=$(awk -v a="${run_sang:-$sang}" 'BEGIN{printf "%.6f", cos(a * 3.14159265358979 / 180)}')
+
     cluster_ini="$OUTPUT_DIR/${cid}.ini"
     cat > "$cluster_ini" << EOF
 IMPORT_BEFORE = $MASTER_CFG
@@ -185,6 +194,11 @@ SNOWFILE1  = $cid
 METEOPATH  = $OUTPUT_DIR
 SNOWPATH   = $OUTPUT_DIR
 EXPERIMENT = $cid
+
+[Filters]
+HS::filter1    = MULT
+HS::arg1::TYPE = CST
+HS::arg1::CST  = $hs_factor
 EOF
 
     ran+=("$cid")

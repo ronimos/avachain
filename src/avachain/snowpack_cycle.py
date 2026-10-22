@@ -65,7 +65,7 @@ TS_FMT = "%Y-%m-%dT%H:%M"
 OUTPUT_STEP = pd.Timedelta(hours=6)
 # Deposition allowed at the restart that follows a reinit (check_scour_held).
 # On the 2026-03-03 replay event: unaligned forcing, median 37.9 cm and 3028
-# of 4022 clusters above 5 cm; aligned, 0.00 cm max over 64 sampled clusters.
+# of 4022 clusters above 5 cm; aligned, 0.015 mm max over 399 sampled clusters.
 SCOUR_HOLD_TOL_M = 0.02
 
 
@@ -256,32 +256,29 @@ def check_scour_held(cfg: ProjectConfig, ev: Event) -> dict:
     sum is deposited at the first step, and nothing else reports it: the
     2026-03-05 replay tick refilled a median 80% of every scour and only
     stopped because one cluster crashed. The restart row of each scoured
-    cluster's output .smet must still hold the scoured state. HS_mod is
-    reported as layer sum / cos(slope), so it is scaled back before comparing.
+    cluster's output .smet must still hold the scoured state. HS_mod and
+    the reinit stats are both vertical (layer sum / cos(slope)).
     """
-    import math
     stats = json.loads((cfg.analysis_dir / f"reinit_stats_{ev.date}.json").read_text())
     stamp = ev.ts.strftime("%Y-%m-%dT%H:%M")
     gains, missing = {}, []
     for s in stats:
         name = f"cluster_{s['cid']:04d}"
         p = cfg.pro_dir / f"{name}_{name}.smet"
-        hs = cos = None
+        hs = None
         if p.exists():
             with open(p) as f:
                 for line in f:
                     key = line.split("=", 1)[0].strip()
-                    if key == "slope_angle":
-                        cos = math.cos(math.radians(float(line.split("=", 1)[1])))
-                    elif key == "fields":
+                    if key == "fields":
                         j = line.split("=", 1)[1].split().index("HS_mod")
                     elif line.startswith(stamp):
                         hs = float(line.split()[j]) / 100.0
                         break
-        if hs is None or cos is None:
+        if hs is None:
             missing.append(name)
             continue
-        gains[name] = hs * cos - s["hs_after_m"]
+        gains[name] = hs - s["hs_after_m"]
     bad = {k: v for k, v in gains.items() if v > SCOUR_HOLD_TOL_M}
     worst = max(gains.values(), default=0.0)
     print(f"    scour held at {stamp}: {len(gains) - len(bad)}/{len(stats)} clusters, "

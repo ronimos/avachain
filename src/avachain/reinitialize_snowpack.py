@@ -235,8 +235,8 @@ def align_smet_hs(smet_path: Path,
     snowfall, and the surface node failed at 207 K under midday sun.
 
     The file stores HS in cm (header units_multiplier 0.01), hs_event_m is
-    in m, both in the layer-sum frame SNOWPACK enforces HS in (see
-    scour_cluster). Only the HS token of each row is rewritten, keeping
+    in m, both vertical (run_snowpack.sh projects the forcing onto the slope
+    normal; see scour_cluster). Only the HS token of each row is rewritten, keeping
     every other byte.
 
     Returns the number of rows changed.
@@ -312,24 +312,26 @@ def scour_cluster(sno_data: dict, event_ts: str,
     window, and only when it is below the modelled HS), the slab thickness
     from the features CSV, else 80% of HS.
 
-    Frames: SNOWPACK enforces the forcing HS against the slope-normal layer
-    sum (a forcing step from 66.27 to 144.08 cm deposited hn = 77.8 cm), and
-    reports both scaled by 1/cos(slope) as HS_meas and HS_mod. So the survey
-    HS, which is what the forcing carries, is compared with the layer sum
-    as is. The .pro heights behind slab_thickness are the 1/cos-scaled ones
-    (PERP_TO_SLOPE = false), so that depth is multiplied by cos(slope) before
-    the cut. All depths returned are in layer-sum (forcing) terms.
+    Frames: .sno Layer_Thick is slope-normal. Everything it is compared with
+    is vertical: the survey HS; the forcing HS, which run_snowpack.sh
+    projects onto the slope normal (x cos) before SNOWPACK enforces it
+    against the layer sum; and HS_mod and the .pro heights behind
+    slab_thickness, which SNOWPACK reports as layer sum / cos. So this works
+    in vertical and converts at the cut. All depths returned are vertical,
+    scour_stats['hs_new_m'] too.
 
     Returns (scoured sno_data, hs_before_m, scour_m, source), or None when
     the scour is 1 cm or less.
     """
-    hs_before = sum(float(l['Layer_Thick']) for l in sno_data['layers'])
+    cos_slope = vertical_to_normal(sno_data)
+    hs_before = sum(float(l['Layer_Thick'])
+                    for l in sno_data['layers']) / cos_slope
 
     if survey_hs_m is not None and hs_before - survey_hs_m > 0:
         scour_m = hs_before - survey_hs_m
         source = 'survey_HS'
     elif slab_thickness_m is not None:
-        scour_m = slab_thickness_m * pro_to_layer_sum(sno_data)
+        scour_m = slab_thickness_m
         source = 'features'
     else:
         scour_m = hs_before * 0.80
@@ -347,15 +349,18 @@ def scour_cluster(sno_data: dict, event_ts: str,
     if scour_m <= 0.01:
         return None
 
-    scoured = scour_sno(sno_data, scour_m, event_ts)
+    scoured = scour_sno(sno_data, scour_m * cos_slope, event_ts)
+    scoured['scour_stats']['hs_new_m'] /= cos_slope
     return scoured, hs_before, scour_m, source
 
 
-def pro_to_layer_sum(sno_data: dict) -> float:
-    """cos(slope): a .pro height or HS_mod × this = slope-normal layer sum.
+def vertical_to_normal(sno_data: dict) -> float:
+    """cos(slope): a vertical height x this = slope-normal .sno thickness.
 
     SNOWPACK reports HS_mod = sum(Layer_Thick) / cos(SlopeAngle), checked to
-    0.01 cm on the replay restarts.
+    0.01 cm on the replay restarts. The .sno SlopeAngle is the slope SNOWPACK
+    runs (clamped at 55 deg), and the one run_snowpack.sh projects the
+    forcing with.
     """
     angle = float(sno_data['header'].get('SlopeAngle', 0.0))
     return float(np.cos(np.radians(angle)))

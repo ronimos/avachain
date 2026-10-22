@@ -230,7 +230,27 @@ def write_cluster_ini(ini_path: Path, master_cfg: Path, smet_dir: Path,
         f"METEOPATH  = {out_dir}\n"
         f"SNOWPATH   = {out_dir}\n"
         f"EXPERIMENT = {cid}\n"
+        + _hs_filter(snow_in / f"{cid}.sno")
     )
+
+
+def _hs_filter(sno: Path) -> str:
+    """The [Filters] block run_snowpack.sh adds: vertical forcing HS x cos of
+    the .sno SlopeAngle (the slope SNOWPACK runs)."""
+    import math
+    angle = 0.0
+    if sno.exists():
+        for line in sno.read_text().splitlines():
+            if line.split("=", 1)[0].strip() == "SlopeAngle":
+                try:
+                    angle = float(line.split("=", 1)[1])
+                except ValueError:        # unsubstituted template placeholder
+                    pass
+                break
+    return ("\n[Filters]\n"
+            "HS::filter1    = MULT\n"
+            "HS::arg1::TYPE = CST\n"
+            f"HS::arg1::CST  = {math.cos(math.radians(angle)):.6f}\n")
 
 
 def run_snowpack(binary: Path, lib_dir: str, ini: Path, bdate: str,
