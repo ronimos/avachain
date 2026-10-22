@@ -890,6 +890,29 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
     total_grids = 0
     all_metrics = []
 
+    # Survey validity (survey_validity.py): clusters a survey is biased for
+    # are carried forward from their last valid survey instead of being
+    # pinned to it, and get no transport (fitted from the biased dHS) in
+    # either pair the survey belongs to.
+    from survey_validity import (compute_validity, write_validity,
+                                 invalid_cells, carry_forward)
+    cluster_map = (np.load(str(cfg.cluster_map_path))
+                   if cfg.cluster_map_path.exists() else None)
+    validity = {}
+    if cluster_map is not None:
+        validity = compute_validity(
+            {p.stem[3:]: np.load(str(p))
+             for p in sorted(cfg.resampled_dir.glob("hs_*.npy"))}, cluster_map)
+        write_validity(cfg.analysis_dir, validity)
+        n_bad = sum(len(v) for v in validity.values())
+        print(f"Survey validity: {n_bad} invalid cluster-surveys over "
+              f"{len(validity)} surveys (worst: " + ", ".join(
+                  f"{d} {len(v)}" for d, v in sorted(
+                      validity.items(), key=lambda kv: -len(kv[1]))[:3]) + ")")
+    else:
+        print("Survey validity: no cluster map yet, surveys used as is")
+    prev_end = None          # (date, predicted grid at that survey)
+
     for meta in transport_meta:
         pair_id = meta['pair_id']
         d_a = datetime.date.fromisoformat(meta['date_a'])
@@ -932,6 +955,19 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
             print(f"  Insufficient station data ({len(stn_hs)} hours), skipping")
             continue
 
+        inv_a = inv_b = np.zeros(hs_a.shape, dtype=bool)
+        if cluster_map is not None:
+            inv_a = invalid_cells(cluster_map, validity.get(d_a.isoformat(), []))
+            inv_b = invalid_cells(cluster_map, validity.get(d_b.isoformat(), []))
+            prev = prev_end[1] if prev_end is not None and prev_end[0] == d_a else None
+            hs_a, transport = carry_forward(
+                hs_a, None if station_only else transport, inv_a, inv_b, prev)
+            if inv_a.any() or inv_b.any():
+                print(f"  Invalid survey clusters: {len(validity.get(d_a.isoformat(), []))} "
+                      f"at start (carried forward), "
+                      f"{len(validity.get(d_b.isoformat(), []))} at end; "
+                      f"their transport set to station-only")
+
         if station_only:
             grids = gap_fill_station_only(hs_a, stn_hs, valid)
         else:
@@ -940,7 +976,7 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
         avy_path = cfg.analysis_dir / f"avalanche_dhs_{pair_id}.npy"
         if avy_path.exists():
             from avalanche import apply_avalanche_event
-            avy_dhs = np.load(str(avy_path))
+            avy_dhs = np.where(inv_a | inv_b, 0.0, np.load(str(avy_path)))
             event_ts = t0 + (t1 - t0) / 2
             avy_meta_path = cfg.analysis_dir / "avalanche_events.json"
             if avy_meta_path.exists():
@@ -953,7 +989,8 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
             print(f"  Applied avalanche event at {event_ts}")
 
         pred_end = grids[t1]
-        metrics = validate_prediction(pred_end, hs_b, valid)
+        prev_end = (d_b, pred_end)
+        metrics = validate_prediction(pred_end, hs_b, valid & ~inv_b)
         metrics.update({
             'pair_id': pair_id,
             'date_a': d_a.isoformat(),
@@ -962,7 +999,7 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
             'n_hours': len(grids),
             'pred': pred_end,
             'obs': hs_b,
-            'valid': valid,
+            'valid': valid & ~inv_b,
         })
         all_metrics.append(metrics)
 

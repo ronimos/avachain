@@ -461,6 +461,11 @@ def anchor_to_survey(cfg, survey_ts: pd.Timestamp, top_down_cids=(),
     cluster_map = np.load(str(cfg.cluster_map_path))
     survey = survey_cluster_hs(
         np.load(str(cfg.resampled_dir / f"hs_{date}.npy")), cluster_map)
+    # Clusters the survey is biased for (survey_validity) are not anchored;
+    # gap-fill carries them forward from their last valid survey.
+    from survey_validity import invalid_clusters
+    for c in invalid_clusters(cfg.analysis_dir, date):
+        survey.pop(c, None)
     top_down = set(int(c) for c in top_down_cids)
 
     stats, n = [], {'top_down': 0, 'thinned': 0, 'below': 0, 'held': 0,
@@ -682,6 +687,9 @@ def run_reinit(cfg,
         post_survey_hs = survey_cluster_hs(np.load(str(hs_after_path)),
                                            cluster_map, release_cids,
                                            min_cells=1, min_coverage=0.0)
+        from survey_validity import invalid_clusters
+        for c in invalid_clusters(cfg.analysis_dir, date_after):
+            post_survey_hs.pop(c, None)
 
         # Station dHS from event_date to date_after to judge window cleanliness
         try:
