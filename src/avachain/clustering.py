@@ -366,7 +366,7 @@ def compute_cluster_representatives(cluster_map: np.ndarray,
     Returns
     -------
     dict mapping cluster_id -> {
-        'hs_series': 1D array (n_times,) mean HS in meters,
+        'hs_series': 1D array (n_times,) cell-median HS in meters,
         'n_cells': int,
         'centroid_row': float,
         'centroid_col': float,
@@ -392,8 +392,12 @@ def compute_cluster_representatives(cluster_map: np.ndarray,
 
         cell_hs = cell_hs[:, valid_cells]
 
-        with np.errstate(all='ignore'):
-            hs_series = np.nanmean(cell_hs, axis=1)
+        # Median, not mean: single cells read 0 or 4+ m against their
+        # neighbours (vegetation, rock, edge returns), and a mean let one of
+        # them move a small cluster's HS by metres.
+        with np.errstate(all='ignore'), warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            hs_series = np.nanmedian(cell_hs, axis=1)
 
         # Interpolate over any remaining all-NaN timesteps (isolated boundary
         # gaps), then fill any leading/trailing NaN with 0 (bare ground).

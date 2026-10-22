@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -67,6 +68,10 @@ OUTPUT_STEP = pd.Timedelta(hours=6)
 # On the 2026-03-03 replay event: unaligned forcing, median 37.9 cm and 3028
 # of 4022 clusters above 5 cm; aligned, 0.015 mm max over 399 sampled clusters.
 SCOUR_HOLD_TOL_M = 0.02
+# How far above the survey a cluster's restart HS may sit after anchoring
+# (check_anchor_held). On the 03-02 replay anchor (214 clusters) removals
+# restarted within +0.0 cm and clusters within 2 cm at most +1.5 cm.
+ANCHOR_TOL_M = 0.05
 
 
 class CycleError(RuntimeError):
@@ -293,6 +298,74 @@ def check_scour_held(cfg: ProjectConfig, ev: Event) -> dict:
     return {"clusters": len(gains), "max_deposition_m": worst}
 
 
+def _scoured_cids(cfg: ProjectConfig, events: list) -> set:
+    """Clusters an event reinit scoured in this cycle (reinit_stats_<date>)."""
+    out = set()
+    for ev in events:
+        p = cfg.analysis_dir / f"reinit_stats_{ev.date}.json"
+        if p.exists():
+            out |= {int(s["cid"]) for s in json.loads(p.read_text())}
+    return out
+
+
+def anchor_to_survey(cfg: ProjectConfig, survey_ts: pd.Timestamp,
+                     top_down_cids: set) -> dict:
+    from reinitialize_snowpack import anchor_to_survey as _anchor
+    return _anchor(cfg, survey_ts, top_down_cids)
+
+
+def check_anchor_held(cfg: ProjectConfig, survey_ts: pd.Timestamp) -> dict:
+    """After the segment that restarts from a survey anchor, no cluster's
+    restart row may sit above the surveyed HS: a removal that the forcing
+    refilled is silent otherwise (see anchor_to_survey).
+
+    Clusters below the survey are reported, not failed: SNOWPACK deposits a
+    deficit only when the weather allows snowfall (THRESH_RH = 0.5), so it
+    can arrive steps later. On the 03-02 replay anchor, 40 such clusters
+    restarted a median 29 cm under the survey; cluster 3360 took its 1.6 m
+    deficit at 03-03T12 (RH 96%), none at 03-02T18 (RH 62%)."""
+    stats = json.loads((cfg.analysis_dir /
+                        f"anchor_stats_{survey_ts:%Y-%m-%d}.json").read_text())
+    stamp = survey_ts.strftime("%Y-%m-%dT%H:%M")
+    off, missing = {}, []
+    for s in stats:
+        name = f"cluster_{s['cid']:04d}"
+        hs = _restart_hs(cfg.pro_dir / f"{name}_{name}.smet", stamp)
+        if hs is None:
+            missing.append(name)
+            continue
+        off[name] = hs - s["hs_survey_m"]
+    bad = {k: v for k, v in off.items() if v > ANCHOR_TOL_M}
+    below = sum(v < -ANCHOR_TOL_M for v in off.values())
+    vals = np.array(list(off.values()) or [0.0])
+    print(f"    survey anchor held at {stamp}: {len(off) - len(bad)}/{len(stats)} "
+          f"clusters; {below} still below the survey (deposit waits for "
+          f"snowfall weather); model - survey p1 {100 * np.percentile(vals, 1):+.1f} / "
+          f"p99 {100 * np.percentile(vals, 99):+.1f} cm", flush=True)
+    if missing or bad:
+        top = sorted(bad.items(), key=lambda kv: -kv[1])[:5]
+        raise CycleError(
+            f"survey anchor {stamp} not held: {len(bad)} cluster(s) refilled above "
+            f"the survey by more than {100 * ANCHOR_TOL_M:.0f} cm "
+            f"({', '.join(f'{k} {100 * v:+.0f} cm' for k, v in top)}); "
+            f"{len(missing)} without a restart row ({', '.join(missing[:5])})")
+    return {"clusters": len(off), "p1_m": float(np.percentile(vals, 1)),
+            "p99_m": float(np.percentile(vals, 99)), "below": int(below)}
+
+
+def _restart_hs(path: Path, stamp: str) -> Optional[float]:
+    """HS_mod (m, vertical) on the row at stamp of a SNOWPACK output .smet."""
+    if not path.exists():
+        return None
+    with open(path) as f:
+        for line in f:
+            if line.split("=", 1)[0].strip() == "fields":
+                j = line.split("=", 1)[1].split().index("HS_mod")
+            elif line.startswith(stamp):
+                return float(line.split()[j]) / 100.0
+    return None
+
+
 def update_zarr(cfg: ProjectConfig, since: pd.Timestamp) -> None:
     from snowpack_io import update_zarr_since
     update_zarr_since(cfg.pro_dir, cfg.zarr_path, since)
@@ -313,7 +386,11 @@ def survey_cycle(cfg: ProjectConfig, new_survey: pd.Timestamp,
                  *, snowpack: Callable = run_snowpack, analyze_fn: Callable = analyze,
                  reinit_fn: Callable = reinit, zarr_fn: Callable = update_zarr,
                  forecast_fn: Callable = build_forecast,
-                 scour_check_fn: Callable = check_scour_held) -> dict:
+                 scour_check_fn: Callable = check_scour_held,
+                 anchor_fn: Callable = None,
+                 anchor_check_fn: Callable = None) -> dict:
+    anchor_fn = anchor_fn or anchor_to_survey
+    anchor_check_fn = anchor_check_fn or check_anchor_held
     s_prev = read_survey_anchor(cfg)
     if new_survey <= s_prev:
         raise CycleError(f"new survey {new_survey:{TS_FMT}} is not after the "
@@ -345,12 +422,16 @@ def survey_cycle(cfg: ProjectConfig, new_survey: pd.Timestamp,
     _require_coherent(cfg, "res", new_survey, n)
     if scoured is not None:
         scour_check_fn(cfg, scoured)
+    # The new survey is the anchor: set the state to it before saving.
+    anchor_fn(cfg, new_survey, _scoured_cids(cfg, events))
+    _require_coherent(cfg, "res", new_survey, n)
     _save_as(cfg, "survey")
     _write_survey_anchor(cfg, new_survey)
 
     if obs_end > new_survey:
         snowpack(cfg, obs_end, "res")
         _require_coherent(cfg, "res", obs_end, n)
+        anchor_check_fn(cfg, new_survey)
     _save_as(cfg, "anchor")
     zarr_fn(cfg, s_prev)                     # observation-driven only
 

@@ -366,6 +366,148 @@ def vertical_to_normal(sno_data: dict) -> float:
     return float(np.cos(np.radians(angle)))
 
 
+# A survey cluster HS is trusted only with this much real coverage. Exact
+# zeros are clipped negatives (spatial_model.resample clips at
+# min_valid_hs_m = 0), i.e. survey bias/registration error, not bare ground:
+# they cover 1-22% of the domain depending on the survey (02-12: 22%), and
+# on 03-02 whole clusters read 0 between ~0.7 m on 02-21 and ~0.85 m on
+# 03-05. Anchoring to them thinned 38 of 301 sampled clusters to nothing,
+# which SNOWPACK cannot restart from. 10% of clusters are a single cell, and
+# a median of one cell is that cell (3230: 0 -> 1.39 -> 0.23 m).
+MIN_SURVEY_CELLS = 3
+MIN_SURVEY_COVERAGE = 0.5
+
+
+def survey_cluster_hs(hs_grid: np.ndarray, cluster_map: np.ndarray,
+                      cids=None, min_cells: int = MIN_SURVEY_CELLS,
+                      min_coverage: float = MIN_SURVEY_COVERAGE) -> dict:
+    """Cluster HS from a survey grid: the median of the cluster's valid cells.
+
+    Valid = finite and not exactly 0 (see MIN_SURVEY_CELLS). Clusters with
+    fewer than min_cells valid cells, or less than min_coverage of their
+    cells valid, are left out: no survey value is better than a wrong one.
+    Median, not mean: single cells read 0 or 4+ m against their neighbours,
+    and cluster 5859 (5 cells) swung 358 -> 0 -> 456 -> 6 cm across four
+    December-January surveys on the mean.
+    """
+    inside = cluster_map > 0
+    if cids is not None:
+        inside &= np.isin(cluster_map, np.fromiter(cids, dtype=cluster_map.dtype))
+    n_all = np.bincount(cluster_map[inside].ravel())
+    ok = inside & np.isfinite(hs_grid) & (hs_grid != 0)
+    ids = cluster_map[ok]
+    vals = hs_grid[ok].astype(np.float64)
+    order = np.argsort(ids, kind='stable')
+    ids, vals = ids[order], vals[order]
+    uniq, start = np.unique(ids, return_index=True)
+    out = {}
+    for c, v in zip(uniq, np.split(vals, start[1:])):
+        if v.size >= min_cells and v.size >= min_coverage * n_all[c]:
+            out[int(c)] = float(np.median(v))
+    return out
+
+
+def thin_sno(sno_data: dict, factor: float) -> dict:
+    """Scale every layer's thickness by factor (0 < factor <= 1).
+
+    The non-event HS correction: the model kept snow that settlement, melt or
+    sublimation removed, so the whole column is thinned and the stratigraphy
+    (each weak layer's relative depth) is kept. Volume fractions are
+    unchanged, so each layer loses mass in proportion: conserving mass
+    instead would raise density by 1/factor, and the corrections run to
+    factor 0.2 (an ice fraction of 5x is not physical).
+    """
+    import copy
+    result = copy.deepcopy(sno_data)
+    for layer in result['layers']:
+        layer['Layer_Thick'] = f"{float(layer['Layer_Thick']) * factor:.6f}"
+    new_hs = sum(float(l['Layer_Thick']) for l in result['layers'])
+    _update_header_line(result, 'HS_Last', f"{new_hs:.6f}")
+    return result
+
+
+def anchor_to_survey(cfg, survey_ts: pd.Timestamp, top_down_cids=(),
+                     sno_dir: Path = None, smet_dir: Path = None,
+                     tol_m: float = 0.02) -> dict:
+    """Set every cluster's state at a new survey to the surveyed HS.
+
+    The survey cycle re-runs S_prev -> S_new on the season gap-fill, but
+    SNOWPACK's HS enforcement only adds snow: it deposits when the forcing is
+    above the model and ignores it when below. So the model ratchets up on
+    every high forcing step and survey noise: in the season run at 03-05,
+    HS_mod sat a median 122 cm above its own forcing, 4010 of 6565 clusters
+    more than 1 m above. Re-running from the previous survey cannot fix this,
+    because the previous survey's state carries the excess.
+
+    At S_new (the res .sno, dated survey_ts):
+    - model above survey by more than tol_m: remove the excess. Clusters in
+      top_down_cids (scoured by a wind-scour or avalanche event in this
+      window) lose it from the top, like the event reinit; every other
+      cluster is thinned (thin_sno), since the loss is settlement or melt.
+    - model below survey: nothing here. The forcing is shifted below so it
+      starts at the survey value, and SNOWPACK deposits the deficit at the
+      first step, as in the season run where the next gap-fill interval
+      starts at the survey.
+    Then every cluster's forcing from survey_ts on is lowered or raised by a
+    constant offset to start at the survey HS (align_smet_hs).
+
+    HS is vertical throughout (layer sum / cos, see scour_cluster). Returns
+    and saves per-cluster stats as anchor_stats_<date>.json.
+    """
+    sno_dir = sno_dir or cfg.pro_dir
+    smet_dir = smet_dir or cfg.smet_dir
+    date = survey_ts.strftime('%Y-%m-%d')
+    stamp = survey_ts.strftime('%Y-%m-%dT%H:%M:%S')
+    cluster_map = np.load(str(cfg.cluster_map_path))
+    survey = survey_cluster_hs(
+        np.load(str(cfg.resampled_dir / f"hs_{date}.npy")), cluster_map)
+    top_down = set(int(c) for c in top_down_cids)
+
+    stats, n = [], {'top_down': 0, 'thinned': 0, 'below': 0, 'held': 0,
+                    'no_survey': 0}
+    for cid, target in sorted(survey.items()):
+        name = f"cluster_{cid:04d}"
+        sno_path = sno_dir / f"{name}_{name}.sno"
+        if not sno_path.exists():
+            continue
+        target = max(0.0, target)
+        sno = read_sno(str(sno_path))
+        cos_slope = vertical_to_normal(sno)
+        hs = sum(float(l['Layer_Thick']) for l in sno['layers']) / cos_slope
+        excess = hs - target
+        if excess > tol_m:
+            if cid in top_down:
+                new = scour_sno(sno, excess * cos_slope, stamp)
+                how = 'top_down'
+            else:
+                new = thin_sno(sno, target / hs)
+                how = 'thinned'
+            write_sno(new, str(sno_path))
+            hs_new = sum(float(l['Layer_Thick']) for l in new['layers']) / cos_slope
+        else:
+            how = 'below' if excess < -tol_m else 'held'
+            hs_new = hs
+        n[how] += 1
+        k = align_smet_hs(smet_dir / f"{name}.smet", survey_ts, target)
+        stats.append({'cid': cid, 'hs_model_m': round(hs, 4),
+                      'hs_survey_m': round(target, 4),
+                      'hs_after_m': round(hs_new, 4), 'action': how,
+                      'forcing_rows_aligned': k})
+
+    n['no_survey'] = sum(1 for p in sno_dir.glob("cluster_*_cluster_*.sno")
+                         if int(p.name.split('_')[1]) not in survey)
+    exc = np.array([s['hs_model_m'] - s['hs_survey_m'] for s in stats])
+    print(f"  Survey anchor {date}: {len(stats)} clusters — "
+          f"{n['top_down']} top-down, {n['thinned']} thinned, "
+          f"{n['below']} below survey (forcing deposits), {n['held']} within "
+          f"{100 * tol_m:.0f} cm, {n['no_survey']} without a trusted survey value (left as modelled); "
+          f"model - survey before: median {100 * np.median(exc):+.0f} cm, "
+          f"p90 {100 * np.percentile(exc, 90):+.0f} cm", flush=True)
+    out = cfg.analysis_dir / f"anchor_stats_{date}.json"
+    out.write_text(json.dumps(stats, indent=1))
+    return {'counts': n, 'stats': stats}
+
+
 def _update_header_line(sno_data, key, new_value):
     """Update a header value in both the parsed dict and raw lines."""
     sno_data['header'][key] = new_value
@@ -529,19 +671,17 @@ def run_reinit(cfg,
               f"using 80% of HS as scour depth")
 
     # --- Post-event survey HS per cluster (Priority 1 scour source) ---
-    # Use cluster-mean HS from the post-event UAS grid when the window
+    # Use cluster HS from the post-event UAS grid when the window
     # between the event and the survey is free of new snow (clean window).
     hs_after_path = cfg.resampled_dir / f"hs_{date_after}.npy"
-    post_survey_hs = {}   # cid -> cluster-mean observed HS on date_after
+    post_survey_hs = {}   # cid -> cluster HS (cell median) on date_after
     clean_window = False
 
     if hs_after_path.exists():
-        hs_post = np.load(str(hs_after_path)).astype(np.float32)
-        for cid in release_cids:
-            cell_mask = (cluster_map == cid)
-            vals = hs_post[cell_mask & (hs_post > 0) & ~np.isnan(hs_post)]
-            if vals.size > 0:
-                post_survey_hs[cid] = float(np.nanmean(vals))
+        # Reinit's own rule since it started: zeros out, no size minimum.
+        post_survey_hs = survey_cluster_hs(np.load(str(hs_after_path)),
+                                           cluster_map, release_cids,
+                                           min_cells=1, min_coverage=0.0)
 
         # Station dHS from event_date to date_after to judge window cleanliness
         try:

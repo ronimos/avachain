@@ -95,6 +95,12 @@ class Rec:
     def scour_check(self, cfg, ev):
         self.calls.append(("scour_check", ev.ts))
 
+    def anchor(self, cfg, ts, top_down):
+        self.calls.append(("anchor", ts, tuple(sorted(top_down))))
+
+    def anchor_check(self, cfg, ts):
+        self.calls.append(("anchor_check", ts))
+
     def analyze(self, cfg, date):
         self.calls.append(("analyze", date))
 
@@ -121,7 +127,8 @@ def _events(cfg, **evs):
 def _survey(cfg, rec, obs_end, nwp=None):
     return sc.survey_cycle(cfg, S1, obs_end, nwp, analyze_fn=rec.analyze,
                            reinit_fn=rec.reinit, zarr_fn=rec.zarr,
-                           forecast_fn=rec.forecast, scour_check_fn=rec.scour_check)
+                           forecast_fn=rec.forecast, scour_check_fn=rec.scour_check,
+                           anchor_fn=rec.anchor, anchor_check_fn=rec.anchor_check)
 
 
 def test_survey_reruns_from_the_previous_survey_not_the_latest_state(cfg):
@@ -137,7 +144,8 @@ def test_survey_reruns_from_the_previous_survey_not_the_latest_state(cfg):
         assert _pd(cfg, f"{cid}_survey.sno") == S1
         assert _pd(cfg, f"{cid}_anchor.sno") == obs
     assert sc.read_survey_anchor(cfg) == S1
-    assert rec.calls == [("zarr", S0), ("forecast", obs)]
+    assert rec.calls == [("anchor", S1, ()), ("anchor_check", S1),
+                         ("zarr", S0), ("forecast", obs)]
 
 
 def test_avalanche_splits_the_run_and_the_whole_domain_continues_scoured(cfg):
@@ -275,3 +283,54 @@ def test_scour_missing_restart_row_stops_the_cycle(cfg):
     _scour_fixture(cfg, None)
     with pytest.raises(sc.CycleError, match="without a restart row"):
         sc.check_scour_held(cfg, EV)
+
+
+# ---------------------------------------------------------------------------
+# The new survey anchors the state (anchor_to_survey / check_anchor_held)
+# ---------------------------------------------------------------------------
+
+def test_new_survey_anchors_before_it_is_saved(cfg):
+    rec = Rec()
+    _events(cfg, **{"a__b": "2026-02-08T12:00:00Z"})
+    (cfg.analysis_dir / "reinit_stats_2026-02-08.json").write_text(
+        json.dumps([{"cid": 2, "hs_after_m": 0.5}]))
+    _survey(cfg, rec, pd.Timestamp("2026-02-11T00:00"))
+    names = [c[0] for c in rec.calls]
+    assert names.index("reinit") < names.index("anchor") < names.index("anchor_check")
+    # the event-scoured clusters are the top-down set
+    assert ("anchor", S1, (2,)) in rec.calls
+    # the saved survey anchor is the state after anchoring: the stub's res
+    # .sno is what _save_as copies, and anchor runs before it
+    assert _pd(cfg, "cluster_0001_survey.sno") == S1
+
+
+def test_no_post_survey_segment_no_anchor_check(cfg):
+    rec = Rec()
+    _survey(cfg, rec, S1)
+    assert ("anchor", S1, ()) in rec.calls
+    assert not any(c[0] == "anchor_check" for c in rec.calls)
+
+
+def _anchor_fixture(cfg, hs_mod_cm, survey_m=0.60, stamp="2026-02-10T18:00"):
+    (cfg.analysis_dir / "anchor_stats_2026-02-10.json").write_text(
+        json.dumps([{"cid": 2, "hs_survey_m": survey_m}]))
+    (cfg.pro_dir / "cluster_0002_cluster_0002.smet").write_text(
+        "SMET 1.1 ASCII\n[HEADER]\nfields = timestamp MS_Snow HS_mod HS_meas\n[DATA]\n"
+        f"{stamp}:00   1.0   {hs_mod_cm}   3.0\n")
+
+
+def test_anchor_held_passes(cfg):
+    _anchor_fixture(cfg, 61.0)
+    assert sc.check_anchor_held(cfg, S1)["clusters"] == 1
+
+
+def test_anchor_refilled_stops_the_cycle(cfg):
+    _anchor_fixture(cfg, 80.0)
+    with pytest.raises(sc.CycleError, match="refilled above the survey"):
+        sc.check_anchor_held(cfg, S1)
+
+
+def test_anchor_deficit_is_reported_not_failed(cfg):
+    # SNOWPACK deposits a deficit only in snowfall weather, possibly later
+    _anchor_fixture(cfg, 40.0)
+    assert sc.check_anchor_held(cfg, S1)["below"] == 1
