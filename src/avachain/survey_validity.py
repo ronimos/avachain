@@ -17,7 +17,7 @@ The share of clusters affected varies by survey (02-12, 02-19, 03-08: over
 465 clusters read entirely 0 between ~0.7 m (02-21) and ~0.85 m (03-05).
 
 A cluster-survey is invalid when more than MAX_ZERO_SHARE of its cells are
-exact zeros. Two exceptions keep real bare ground valid:
+exact zeros or NaN (no data). Two exceptions keep real bare ground valid:
 - the first survey of the season (nothing earlier to carry forward, and the
   early-season snow really is near zero: 58% of clusters cross 25% zeros);
 - clusters whose last valid HS was already below NEAR_BARE_M.
@@ -42,18 +42,26 @@ VALIDITY_FILE = "survey_validity.json"
 
 
 def _per_cluster(grid: np.ndarray, cluster_map: np.ndarray):
-    """(cluster ids, zero-cell share, median of finite cells) per cluster."""
+    """(cluster ids, no-data share, median of finite cells) per cluster.
+
+    No data = exact zero (a clipped negative) or NaN (a 1 m cell with too
+    few valid survey pixels, see spatial_model.load_and_resample_survey).
+    A cluster with no finite cell at all is fully no-data (median NaN).
+    """
     inside = cluster_map > 0
     ids = cluster_map[inside]
     vals = grid[inside]
     fin = np.isfinite(vals)
-    n_fin = np.bincount(ids[fin], minlength=ids.max() + 1)
-    n_zero = np.bincount(ids[fin & (vals == 0)], minlength=ids.max() + 1)
+    size = ids.max() + 1
+    n_all = np.bincount(ids, minlength=size)
+    n_bad = np.bincount(ids[~fin | (vals == 0)], minlength=size)
     order = np.argsort(ids[fin], kind="stable")
     sid, sval = ids[fin][order], vals[fin][order]
-    uniq, start = np.unique(sid, return_index=True)
-    med = {int(c): float(np.median(v)) for c, v in zip(uniq, np.split(sval, start[1:]))}
-    share = {int(c): n_zero[c] / n_fin[c] for c in uniq}
+    u_fin, start = np.unique(sid, return_index=True)
+    med = {int(c): float(np.median(v)) for c, v in zip(u_fin, np.split(sval, start[1:]))}
+    uniq = np.unique(ids)
+    share = {int(c): n_bad[c] / n_all[c] for c in uniq}
+    med = {int(c): med.get(int(c), np.nan) for c in uniq}
     return uniq, share, med
 
 

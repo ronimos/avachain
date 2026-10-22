@@ -95,7 +95,7 @@ def _mask_to_geojson_wgs84(mask: np.ndarray, transform, crs, out_path: Path) -> 
 
 from config import ProjectConfig, replay_as_of
 from spatial_model import (
-    create_reference_dem, load_and_resample,
+    create_reference_dem, load_and_resample, load_and_resample_survey,
     compute_terrain_features, compute_transport_field,
     smooth_field, compute_wind_stats,
     train_transport_model,
@@ -152,9 +152,9 @@ def step_resample(cfg: ProjectConfig):
             continue
 
         print(f"  {date}: resampling {path.name}...")
-        hs = load_and_resample(str(path), str(ref_dem_path),
-                               clip_min=cfg.min_valid_hs_m,
-                               clip_max=cfg.max_valid_hs_m)
+        hs = load_and_resample_survey(str(path), str(ref_dem_path),
+                                      clip_min=cfg.min_valid_hs_m,
+                                      clip_max=cfg.max_valid_hs_m)
         valid = np.sum(~np.isnan(hs))
         median = np.nanmedian(hs)
         print(f"    valid: {valid}, median: {median:.3f} m")

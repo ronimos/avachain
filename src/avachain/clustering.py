@@ -143,14 +143,28 @@ def build_survey_hs_matrix(survey_grids: dict, valid_mask: np.ndarray) -> tuple:
         grid = survey_grids[d]
         hs_full[:, j] = grid[rows, cols]
 
-    # Filter out cells with any NaN across surveys
-    valid_rows = ~np.isnan(hs_full).any(axis=1)
+    # Cells with no data on some surveys (too few valid survey pixels; see
+    # spatial_model.load_and_resample_survey) take that survey's value from
+    # the same cell's neighbouring surveys. Dropping them, as before, would
+    # cut every cell missing on any one survey out of the cluster map: up
+    # to 6% of the domain per survey once bad pixels are masked. Only cells
+    # with no data on every survey are dropped.
+    nan = np.isnan(hs_full)
+    n_filled = int(nan.any(axis=1).sum())
+    valid_rows = ~nan.all(axis=1)
     hs_matrix = hs_full[valid_rows]
     cell_idx = candidate_idx[valid_rows]
+    if nan.any():
+        x = np.arange(n_surveys)
+        for i in np.flatnonzero(np.isnan(hs_matrix).any(axis=1)):
+            row = hs_matrix[i]
+            ok = ~np.isnan(row)
+            hs_matrix[i] = np.interp(x, x[ok], row[ok])
 
     n_dropped = len(candidate_idx) - len(cell_idx)
-    if n_dropped > 0:
-        print(f"  Dropped {n_dropped} cells with NaN in one or more surveys")
+    if n_filled or n_dropped:
+        print(f"  {n_filled} cells had no data on some surveys (filled from the "
+              f"cell's neighbouring surveys); {n_dropped} with none dropped")
 
     return hs_matrix, cell_idx, dates
 
