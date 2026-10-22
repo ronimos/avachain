@@ -1,0 +1,76 @@
+# slope_config.toml — Little Professor slope
+
+[slope]
+name             = "little_prof_replay_jan"
+display_name     = "Little Professor (replay, Jan)"
+aspect_deg       = 90.0
+slope_angle_deg  = 38.0
+elevation_m      = 3700
+latitude         = 39.63
+longitude        = -105.87
+notes            = "NE-facing slope above treeline; primary study slope for CDOT/ISSW 2026"
+
+[paths]
+project_dir           = "/home/ron/avachain"
+dem                   = "data/dem/251110_Professor_Ground-DSM_aligned.tiff"
+survey_dir            = "data/surveys"
+weather_csv           = "data/weather/weather_data.csv"
+# Own boundaries copy WITHOUT avalanche_release_area_20260118.geojson: the
+# observed Jan 18 crown is the validation answer. boundaries_dir is the
+# parent of boundary_kml, and event_mask_for (reinit) and
+# release_geojsons_for_date (analyze) both read it, so the live dir would
+# hand both the observed polygon from 01-18 on. Ron, 2026-10-22.
+boundary_kml          = "slopes/little_prof_replay_jan/boundaries/Little_Proff.kml"
+start_zone_kml        = "slopes/little_prof_replay_jan/boundaries/Litte_prof_start_zone.kml"
+release_geojson       = "slopes/little_prof_replay_jan/boundaries/avalanche_release_area.geojson"
+output_dir            = "outputs/little_prof_replay_jan"
+windninja_library_dir = "windninja/library"
+slope_dir             = "snowpack/little_prof_replay_jan"
+# Own known-events file: the avalanche step appends its detections to it,
+# and the live copy holds the whole season's later events. Seeded with the
+# events whose survey pair ended by T_start (2025-12-31).
+avalanche_events      = "outputs/little_prof_replay_jan/known_avalanche_events.json"
+
+[snowpack]
+binary     = "/home/caic/caic/rtsys/snowpack/exe/snowpack"
+lib_dir    = "/home/caic/caic/rtsys/snowpack/src/snowpack/lib"
+season_start      = "2025-10-01"
+season_end        = "2026-03-31"
+max_parallel_jobs = 30
+
+[[stations]]
+role        = "summit"
+sql_id      = "CAABT"
+name        = "A-Basin SA-Summit"
+lat         = 39.6424
+lon         = -105.8718
+elev_m      = 3798.3
+sql_columns = ["swin", "temp", "dewp", "rh", "wspd", "wdir", "gust", "mxtemp24h", "mntemp24h"]
+
+[[stations]]
+role        = "base"
+sql_id      = "CAABM"
+name        = "A-Basin SA-Base"
+lat         = 39.6424
+lon         = -105.8718
+elev_m      = 3554.0
+sql_columns = ["pcpac", "depth", "snow24h"]
+
+[scenarios]
+n_triggers        = 5
+size_factors      = [0.70, 0.85, 1.00, 1.15, 1.30]
+depth_percentiles = [10, 50, 90]
+stauchwall_deg    = 28.0
+
+[wrf]
+fcst_base_dir = "/ssd/snowpack/fcst"
+season        = ""
+# Filled in by install.py:
+wrf_smet_dir  = "/ssd/snowpack/fcst/2025/zone055/077963"
+wrf_zone      = "zone055"
+wrf_grid_id   = "077963"
+wrf_smet_file = "/ssd/snowpack/fcst/2025/zone055/077963/0779632_res.smet"
+wrf_dist_km   = 0.714
+
+[cron]
+hour_utc = 3
