@@ -6,8 +6,11 @@ have grown too heterogeneous in their seasonal HS development and should be
 split into two children.
 
 Splitting rules:
-  - Split when max-per-survey HS std > adaptive_split_threshold(median_hs)
-  - Adaptive threshold = clip(0.10 × median_hs, 0.03, 0.12) metres
+  - Split on persistent heterogeneity (clustering.assess_persistent_splits):
+    the two-way HS difference between the cluster's cells, cross-validated
+    across surveys, must exceed a shuffled-null p99 and the adaptive
+    threshold clip(0.10 × median_hs, 0.03, 0.12) m. The old single-survey
+    std test split every eligible cluster (3102 of 3102).
   - Larger child (by pixel count) inherits the parent cluster ID
   - Smaller child gets max_existing_id + 1
   - Child SMET = parent met forcing + child HS series from hourly grids
@@ -125,7 +128,7 @@ def _compute_child_hs_series(child_mask: np.ndarray,
                               grid_stack: np.ndarray,
                               timestamps: list) -> np.ndarray:
     """
-    Compute mean HS (metres) for child pixels from the hourly grid stack.
+    Compute cell-median HS (metres) for child pixels from the hourly grid stack.
 
     Parameters
     ----------
@@ -144,7 +147,9 @@ def _compute_child_hs_series(child_mask: np.ndarray,
     if not valid_cells.any():
         raise ValueError("Child cluster has no valid cells in the hourly grids")
     cell_hs = cell_hs[:, valid_cells]
-    hs_m = np.nanmean(cell_hs, axis=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        hs_m = np.nanmedian(cell_hs, axis=1)       # as the parent's forcing
     nan_ts = np.isnan(hs_m)
     if nan_ts.any():
         hs_m = (pd.Series(hs_m)
@@ -174,11 +179,8 @@ def step_cluster_update(cfg: ProjectConfig, args) -> None:
     After this step, run SNOWPACK for the new child cluster IDs only
     (use the CLUSTERS_FILE mechanism in run_snowpack.sh).
     """
-    from clustering import (
-        build_survey_hs_matrix,
-        assess_cluster_quality,
-        bisect_cluster,
-    )
+    from clustering import assess_persistent_splits, apply_split
+    from survey_validity import compute_validity
 
     cluster_map_path = cfg.cluster_map_path
     if not cluster_map_path.exists():
@@ -201,25 +203,25 @@ def step_cluster_update(cfg: ProjectConfig, args) -> None:
 
     print(f"Surveys: {sorted(survey_grids.keys())}")
 
-    # Build HS matrix for all clustered cells
-    valid_mask = cluster_map > 0
-    hs_matrix, cell_idx, survey_dates = build_survey_hs_matrix(survey_grids, valid_mask)
-    print(f"HS matrix: {hs_matrix.shape[0]} cells × {hs_matrix.shape[1]} surveys")
-
     # Threshold parameters (configurable via args or defaults)
     rel_frac = getattr(args, 'split_rel_frac', 0.10)
     min_abs  = getattr(args, 'split_min_abs',  0.03)
     max_abs  = getattr(args, 'split_max_abs',  0.12)
     min_size = cfg.min_cluster_size
 
-    quality = assess_cluster_quality(
-        cluster_map, hs_matrix, cell_idx,
-        rel_frac=rel_frac, min_abs=min_abs, max_abs=max_abs,
-        min_cluster_size=min_size,
-    )
+    # Persistent heterogeneity, cross-validated across surveys, against a
+    # shuffled null (clustering.persistent_split / assess_persistent_splits).
+    # Biased survey patches are left out (survey_validity).
+    validity = compute_validity(survey_grids, cluster_map)
+    quality, thr = assess_persistent_splits(
+        cluster_map, survey_grids, validity, min_cluster_size=min_size,
+        rel_frac=rel_frac, min_abs=min_abs, max_abs=max_abs)
 
     to_split = [q for q in quality if q['should_split']]
-    print(f"\n{len(quality)} clusters assessed, {len(to_split)} exceed threshold")
+    print(f"\n{len(quality)} clusters assessed; null p99 effect "
+          f"{100 * thr['effect_null_m']:.1f} cm, consistency "
+          f"{thr['consistency_null']:.2f} (n={thr['n_null']}); "
+          f"{len(to_split)} split")
 
     if not to_split:
         print("No clusters need splitting.")
@@ -257,22 +259,18 @@ def step_cluster_update(cfg: ProjectConfig, args) -> None:
     snow_out_dir = cfg.slope_dir / "output"
     smet_dir     = cfg.smet_dir
 
-    # --- Perform splits (worst first by max_std) ---
+    # --- Perform splits (largest persistent effect first) ---
     splits_log = []
     n_split = 0
 
-    for q in sorted(to_split, key=lambda x: -x['max_std']):
+    for q in sorted(to_split, key=lambda x: -x['effect_m']):
         parent_cid = q['cid']
         print(f"\n  Splitting cluster {parent_cid:04d}  "
-              f"n={q['n_cells']}  "
-              f"std={q['max_std']:.3f} m > thresh={q['threshold']:.3f} m")
+              f"n={q['n_cells']}  effect={q['effect_m']:.3f} m "
+              f"(threshold {q['threshold_m']:.3f} m), "
+              f"consistency={q['consistency']:.2f}")
 
-        cluster_map, child_cid = bisect_cluster(
-            cluster_map, parent_cid, hs_matrix, cell_idx, min_size)
-
-        if child_cid is None:
-            print(f"    → bisect failed (cluster too small to split cleanly)")
-            continue
+        cluster_map, child_cid = apply_split(cluster_map, q)
 
         child_n = int(np.sum(cluster_map == child_cid))
         parent_n = int(np.sum(cluster_map == parent_cid))
@@ -302,7 +300,15 @@ def step_cluster_update(cfg: ProjectConfig, args) -> None:
         parent_in_sno  = snow_in_dir  / f"{parent_str}.sno"
         child_in_sno   = snow_in_dir  / f"{child_str}.sno"
 
+        # The survey and daily cycles restart from <cid>_survey.sno and
+        # <cid>_anchor.sno; without them a child stops the cycle as a missing
+        # anchor. The next survey anchor then sets the child to its own HS.
+        for kind in ("survey", "anchor"):
+            src = snow_out_dir / f"{parent_str}_{kind}.sno"
+            if src.exists():
+                shutil.copy2(str(src), str(snow_out_dir / f"{child_str}_{kind}.sno"))
         if parent_res_sno.exists():
+            shutil.copy2(str(parent_res_sno), str(snow_out_dir / f"{child_str}_{child_str}.sno"))
             shutil.copy2(str(parent_res_sno), str(child_in_sno))
             print(f"    → child SNO from restart: {child_in_sno.name}")
         elif parent_in_sno.exists():
@@ -317,8 +323,9 @@ def step_cluster_update(cfg: ProjectConfig, args) -> None:
             'child_cid':     child_cid,
             'parent_n_cells': parent_n,
             'child_n_cells':  child_n,
-            'max_std':       q['max_std'],
-            'threshold':     q['threshold'],
+            'effect_m':      round(q['effect_m'], 4),
+            'consistency':   round(q['consistency'], 3),
+            'threshold_m':   round(q['threshold_m'], 4),
             'timestamp':     datetime.utcnow().isoformat(),
         })
         n_split += 1
