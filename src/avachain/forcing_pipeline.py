@@ -1095,6 +1095,14 @@ def step_smet(cfg: ProjectConfig):
     smet_dir = cfg.smet_dir
     smet_dir.mkdir(parents=True, exist_ok=True)
 
+    # --- NWP refill: augmentation and gap fill happen in the same pass ---
+    refill_path = cfg.project_dir / "data" / "weather" / "refill.smet"
+    refill_header = refill_df = None
+    if refill_path.exists():
+        from smet_writer import read_smet
+        refill_header, refill_df = read_smet(str(refill_path))
+
+    tasks = []
     for cid, rep in representatives.items():
         cr, cc = rep['centroid_row'], rep['centroid_col']
         ri = max(0, min(int(round(cr)), dem.shape[0] - 1))
@@ -1120,58 +1128,64 @@ def step_smet(cfg: ProjectConfig):
             slope_azi=float(aspect[ri, ci]),
             tz_offset=0,
         )
-
-        cell_df = wx_forcing.copy()
-        cell_df['HS'] = pd.Series(rep['hs_series'] * 100.0, index=all_timestamps)
-        cell_df['HS'] = cell_df['HS'].interpolate(method='time').bfill().ffill()
-
         out_path = smet_dir / f"{cell_config.station_id}.smet"
-        write_smet(cell_df, str(out_path), cell_config)
+        tasks.append((str(out_path), cell_config, rep['hs_series']))
+
+    # Clusters are independent files, so they write in parallel. fork shares
+    # the weather and refill frames with the workers instead of pickling them
+    # once per cluster.
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    from config import SMET_WORKERS
+    with ProcessPoolExecutor(
+            max_workers=SMET_WORKERS, mp_context=mp.get_context('fork'),
+            initializer=_init_smet_worker,
+            initargs=(wx_forcing, all_timestamps, refill_header, refill_df)) as pool:
+        results = list(pool.map(_write_cluster_smet, tasks, chunksize=16))
 
     sizes = [r['n_cells'] for r in representatives.values()]
     n_domain = int(np.sum(cluster_map > 0))
-    print(f"\n{len(representatives)} SMET files written to {smet_dir}")
+    print(f"\n{len(representatives)} SMET files written to {smet_dir} "
+          f"({SMET_WORKERS} workers)")
     print(f"  Coverage: {sum(sizes)} / {n_domain} domain cells")
     print(f"  Cluster sizes: min={min(sizes)}, median={np.median(sizes):.0f}, "
           f"max={max(sizes)}")
 
-    # --- Augment with NWP refill ---
-    refill_path = cfg.project_dir / "data" / "weather" / "refill.smet"
-    if refill_path.exists():
-        from smet_writer import read_smet, augment_smet_with_refill, fill_smet_gaps_from_refill
-        print(f"\nAugmenting SMET files from {refill_path.name}...")
-        refill_header, refill_df = read_smet(str(refill_path))
-        added_fields = None
-        n_augmented = 0
-        for cid in representatives:
-            smet_file = smet_dir / f"cluster_{cid:04d}.smet"
-            if smet_file.exists():
-                added = augment_smet_with_refill(
-                    str(smet_file), refill_header, refill_df)
-                if added_fields is None and added:
-                    added_fields = added
-                n_augmented += 1
-        if added_fields:
-            print(f"  {n_augmented} files augmented, "
-                  f"{len(added_fields)} fields added: {', '.join(added_fields)}")
-        else:
-            print("  No new fields to add (all refill fields already present).")
-
-        # --- Fill temporal gaps from refill (e.g. Dec 18 station outage) ---
-        print(f"\nFilling SMET gaps from {refill_path.name} (max 48h)...")
-        total_inserted = total_filled = 0
-        for cid in representatives:
-            smet_file = smet_dir / f"cluster_{cid:04d}.smet"
-            if smet_file.exists():
-                result = fill_smet_gaps_from_refill(
-                    str(smet_file), refill_header, refill_df,
-                    max_gap_hours=48)
-                total_inserted += result['n_rows_inserted']
-                total_filled += result['n_rows_filled']
-        print(f"  Rows inserted: {total_inserted}, "
-              f"cells filled: {total_filled}")
-    else:
+    if refill_df is None:
         print(f"\nNo NWP refill SMET at {refill_path}, skipping augmentation.")
+        return
+    added_fields = next((r['added'] for r in results if r['added']), None)
+    print(f"\nAugmented from {refill_path.name}:")
+    if added_fields:
+        n_augmented = sum(1 for r in results if r['added'])
+        print(f"  {n_augmented} files augmented, "
+              f"{len(added_fields)} fields added: {', '.join(added_fields)}")
+    else:
+        print("  No new fields to add (all refill fields already present).")
+    print(f"Filled SMET gaps from {refill_path.name} (max 48h):")
+    print(f"  Rows inserted: {sum(r['n_rows_inserted'] for r in results)}, "
+          f"cells filled: {sum(r['n_rows_filled'] for r in results)}")
+
+
+_SMET_WORKER: dict = {}
+
+
+def _init_smet_worker(wx_forcing, timestamps, refill_header, refill_df):
+    _SMET_WORKER.update(wx_forcing=wx_forcing, timestamps=timestamps,
+                        refill_header=refill_header, refill_df=refill_df)
+
+
+def _write_cluster_smet(task) -> dict:
+    """Build one cluster's SMET: weather forcing + its representative HS."""
+    from smet_writer import build_cluster_smet
+    out_path, cell_config, hs_series = task
+    w = _SMET_WORKER
+    cell_df = w['wx_forcing'].copy()
+    cell_df['HS'] = pd.Series(hs_series * 100.0, index=w['timestamps'])
+    cell_df['HS'] = cell_df['HS'].interpolate(method='time').bfill().ffill()
+    return build_cluster_smet(cell_df, out_path, cell_config,
+                              w['refill_header'], w['refill_df'],
+                              max_gap_hours=48)
 
 
 # =====================================================================

@@ -207,6 +207,40 @@ def load_and_convert(csv_path: str, tz_output: str = "UTC",
     return out
 
 
+_FIELD_UNITS = {
+    "TA":   {"offset": 273.15, "multiplier": 1.0,  "unit": "K"},
+    "RH":   {"offset": 0.0,    "multiplier": 0.01, "unit": "-"},
+    "VW":   {"offset": 0.0,    "multiplier": 1.0,  "unit": "m/s"},
+    "DW":   {"offset": 0.0,    "multiplier": 1.0,  "unit": "°"},
+    "ISWR": {"offset": 0.0,    "multiplier": 1.0,  "unit": "W/m2"},
+    "ILWR": {"offset": 0.0,    "multiplier": 1.0,  "unit": "W/m2"},
+    "HS":   {"offset": 0.0,    "multiplier": 0.01, "unit": "m"},
+}
+
+
+def _smet_header_items(config: StationConfig, fields: list,
+                       ilwr_source: str) -> list:
+    """(key, value) header lines of a write_smet file, in file order."""
+    # SMET convention: stored_value * multiplier + offset = SI_value
+    offsets = " ".join(["0"] + [str(_FIELD_UNITS[f]["offset"]) for f in fields])
+    multipliers = " ".join(["1"] + [str(_FIELD_UNITS[f]["multiplier"]) for f in fields])
+    return [
+        ("station_id", config.station_id),
+        ("station_name", config.station_name),
+        ("latitude", f"{config.latitude:.6f}"),
+        ("longitude", f"{config.longitude:.6f}"),
+        ("altitude", f"{config.altitude_m:.1f}"),
+        ("nodata", f"{config.nodata}"),
+        ("tz", f"{config.tz_offset}"),
+        ("units_offset", offsets),
+        ("units_multiplier", multipliers),
+        ("slope_angle", f"{config.slope_angle}"),
+        ("slope_azi", f"{config.slope_azi}"),
+        ("comment", f"ILWR {ilwr_source}; generated from CAIC station data"),
+        ("fields", f"timestamp {' '.join(fields)}"),
+    ]
+
+
 def write_smet(df: pd.DataFrame, output_path: str, 
                config: StationConfig,
                fields: Optional[list] = None,
@@ -225,42 +259,14 @@ def write_smet(df: pd.DataFrame, output_path: str,
     if fields is None:
         fields = ["TA", "RH", "VW", "DW", "ISWR", "ILWR", "HS"]
     
-    # Build units_offset and units_multiplier
-    # SMET convention: stored_value * multiplier + offset = SI_value
-    field_units = {
-        "TA":   {"offset": 273.15, "multiplier": 1.0,  "unit": "K"},
-        "RH":   {"offset": 0.0,    "multiplier": 0.01, "unit": "-"},
-        "VW":   {"offset": 0.0,    "multiplier": 1.0,  "unit": "m/s"},
-        "DW":   {"offset": 0.0,    "multiplier": 1.0,  "unit": "°"},
-        "ISWR": {"offset": 0.0,    "multiplier": 1.0,  "unit": "W/m2"},
-        "ILWR": {"offset": 0.0,    "multiplier": 1.0,  "unit": "W/m2"},
-        "HS":   {"offset": 0.0,    "multiplier": 0.01, "unit": "m"},
-    }
-    
-    offsets = " ".join(["0"] + [str(field_units[f]["offset"]) for f in fields])
-    multipliers = " ".join(["1"] + [str(field_units[f]["multiplier"]) for f in fields])
-    units = " ".join(["-"] + [field_units[f]["unit"] for f in fields])
-    
-    nodata = config.nodata
-    
     with open(output_path, "w") as f:
         f.write("SMET 1.1 ASCII\n")
         f.write("[HEADER]\n")
-        f.write(f"station_id       = {config.station_id}\n")
-        f.write(f"station_name     = {config.station_name}\n")
-        f.write(f"latitude         = {config.latitude:.6f}\n")
-        f.write(f"longitude        = {config.longitude:.6f}\n")
-        f.write(f"altitude         = {config.altitude_m:.1f}\n")
-        f.write(f"nodata           = {nodata}\n")
-        f.write(f"tz               = {config.tz_offset}\n")
-        f.write(f"units_offset     = {offsets}\n")
-        f.write(f"units_multiplier = {multipliers}\n")
-        f.write(f"slope_angle      = {config.slope_angle}\n")
-        f.write(f"slope_azi        = {config.slope_azi}\n")
-        f.write(f"comment          = ILWR {ilwr_source}; generated from CAIC station data\n")
-        f.write(f"fields           = timestamp {' '.join(fields)}\n")
+        for key, val in _smet_header_items(config, fields, ilwr_source):
+            f.write(f"{key:<16} = {val}\n")
         f.write("[DATA]\n")
         
+        nodata = config.nodata
         for ts, row in df.iterrows():
             ts_str = ts.strftime("%Y-%m-%dT%H:%M:%S")
             vals = []
@@ -437,7 +443,21 @@ def augment_smet_with_refill(smet_path: str,
     output_path = output_path or smet_path
 
     station_header, station_df = read_smet(smet_path)
+    header, df, add_fields = _augment_frame(
+        station_header, station_df, refill_header, refill_df, fields)
+    if add_fields:
+        _write_smet_frame(output_path, header, df)
+    return add_fields
 
+
+def _augment_frame(station_header: dict, station_df: pd.DataFrame,
+                   refill_header: dict, refill_df: pd.DataFrame,
+                   fields: Optional[list] = None) -> Tuple[dict, pd.DataFrame, list]:
+    """In-memory core of augment_smet_with_refill.
+
+    Returns the merged header and frame, and the fields added. When nothing is
+    added the inputs come back unchanged.
+    """
     station_field_set = set(station_header['fields_list'])
     candidates = fields if fields is not None else refill_header['fields_list']
     # HS_meas and HS_mod are excluded — the pipeline's HS field is authoritative.
@@ -451,7 +471,7 @@ def augment_smet_with_refill(smet_path: str,
                   and f not in REFILL_EXCLUDE]
 
     if not add_fields:
-        return []
+        return station_header, station_df, []
 
     # --- Resample refill (typically 6-hourly) to station timestamps (hourly) ---
     # Build a combined index so that interpolate(method='time') works correctly
@@ -472,15 +492,25 @@ def augment_smet_with_refill(smet_path: str,
     add_offsets = [rf_offsets[rf_fields.index(f)] for f in add_fields]
     add_mults = [rf_mults[rf_fields.index(f)] for f in add_fields]
 
-    merged_fields = station_header['fields_list'] + add_fields
-    merged_offsets = station_header['units_offset_list'] + add_offsets
-    merged_mults = station_header['units_multiplier_list'] + add_mults
+    header = dict(station_header)
+    header['fields_list'] = station_header['fields_list'] + add_fields
+    header['units_offset_list'] = station_header['units_offset_list'] + add_offsets
+    header['units_multiplier_list'] = station_header['units_multiplier_list'] + add_mults
 
-    nodata = float(station_header.get('nodata', -999))
+    df = pd.concat([station_df[station_header['fields_list']],
+                    refill_up[add_fields]], axis=1)
+    return header, df, add_fields
 
-    # Convert to numpy arrays for fast row-by-row write
-    station_arr = station_df[station_header['fields_list']].to_numpy()
-    refill_arr = refill_up[add_fields].to_numpy()
+
+def _write_smet_frame(output_path: str, header: dict, df: pd.DataFrame) -> None:
+    """Write a header (as read_smet returns it) and frame back to a SMET file.
+
+    Header keys keep their original order; fields and units come from the
+    header's *_list entries. NaN is written as nodata.
+    """
+    fields = header['fields_list']
+    nodata = float(header.get('nodata', -999))
+    arr = df[fields].to_numpy()
 
     def _fmt(v: float) -> str:
         return f"{nodata:.3f}" if np.isnan(v) else f"{v:.3f}"
@@ -489,27 +519,24 @@ def augment_smet_with_refill(smet_path: str,
         f.write("SMET 1.1 ASCII\n")
         f.write("[HEADER]\n")
 
-        for key in station_header['_header_order']:
+        for key in header['_header_order']:
             if key == 'fields':
-                f.write(f"fields           = timestamp {' '.join(merged_fields)}\n")
+                f.write(f"fields           = timestamp {' '.join(fields)}\n")
             elif key == 'units_offset':
-                vals_str = ' '.join(f"{v:g}" for v in merged_offsets)
+                vals_str = ' '.join(f"{v:g}" for v in header['units_offset_list'])
                 f.write(f"units_offset     = 0 {vals_str}\n")
             elif key == 'units_multiplier':
-                vals_str = ' '.join(f"{v:g}" for v in merged_mults)
+                vals_str = ' '.join(f"{v:g}" for v in header['units_multiplier_list'])
                 f.write(f"units_multiplier = 1 {vals_str}\n")
             else:
-                f.write(f"{key:<16} = {station_header[key]}\n")
+                f.write(f"{key:<16} = {header[key]}\n")
 
         f.write("[DATA]\n")
 
-        for i, ts in enumerate(station_df.index):
+        for i, ts in enumerate(df.index):
             ts_str = ts.strftime("%Y-%m-%dT%H:%M:%S")
-            vals = [_fmt(v) for v in station_arr[i]]
-            vals += [_fmt(v) for v in refill_arr[i]]
+            vals = [_fmt(v) for v in arr[i]]
             f.write(f"{ts_str}  {'  '.join(vals)}\n")
-
-    return add_fields
 
 
 def fill_smet_gaps_from_refill(smet_path: str,
@@ -541,7 +568,16 @@ def fill_smet_gaps_from_refill(smet_path: str,
     """
     output_path = output_path or smet_path
     station_header, station_df = read_smet(smet_path)
-    nodata = float(station_header.get('nodata', -999))
+    station_df, stats = _fill_frame(station_header, station_df, refill_df,
+                                    max_gap_hours)
+    _write_smet_frame(output_path, station_header, station_df)
+    return stats
+
+
+def _fill_frame(station_header: dict, station_df: pd.DataFrame,
+                refill_df: pd.DataFrame,
+                max_gap_hours: int = 48) -> Tuple[pd.DataFrame, dict]:
+    """In-memory core of fill_smet_gaps_from_refill."""
     station_fields = station_header['fields_list']
 
     # Reindex to complete hourly sequence — missing rows become all-NaN
@@ -584,32 +620,65 @@ def fill_smet_gaps_from_refill(smet_path: str,
                 station_df.loc[block_idx, field] = refill_up.loc[block_idx, field]
                 n_rows_filled += len(block_idx)
 
-    # Capture array AFTER all fills
-    merged_offsets = station_header['units_offset_list']
-    merged_mults = station_header['units_multiplier_list']
-    station_arr = station_df[station_fields].to_numpy()
+    return station_df, {'n_rows_inserted': n_rows_inserted,
+                        'n_rows_filled': n_rows_filled}
 
-    def _fmt(v):
-        return f"{nodata:.3f}" if np.isnan(v) else f"{v:.3f}"
 
-    with open(output_path, 'w') as f:
-        f.write("SMET 1.1 ASCII\n")
-        f.write("[HEADER]\n")
-        for key in station_header['_header_order']:
-            if key == 'fields':
-                f.write(f"fields           = timestamp {' '.join(station_fields)}\n")
-            elif key == 'units_offset':
-                f.write(f"units_offset     = 0 {' '.join(f'{v:g}' for v in merged_offsets)}\n")
-            elif key == 'units_multiplier':
-                f.write(f"units_multiplier = 1 {' '.join(f'{v:g}' for v in merged_mults)}\n")
-            else:
-                f.write(f"{key:<16} = {station_header[key]}\n")
-        f.write("[DATA]\n")
-        for i, ts in enumerate(station_df.index):
-            vals = [_fmt(v) for v in station_arr[i]]
-            f.write(f"{ts.strftime('%Y-%m-%dT%H:%M:%S')}  {'  '.join(vals)}\n")
+def _text_round(values, nodata: float) -> np.ndarray:
+    """Values as read_smet would return them after a write: %.3f, nodata→NaN."""
+    arr = np.asarray(values, dtype=float)
+    out = np.array([float(f"{v:.3f}") for v in arr.ravel()]).reshape(arr.shape)
+    out[out == nodata] = np.nan
+    return out
 
-    return {'n_rows_inserted': n_rows_inserted, 'n_rows_filled': n_rows_filled}
+
+def build_cluster_smet(df: pd.DataFrame, output_path: str,
+                       config: StationConfig,
+                       refill_header: Optional[dict] = None,
+                       refill_df: Optional[pd.DataFrame] = None,
+                       max_gap_hours: int = 48,
+                       fields: Optional[list] = None,
+                       ilwr_source: str = "parameterized") -> dict:
+    """
+    write_smet, augment_smet_with_refill, fill_smet_gaps_from_refill — in
+    memory, with one write instead of three full-file writes and two parses.
+
+    The file chain round-trips values through the %.3f text between steps, and
+    the gap fill interpolates HS across inserted rows from those rounded
+    values, so the station values are rounded the same way here before the
+    fill. The refill columns need no rounding after augment: the fill only
+    copies refill values into gaps or keeps them, and re-printing a value at
+    %.3f gives the same text. The output is byte-identical to the chain.
+
+    Without a refill this is write_smet.
+
+    Returns
+    -------
+    dict with 'added' (refill fields added), 'n_rows_inserted', 'n_rows_filled'
+    """
+    if fields is None:
+        fields = ["TA", "RH", "VW", "DW", "ISWR", "ILWR", "HS"]
+    if refill_df is None:
+        write_smet(df, output_path, config, fields, ilwr_source)
+        return {'added': [], 'n_rows_inserted': 0, 'n_rows_filled': 0}
+
+    items = _smet_header_items(config, fields, ilwr_source)
+    header = dict(items)
+    header['_header_order'] = [k for k, _ in items]
+    header['fields_list'] = list(fields)
+    header['units_offset_list'] = [float(_FIELD_UNITS[f]["offset"]) for f in fields]
+    header['units_multiplier_list'] = [float(_FIELD_UNITS[f]["multiplier"]) for f in fields]
+    nodata = float(config.nodata)
+
+    index = pd.DatetimeIndex(df.index.strftime("%Y-%m-%dT%H:%M:%S"),
+                             name='timestamp')
+    frame = pd.DataFrame(_text_round(df.reindex(columns=fields), nodata),
+                         columns=fields, index=index)
+
+    header, frame, added = _augment_frame(header, frame, refill_header, refill_df)
+    frame, stats = _fill_frame(header, frame, refill_df, max_gap_hours)
+    _write_smet_frame(output_path, header, frame)
+    return {'added': added, **stats}
 
 
 # --- Main: convert station CSV to single SMET file ---
