@@ -951,21 +951,12 @@ def step_scenarios(cfg, args):
         },
     )
 
-    # --- Release comparison plot (research/debug; skip in operational default) ---
-    if not args.plots:
-        print(f"\n{len(rows)} scenarios written → {out_dir}")
-        print(f"  Triggers: {len(triggers)}  "
-              f"Size factors: {len(args.size_factors)}  "
-              f"Depth pcts: {len(args.depth_pcts)}")
-        print(f"  A_ca range: {min(a_ca_list):.1f}–{max(a_ca_list):.1f} m")
-        print(f"  Density: {density_mean:.1f} ± {density_std:.1f} kg/m³")
-        return out_dir
-
+    # --- Release comparison plot: written on every scenarios run ---
     import traceback
     print(f"\nGenerating release comparison plot...")
     print(f"  median_polygons collected: {len(median_polygons)}")
-    mode_str  = "observed" if args.use_observed_release else "meloche"
-    plot_path = out_dir / f"release_comparison_{mode_str}_{args.snapshot_date}_physical_model.png"
+    mode_str  = "observed_" if args.use_observed_release else ""
+    plot_path = out_dir / f"release_comparison_{mode_str}{args.snapshot_date}_physical_model.png"
     print(f"  Output path: {plot_path}")
     try:
         obs_poly   = _load_observed_release_polygon(cfg, args.snapshot_date)
@@ -1003,7 +994,7 @@ def step_scenarios(cfg, args):
             out_path         = plot_path,
             title            = (f"Release polygon comparison — {args.snapshot_date} | "
                                f"Little Professor | Jan 18 event\n"
-                               f"Blue = Meloche-derived  Red = Observed  "
+                               f"Blue = Model-derived  Red = Observed  "
                                f"Green = Start zone  Black dashed = Most likely"),
         )
     except Exception:
@@ -1055,7 +1046,8 @@ def main():
     parser.add_argument('--plots', action='store_true',
                         help='Generate research/diagnostic plots '
                              '(analyze: comparison, deviations, Meloche; '
-                             'scenarios: release comparison). Off by default.')
+                             'the scenarios release comparison is always written). '
+                             'Off by default.')
 
     # scenarios
     parser.add_argument('--forecast-horizon', default=None,
