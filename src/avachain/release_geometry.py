@@ -47,8 +47,10 @@ MIN_POLYGON_AREA = 200.0  # m² — discard degenerate polygons smaller than thi
 # replaces the heuristic Lambda/thickness gradient gates with the field-
 # validated A_ca scaling (Eq. 20): arrest a C->N step where the directed WL
 # shear-strength gradient makes the arrest length shorter than the step.
-# Left OFF by default so the existing gates run unchanged; flip to A/B the 75-run.
-USE_MELOCHE_ARREST = False
+# ON since 2026-10-23 (Ron). The Lambda/thickness gates are then skipped, not
+# run alongside. Eq. 20 comes from arrest_indices.arrest_length so the C = 0.045
+# prefactor cannot be dropped; the inline copy that did drop it was 22x too long.
+USE_MELOCHE_ARREST = True
 MELOCHE_DELTA      = 1.0   # softening coefficient δ (Meloche default; their Table 1)
 NU                 = 0.3   # slab Poisson's ratio
 
@@ -1047,9 +1049,9 @@ def propagate_release(
                         L_t   = nbr_props.get('L_t',     np.nan)
                         if (not any(np.isnan(v) for v in (Lam, tg, sig_t, L_t))
                                 and tg > 0.0):
-                            Pi     = tg / (theta_dir * Lam
-                                           * np.sqrt(1.0 + MELOCHE_DELTA))
-                            A_ca_d = L_t * Pi * np.sqrt(sig_t / tg)  # Eq. 20 (m)
+                            A_ca_d, _ = _ai.arrest_length(
+                                tg, theta_dir, Lam, sig_t,
+                                delta=MELOCHE_DELTA, L_t=L_t)  # Eq. 20 (m)
                             if A_ca_d < dist_cn:
                                 return False, 'meloche_arrest'
             return True, 'propagated'

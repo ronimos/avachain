@@ -213,3 +213,31 @@ class TestAnisotropicGrowth:
         monkeypatch.setattr(rg, 'MODE3_SPEED_RATIO', 0.0)
         with pytest.raises(ValueError, match='positive ring_step'):
             _run(scene)
+
+
+class TestMelocheArrestPrefactor:
+    """Eq. 20 carries C = 0.045. The inline copy in _qualifies dropped it, so
+    the arrest length came out 22x too long and the test could not fire."""
+
+    def test_arrest_length_is_the_shared_eq20_with_c(self):
+        import arrest_indices as ai
+        a, X = ai.arrest_length(800.0, 300.0, 2.0, 4000.0, delta=1.0, L_t=30.0)
+        assert a == pytest.approx(
+            ai.C_FIT * 30.0 * X * np.sqrt(4000.0 / 800.0))
+
+    def test_stronger_wl_downslope_arrests_at_the_first_hop(self, scene, monkeypatch):
+        """WL strength rises 300 Pa/m down the fall line. With C the arrest
+        length is ~2.9 m, under the 4 m hop, so the crack must not enter any
+        cluster downslope of the trigger. Without C it is ~63 m and runs on."""
+        monkeypatch.setattr(rg, 'USE_MELOCHE_ARREST', True)
+        px = scene['pixel_index']
+        snap = scene['snap_features'].copy()
+        for cid, (rows, _cols) in px.items():
+            snap.loc[cid, 'wl_shear_strength'] = 2400.0 + 300.0 * rows.mean()
+        sc = dict(scene, snap_features=snap)
+        _poly, reached = _run(sc)
+        t_rows, _ = px[scene['trigger']]
+        downslope = [c for c in reached
+                     if px[c][0].mean() > t_rows.mean() + BLOCK]
+        assert downslope == []
+        assert len(reached) > 1            # it still grew upslope and sideways

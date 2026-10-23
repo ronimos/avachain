@@ -81,7 +81,7 @@ checking these leads to wrong conclusions about what produced a polygon.
 
 | Flag | Default | Effect when off |
 |---|---|---|
-| `USE_MELOCHE_ARREST` | `False` | The Meloche Π₁ arrest test is **not** what stops the BFS. `TAU_G_ABS_FLOOR = 350 Pa` plus the Λ/thickness discontinuity heuristics are. |
+| `USE_MELOCHE_ARREST` | `True` (since 2026-10-23, **avachain only** — the standalone is still `False`, so this is a parity difference until Ron decides) | `_qualifies` stops at the directional Meloche A_ca test (Eq. 20 via `arrest_indices.arrest_length`, with C = 0.045); the Λ/thickness discontinuity heuristics are then **skipped**, not run alongside. `TAU_G_ABS_FLOOR`, thin slab, low Λ and the distance caps still apply. It fires rarely (6 of ~1200 clusters for trigger 1772) and areas grow ~5-20% against the heuristics. |
 | `USE_MODE3_SPEED_CAP` | `False` | `d_lat` is the Gaume θ-ratio width (15 m floor) alone. |
 | `USE_MODE3_LAMBDA` | `False` | A single Λ is used in all directions. |
 | `USE_ANISOTROPIC_RINGS` | `False` | BFS rings grow isotropically. |
