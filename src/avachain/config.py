@@ -116,6 +116,12 @@ class ProjectConfig:
     transport_smoothing_window_m: int = 15
     min_valid_hs_m: float = 0.0
     max_valid_hs_m: float = 12.0
+    # Clean survey pixels before resampling to 1 m (spatial_model.
+    # load_and_resample_survey: drop pixels outside [-0.5 m, max], median per
+    # cell, NaN under 50% valid). False resamples with the plain mean and
+    # clips, as before 1e71ebb. [processing] clean_survey_pixels in the TOML;
+    # off only for ablations.
+    clean_survey_pixels: bool = True
 
     # --- Domain mask ---
     min_slope_deg: float = 15.0
@@ -303,6 +309,7 @@ class ProjectConfig:
         paths     = data.get("paths", {})
         slope     = data.get("slope", {})
         scenarios = data.get("scenarios", {})
+        processing = data.get("processing", {})
         wrf       = data.get("wrf", {})
         stations  = {s["role"]: s for s in data.get("stations", [])}
         summit    = stations.get("summit", {})
@@ -324,6 +331,7 @@ class ProjectConfig:
             avalanche_events_file=(Path(paths["avalanche_events"])
                                    if "avalanche_events" in paths else None),
             windninja_library_dir=Path(paths.get("windninja_library_dir", "windninja/library")),
+            clean_survey_pixels=bool(processing.get("clean_survey_pixels", True)),
             slope_name=slope_name,
             slope_dir=Path(paths.get("slope_dir", f"snowpack/{slope_name}")),
             summit_id=summit.get("sql_id", ""),

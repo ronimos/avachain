@@ -9,6 +9,7 @@
 #   ./run_full_pipeline.sh                         # full pipeline
 #   ./run_full_pipeline.sh --clean                 # wipe SNOWPACK restart files
 #   ./run_full_pipeline.sh --snapshot 2026-01-17   # custom analysis snapshot
+#   SLOPE=little_prof_abl_pix ./run_full_pipeline.sh ...   # another slope config
 #
 #   # With avalanche reinitialization (two-pass SNOWPACK):
 #   ./run_full_pipeline.sh --clean \
@@ -38,16 +39,20 @@ set -euo pipefail
 
 # --- Configuration ---
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# SLOPE selects the config, output and SNOWPACK dirs (default little_prof);
+# run_snowpack.sh is shared and reads SLOPE_DIR from the environment.
+SLOPE=${SLOPE:-little_prof}
 SLOPE_SCRIPTS=$PROJECT_DIR/slopes/little_prof
-SLOPE_DIR=${SLOPE_DIR:-$PROJECT_DIR/snowpack/little_prof}
+SLOPE_DIR=${SLOPE_DIR:-$PROJECT_DIR/snowpack/$SLOPE}
+export SLOPE_DIR
 # --toml on every call: without it a subprocess silently falls back to the
 # default ProjectConfig and reads/writes outputs/<step> instead of
 # outputs/little_prof/<step>.
-TOML=$PROJECT_DIR/slopes/little_prof/slope_config.toml
+TOML=$PROJECT_DIR/slopes/$SLOPE/slope_config.toml
 PIPELINE="python $PROJECT_DIR/src/avachain/forcing_pipeline.py --toml $TOML"
 ANALYSIS="python $PROJECT_DIR/src/avachain/analysis_pipeline.py --toml $TOML"
 VENV=$PROJECT_DIR/.venv/bin/activate
-OUT_DIR=$PROJECT_DIR/outputs/little_prof
+OUT_DIR=$PROJECT_DIR/outputs/$SLOPE
 LOG_DIR=$OUT_DIR/logs
 
 # Defaults

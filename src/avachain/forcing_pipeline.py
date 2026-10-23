@@ -152,9 +152,11 @@ def step_resample(cfg: ProjectConfig):
             continue
 
         print(f"  {date}: resampling {path.name}...")
-        hs = load_and_resample_survey(str(path), str(ref_dem_path),
-                                      clip_min=cfg.min_valid_hs_m,
-                                      clip_max=cfg.max_valid_hs_m)
+        resample = (load_and_resample_survey if cfg.clean_survey_pixels
+                    else load_and_resample)
+        hs = resample(str(path), str(ref_dem_path),
+                      clip_min=cfg.min_valid_hs_m,
+                      clip_max=cfg.max_valid_hs_m)
         valid = np.sum(~np.isnan(hs))
         median = np.nanmedian(hs)
         print(f"    valid: {valid}, median: {median:.3f} m")
