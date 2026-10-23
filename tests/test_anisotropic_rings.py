@@ -241,3 +241,19 @@ class TestMelocheArrestPrefactor:
                      if px[c][0].mean() > t_rows.mean() + BLOCK]
         assert downslope == []
         assert len(reached) > 1            # it still grew upslope and sideways
+
+
+class TestCentroidRounding:
+    """BFS centroids are rounded to the nearest pixel, as in the standalone
+    (~/avalanche-release-areas), not truncated: int() moved every centroid with
+    a fractional part up to one pixel toward the origin."""
+
+    def test_centroids_are_rounded_not_truncated(self, scene, monkeypatch):
+        calls = []
+        real = rg.pixel_to_utm
+        monkeypatch.setattr(rg, 'pixel_to_utm',
+                            lambda r, c, t: (calls.append((r, c)), real(r, c, t))[1])
+        _run(scene)
+        # cluster 1 covers rows/cols 0..3: centroid (1.5, 1.5)
+        assert (round(1.5), round(1.5)) in calls          # (2, 2)
+        assert (1, 1) not in calls

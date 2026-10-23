@@ -863,7 +863,9 @@ def propagate_release(
                   for i in range(len(cids))}
 
     # Centroids in UTM
-    centroids = {int(c): pixel_to_utm(int(pxs[i][0]), int(pxs[i][1]), transform)
+    # round, not truncate: matches the standalone (int() put a centroid up to
+    # one pixel upslope/west of the standalone's, changing <=9 clusters).
+    centroids = {int(c): pixel_to_utm(int(round(pxs[i][0])), int(round(pxs[i][1])), transform)
                  for i, c in enumerate(cids)}
 
     # WL shear strength at trigger (Pa) — crack arrests where tau_p increases
