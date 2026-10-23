@@ -130,3 +130,40 @@ class TestAnchorSkipsInvalid:
         r = anchor_to_survey(cfg, pd.Timestamp("2026-03-02T18:00"))
         assert [s["cid"] for s in r["stats"]] == [2]
         assert "1.000000" in (out / "cluster_0001_cluster_0001.sno").read_text()
+
+
+class TestFillNodata:
+    """A NaN start cell stays NaN through gap_fill_period and every later pair."""
+
+    def test_nan_propagates_without_fill(self):
+        from spatial_model import gap_fill_period
+        hs = np.array([[0.8, 0.8, np.nan]])
+        idx = pd.date_range("2026-01-01", periods=4, freq="h")
+        grids = gap_fill_period(hs, np.zeros(3), pd.Series([1.0, 1.1, 1.2, 1.3], idx),
+                                pd.Series([2.0] * 4, idx), np.ones(3, bool))
+        assert np.isnan(list(grids.values())[-1][0, 2])
+
+    def test_cluster_median_removes_it(self):
+        from spatial_model import gap_fill_period
+        from survey_validity import fill_nodata
+        cm = np.array([[1, 1, 1, 1]])
+        hs = np.array([[0.6, 1.0, 5.0, np.nan]])
+        out, n_med, n_near = fill_nodata(hs, cm)
+        assert out[0, 3] == pytest.approx(1.0) and (n_med, n_near) == (1, 0)
+        assert out[0, :3].tolist() == [0.6, 1.0, 5.0]       # valid cells untouched
+        idx = pd.date_range("2026-01-01", periods=4, freq="h")
+        grids = gap_fill_period(out, np.zeros(4), pd.Series([1.0, 1.1, 1.2, 1.3], idx),
+                                pd.Series([2.0] * 4, idx), np.ones(4, bool))
+        assert not any(np.isnan(g).any() for g in grids.values())
+
+    def test_all_nodata_cluster_takes_nearest_valid_cell(self):
+        from survey_validity import fill_nodata
+        cm = np.array([[1, 1, 2, 3]])
+        hs = np.array([[0.5, 0.7, np.nan, 2.0]])
+        out, n_med, n_near = fill_nodata(hs, cm)
+        assert (n_med, n_near) == (0, 1) and out[0, 2] == pytest.approx(0.7)
+
+    def test_outside_clusters_stay_nan(self):
+        from survey_validity import fill_nodata
+        out, *_ = fill_nodata(np.array([[0.5, np.nan]]), np.array([[1, 0]]))
+        assert np.isnan(out[0, 1])

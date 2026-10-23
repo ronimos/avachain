@@ -895,7 +895,7 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
     # pinned to it, and get no transport (fitted from the biased dHS) in
     # either pair the survey belongs to.
     from survey_validity import (compute_validity, write_validity,
-                                 invalid_cells, carry_forward)
+                                 invalid_cells, carry_forward, fill_nodata)
     cluster_map = (np.load(str(cfg.cluster_map_path))
                    if cfg.cluster_map_path.exists() else None)
     validity = {}
@@ -967,6 +967,13 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
                       f"at start (carried forward), "
                       f"{len(validity.get(d_b.isoformat(), []))} at end; "
                       f"their transport set to station-only")
+
+        if cluster_map is not None:
+            # After `valid` (taken from the raw surveys) and carry_forward.
+            hs_a, n_med, n_near = fill_nodata(hs_a, cluster_map)
+            if n_med or n_near:
+                print(f"  No-data start cells filled: {n_med} with their "
+                      f"cluster median, {n_near} from the nearest valid cell")
 
         if station_only:
             grids = gap_fill_station_only(hs_a, stn_hs, valid)

@@ -194,8 +194,17 @@ def separate_avalanche_from_wind(transport: np.ndarray,
             filled = np.where(den > 0.1, num / den, np.nan)
         wind_transport = np.where(still_nan, filled, wind_transport)
 
+    # Deeper into a large mask than the widest window there is no wind
+    # signal left to interpolate. Assume none: the observed change (transport
+    # is already cell dHS minus station dHS) is then all avalanche. Leaving
+    # NaN here made avalanche_dhs NaN where the loss is largest, and the NaN
+    # entered every hourly grid after the event.
+    wind_transport = np.where(np.isnan(wind_transport) & valid_mask,
+                              0.0, wind_transport)
+    # No survey data in a cell gives no estimate: it follows the station.
     avalanche_dhs = np.where(avalanche_mask & valid_mask,
                               transport - wind_transport, 0)
+    avalanche_dhs = np.where(np.isnan(avalanche_dhs), 0.0, avalanche_dhs)
     return avalanche_dhs, wind_transport
 
 

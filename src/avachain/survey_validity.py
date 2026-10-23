@@ -128,3 +128,54 @@ def carry_forward(hs_start: np.ndarray, transport, inv_start: np.ndarray,
     if transport is not None:
         transport = np.where(inv_start | inv_end, 0.0, transport)
     return hs_start, transport
+
+
+def fill_nodata(hs_start: np.ndarray, cluster_map: np.ndarray) -> tuple:
+    """Fill the start grid's no-data cells inside clusters, so the hourly
+    grids carry no NaN.
+
+    gap_fill_period adds dHS to the start grid, so a NaN cell stays NaN for
+    the whole pair and, through prev_end, for every later pair: a cell
+    missing on the first survey never recovers even when later surveys see
+    it. A cluster of such cells has no valid cell in the hourly grids and
+    the smet step skips it.
+
+    A cell takes the median of its own cluster's valid cells. A cluster with
+    none (every cell no-data on this survey) takes its nearest valid cell
+    instead. Returns (grid, n_median, n_nearest).
+
+    Fill the start grid only, after `valid` is computed from the raw
+    surveys: filled cells then follow the station (no transport) from the
+    cluster median. Split children inherit the filled values, so a child
+    made of such cells gets its parent's series, never an empty one.
+    """
+    from scipy import ndimage
+
+    out = hs_start.copy()
+    miss = np.isnan(out) & (cluster_map > 0)
+    if not miss.any():
+        return out, 0, 0
+
+    cids = cluster_map[miss]
+    ok = ~np.isnan(hs_start) & (cluster_map > 0)
+    # per-cluster median over valid cells
+    order = np.argsort(cluster_map[ok], kind="stable")
+    ids = cluster_map[ok][order]
+    vals = hs_start[ok][order]
+    uniq, first = np.unique(ids, return_index=True)
+    med = {int(u): float(np.median(g)) for u, g in zip(uniq, np.split(vals, first[1:]))}
+
+    fill = np.full(cids.shape, np.nan)
+    for cid in np.unique(cids):
+        if int(cid) in med:
+            fill[cids == cid] = med[int(cid)]
+    n_median = int((~np.isnan(fill)).sum())
+    out[miss] = fill
+
+    left = np.isnan(out) & (cluster_map > 0)
+    n_nearest = int(left.sum())
+    if n_nearest:
+        _, (ri, ci) = ndimage.distance_transform_edt(
+            np.isnan(hs_start), return_indices=True)
+        out[left] = hs_start[ri[left], ci[left]]
+    return out, n_median, n_nearest
