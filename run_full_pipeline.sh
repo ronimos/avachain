@@ -19,6 +19,8 @@
 # Flags:
 #   --clean           Remove SNOWPACK restart files so simulation starts
 #                     from bare ground. Required after a DEM change.
+#   --keep-cluster-map  Skip the `cluster` step: keep the existing cluster map
+#                     (a rebuild changes cluster ids and every comparison).
 #   --reinit          Enable post-avalanche reinitialization (two-pass SNOWPACK).
 #   --event-date      Avalanche event date YYYY-MM-DD
 #   --date-before     Pre-event survey date YYYY-MM-DD
@@ -38,10 +40,15 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SLOPE_SCRIPTS=$PROJECT_DIR/slopes/little_prof
 SLOPE_DIR=${SLOPE_DIR:-$PROJECT_DIR/snowpack/little_prof}
-PIPELINE="python $PROJECT_DIR/src/avachain/forcing_pipeline.py"
-ANALYSIS="python $PROJECT_DIR/src/avachain/analysis_pipeline.py"
+# --toml on every call: without it a subprocess silently falls back to the
+# default ProjectConfig and reads/writes outputs/<step> instead of
+# outputs/little_prof/<step>.
+TOML=$PROJECT_DIR/slopes/little_prof/slope_config.toml
+PIPELINE="python $PROJECT_DIR/src/avachain/forcing_pipeline.py --toml $TOML"
+ANALYSIS="python $PROJECT_DIR/src/avachain/analysis_pipeline.py --toml $TOML"
 VENV=$PROJECT_DIR/.venv/bin/activate
-LOG_DIR=$PROJECT_DIR/outputs/logs
+OUT_DIR=$PROJECT_DIR/outputs/little_prof
+LOG_DIR=$OUT_DIR/logs
 
 # Defaults
 SNAPSHOT_DATE=""
@@ -51,11 +58,13 @@ EVENT_DATE=""
 DATE_BEFORE=""
 DATE_AFTER=""
 REINIT_GEOJSON=""
+KEEP_CLUSTER_MAP=0
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --clean)           CLEAN=1; shift ;;
+        --keep-cluster-map) KEEP_CLUSTER_MAP=1; shift ;;
         --snapshot)        SNAPSHOT_DATE="$2"; shift 2 ;;
         --reinit)          REINIT=1; shift ;;
         --event-date)      EVENT_DATE="$2"; shift 2 ;;
@@ -86,6 +95,7 @@ echo "  Full Pipeline Rebuild"
 echo "  Started: $(date)"
 echo "  Clean:   $CLEAN"
 echo "  Reinit:  $REINIT"
+echo "  Keep cluster map: $KEEP_CLUSTER_MAP"
 if [[ $REINIT -eq 1 ]]; then
 echo "  Event:   $EVENT_DATE ($DATE_BEFORE → $DATE_AFTER)"
 fi
@@ -115,7 +125,11 @@ $PIPELINE transport
 $PIPELINE features
 $PIPELINE train
 $PIPELINE avalanche
-$PIPELINE cluster
+if [[ $KEEP_CLUSTER_MAP -eq 1 ]]; then
+    echo "    --keep-cluster-map: skipping cluster (using $OUT_DIR/analysis/cluster_map.npy)"
+else
+    $PIPELINE cluster
+fi
 $PIPELINE gap_fill
 $PIPELINE smet
 
@@ -172,7 +186,7 @@ if [[ $REINIT -eq 1 ]]; then
 
     echo ""
     echo "    Pass 2: $EVENT_DATE → end of season (scoured clusters only)"
-    REINIT_STATS="$PROJECT_DIR/outputs/analysis/reinit_stats_${EVENT_DATE}.json"
+    REINIT_STATS="$OUT_DIR/analysis/reinit_stats_${EVENT_DATE}.json"
     if [[ -f "$REINIT_STATS" ]]; then
         bash "$SLOPE_SCRIPTS/run_snowpack.sh" "" "" "$REINIT_STATS"
     else
@@ -219,8 +233,8 @@ echo "    (includes two-pass SNOWPACK + reinit scour)"
 fi
 echo ""
 echo "  Outputs:"
-echo "    SMET files:    $PROJECT_DIR/outputs/smet/"
+echo "    SMET files:    $SLOPE_DIR/input/smet/"
 echo "    SNOWPACK:      $SLOPE_DIR/output/"
-echo "    Scenarios:     $PROJECT_DIR/outputs/scenarios/"
+echo "    Scenarios:     $OUT_DIR/scenarios/"
 echo "    Log:           $LOGFILE"
 echo "============================================================"
