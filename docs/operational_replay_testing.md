@@ -368,7 +368,7 @@ Plus six reinit three-pass runs, which dominate. Overnight-feasible.
 | Target | Baseline | Notes |
 |---|---|---|
 | Dense, per-cluster per-timestep | `slope_snowpack.zarr` (501 steps, 6-hourly, 6565 locations, 14 GB) | Raw SNOWPACK output, unaffected by downstream code changes — the trustworthy dense baseline. |
-| Full chain | `outputs/little_prof/scenarios/2026-03-07` + `analysis/*_2026-03-07.*` | **Regenerated 2026-10-19 with current code.** |
+| Full chain | none (the 2026-03-07 scenarios were deleted 2026-10-25) | **There was no avalanche on 2026-03-07.** Its scenario set was a theoretical pre-storm envelope example, not an event; do not use it as one. `analysis/*_2026-03-07.*` remain as a snowpack date only. |
 
 **Why regeneration was mandatory.** The pre-existing 03-07 artifacts predated
 the θ-estimator port. Old vs new baseline shares **zero trigger clusters**
@@ -478,7 +478,8 @@ python src/avachain/dedup_zarr.py --toml slopes/little_prof/slope_config.toml \
 python src/avachain/aws_ingest.py --toml slopes/little_prof/slope_config.toml \
     --from-csv            # add --dry-run first to see the span
 
-# Season full-chain baseline, regenerated with current code. ~19 s + ~7 min.
+# Historical (deleted 2026-10-25): 2026-03-07 was a theoretical pre-storm example,
+# not an avalanche. Kept only as a record of how the set was built.
 unset AVACHAIN_AS_OF
 python src/avachain/analysis_pipeline.py analyze \
     --toml slopes/little_prof/slope_config.toml --snapshot-date 2026-03-07
@@ -583,7 +584,7 @@ python src/avachain/replay_run.py \
     --toml slopes/little_prof_replay/slope_config.toml \
     --seed outputs/replay_seed_2026-02-05.tgz \
     --start 2026-02-06 --end 2026-03-08 \
-    --scenarios-on surveys,2026-03-07 \
+    --scenarios-on surveys \
     --no-cluster-split \
     --archive outputs/little_prof_replay/ticks
 ```

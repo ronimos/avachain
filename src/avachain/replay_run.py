@@ -24,7 +24,7 @@ plus the tick's feature CSVs and scenario summary.
     python src/avachain/replay_run.py --toml slopes/little_prof_replay/slope_config.toml \\
         setup --live-toml slopes/little_prof/slope_config.toml --t-start 2026-02-05
     python src/avachain/replay_run.py --toml slopes/little_prof_replay/slope_config.toml \\
-        run --start 2026-02-06 --end 2026-03-08 --scenarios-on surveys,2026-03-07
+        run --start 2026-02-06 --end 2026-03-08 --scenarios-on surveys
 """
 from __future__ import annotations
 
