@@ -33,6 +33,11 @@ ENERGY_DELTA        = 0.0
 SIGMA_T_COLUMN      = 'sigma_t_mean'  # thickness-weighted slab σt; 'sigma_t_wl' = weakest-link bound
 ENERGY_USE_RESIDUAL = False           # τr = 0 in G_c, as arrest_indices.evaluate(use_residual=False)
 ENERGY_R            = None            # energy ratio R; None = arrest_indices.R_FIT. Sensitivity runs only
+# Weak-layer thickness D_wl behind K_wl = G_wl / D_wl, and so G_c ∝ D_wl:
+# 'sequence' = wl_thickness, the whole basal FC/DH sequence (as Eq. 20 uses);
+# 'weakest_element' = wl_weakest_thickness, the lowest-tau_p WL element;
+# a float = that thickness in m (the JGR calibration used 0.04).
+KWL_THICKNESS       = 'sequence'
 
 
 def tau_net(rho, h, psi_deg, phi_deg=PHI_DEG):
@@ -73,11 +78,26 @@ def e_column(relation=None):
     return 'E_eff' if relation == E_RELATION else f'E_eff__{relation}'
 
 
-def cell_energy(row, psi_deg, sigma_t_col=None, e_relation=None, delta=None,
-                G_wl=None, use_residual=None):
-    """tau_net, G_c, G_slab_path, N_max for one cluster row; NaN where inputs are missing.
+def wl_thickness(row, choice=None):
+    """D_wl (m) under KWL_THICKNESS; D_WL_FALLBACK where the chosen column is missing."""
+    choice = KWL_THICKNESS if choice is None else choice
+    if not isinstance(choice, str):
+        return float(choice)
+    col = {'sequence': 'wl_thickness', 'weakest_element': 'wl_weakest_thickness'}.get(choice)
+    if col is None:
+        raise ValueError(f"unknown KWL_THICKNESS {choice!r}")
+    try:
+        D = float(row.get(col, np.nan))
+    except (TypeError, ValueError):
+        D = np.nan
+    return D if np.isfinite(D) and D > 0 else D_WL_FALLBACK
 
-    Defaults come from the module constants. K_wl = G_wl / wl_thickness (D_WL_FALLBACK if absent).
+
+def cell_energy(row, psi_deg, sigma_t_col=None, e_relation=None, delta=None,
+                G_wl=None, use_residual=None, kwl_thickness=None, R=None):
+    """tau_net, G_c, G_slab_path, N_max and ln_Pi = ln(R G_slab / G_c) for one cluster row.
+
+    NaN where inputs are missing. Defaults come from the module constants.
     """
     sigma_t_col = SIGMA_T_COLUMN if sigma_t_col is None else sigma_t_col
     delta = ENERGY_DELTA if delta is None else delta
@@ -92,15 +112,18 @@ def cell_energy(row, psi_deg, sigma_t_col=None, e_relation=None, delta=None,
 
     rho, h = get('slab_density'), get('slab_thickness')
     E, sig = get(e_column(e_relation)), get(sigma_t_col)
-    tau_p, D_wl = get('wl_shear_strength'), get('wl_thickness')
-    if not (np.isfinite(D_wl) and D_wl > 0):
-        D_wl = D_WL_FALLBACK
-    K_wl = G_wl / D_wl
+    tau_p = get('wl_shear_strength')
+    K_wl = G_wl / wl_thickness(row, kwl_thickness)
     psi = float(psi_deg)
     tr = float(residual_shear(rho, h, psi, PHI_DEG)) if use_residual else 0.0
+    G_c, G_sl = float(g_c(tau_p, K_wl, delta, tr)), float(g_slab(sig, h, E))
+    R = energy_r() if R is None else R
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ln_pi = float(np.log(R * G_sl / G_c)) if G_c > 0 and G_sl > 0 else np.nan
     return {
         'tau_net': float(tau_net(rho, h, psi)),
-        'G_c': float(g_c(tau_p, K_wl, delta, tr)),
-        'G_slab_path': float(g_slab(sig, h, E)),
+        'G_c': G_c,
+        'G_slab_path': G_sl,
         'N_max': float(n_max(sig, h)),
+        'ln_Pi': ln_pi,
     }

@@ -59,6 +59,7 @@ SELF_CONSISTENT_A0 = False        # True evaluates a0 at F(a0/h) iteratively
 DMAX_FACTOR        = 1.0          # d_max = DMAX_FACTOR * grain_size (both m)
 E_RELATION         = 'vanherwijnen2016'   # or 'project_fit'
 E_RELATIONS_EXTRA  = ('project_fit',)
+ST_RELATIONS_EXTRA = ('jamieson1990',)    # extra sigma_t(rho), emitted as sigma_t_*__<name>
 LIGAMENT_VARIANTS = (
     ('kirchner2000',     'kirchner2000',  1.0),
     ('schweizer2004_d1', 'schweizer2004', 1.0),
@@ -481,8 +482,14 @@ def profile_features(ds_t_loc, min_depth_cm: float) -> dict:
             v    = ds_t_loc['shear_strength'].values.ravel()
             vals = v[wl_m & ~np.isnan(v)]
             result['wl_shear_strength'] = float(np.nanmean(vals)) if len(vals) else np.nan
+            # Thickness of the WL element with the lowest shear strength, the
+            # 'weakest_element' choice for K_wl in energy_path (KWL_THICKNESS).
+            sel = np.flatnonzero(wl_m & ok & np.isfinite(v))
+            result['wl_weakest_thickness'] = (float(dz[sel[np.argmin(v[sel])]])
+                                              if len(sel) else np.nan)
         except Exception:
             result['wl_shear_strength'] = np.nan
+            result['wl_weakest_thickness'] = np.nan
 
         wl_z = z[wl_m & ok]
         result['wl_burial_depth'] = float(-wl_z.max())          if len(wl_z) else np.nan
@@ -518,7 +525,7 @@ def profile_features(ds_t_loc, min_depth_cm: float) -> dict:
     else:
         for k in ('wl_shear_strength', 'wl_grain_size', 'wl_density',
                   'wl_hand_hardness', 'wl_burial_depth', 'wl_thickness',
-                  'interface_z', 'rc_wl'):
+                  'wl_weakest_thickness', 'interface_z', 'rc_wl'):
             result[k] = np.nan
 
     # --- Meloche et al. (2025) parameters (per-cluster, no neighbors needed) ---
@@ -578,7 +585,8 @@ def _slab_layer_aggregate(ds_t_loc, slab_sel, dz, z) -> dict:
         grain_size_i=gsz, dmax_factor=DMAX_FACTOR,
         e_relation=E_RELATION, e_relations_extra=E_RELATIONS_EXTRA,
         k_ic_variants=LIGAMENT_VARIANTS if USE_LIGAMENT_BOUND else (),
-        self_consistent_a0=SELF_CONSISTENT_A0)
+        self_consistent_a0=SELF_CONSISTENT_A0,
+        st_relations_extra=ST_RELATIONS_EXTRA)
 
 
 # -----------------------------------------------------------------------

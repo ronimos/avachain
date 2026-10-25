@@ -217,6 +217,30 @@ def slab_tensile_strength(rho, scale=ST_RHO_SCALE, exp=ST_RHO_EXP, rho_ref=RHO_R
     return (np.asarray(rho, dtype=float) / rho_ref) ** exp * scale
 
 
+JJ1990_SCALE = 79.7e3   # Pa; Jamieson & Johnston (1990) J. Glaciol. 36(122), Table III, group I
+JJ1990_EXP   = 2.39
+JJ1990_RHO_ICE = 917.0  # kg m-3, as in their Eq. 4
+
+
+def slab_tensile_strength_jamieson1990(rho, scale=JJ1990_SCALE, exp=JJ1990_EXP,
+                                       rho_ice=JJ1990_RHO_ICE):
+    """sigma_t(rho) = 79.7 (rho/rho_ice)^2.39 kPa, in-situ, rounded grains.
+
+    SOURCE: Jamieson & Johnston (1990), J. Glaciol. 36(122), 102-106, Table III
+    and Conclusions: group I (new, partly settled or rounded grains), 43 layers,
+    rho = 100-345 kg m-3. Their faceted fit (58.3, 2.65; 23 layers, 190-260) is
+    not used: facets are handled by FACET_STRENGTH_FACTOR, their own factor-2 finding.
+    """
+    return scale * (np.asarray(rho, dtype=float) / rho_ice) ** exp
+
+
+# 'sigrist2006' (ETH Diss. 16736, lab) is named in the path-energy brief but not
+# implemented: the thesis was not obtainable on 2026-10-25 and the regression is
+# not to be coded from memory.
+ST_RELATIONS = {'project_fit': slab_tensile_strength,
+                'jamieson1990': slab_tensile_strength_jamieson1990}
+
+
 # ---------------------------------------------------------------------------
 # Layered-slab aggregation for Eq. 20
 # ---------------------------------------------------------------------------
@@ -579,7 +603,8 @@ def aggregate_slab(rho_i, dz_i, sphericity_i, dendricity_i,
                    k_ic_relation=None, ligament_model='elhaddad',
                    grain_size_i=None, dmax_factor=DMAX_FACTOR,
                    e_relation=E_DEFAULT, e_relations_extra=(),
-                   k_ic_variants=(), self_consistent_a0=False):
+                   k_ic_variants=(), self_consistent_a0=False,
+                   st_relations_extra=()):
     """Layered-slab aggregation for Eq. 20. Returns a dict of scalars.
 
     E_eff, sigma_t_mean, sigma_t_wl and the index/depth/thickness of the layer
@@ -593,7 +618,9 @@ def aggregate_slab(rho_i, dz_i, sphericity_i, dendricity_i,
     e_relation picks the E(rho) relation; e_relations_extra is a list of extra
     names emitted as E_eff__<name>. k_ic_variants is a list of
     (label, relation, dmax_factor) emitted as <key>__<label>, in addition to
-    the unsuffixed bound from k_ic_relation.
+    the unsuffixed bound from k_ic_relation. st_relations_extra names extra
+    sigma_t(rho) relations (ST_RELATIONS), emitted as sigma_t_mean__<name> and
+    sigma_t_wl__<name> with the same facet knockdown.
     """
     rho = np.asarray(rho_i, dtype=float)
     dz = np.asarray(dz_i, dtype=float)
@@ -624,6 +651,10 @@ def aggregate_slab(rho_i, dz_i, sphericity_i, dendricity_i,
     out['f_mean_weighted'] = tensile_strength_mean(f, dz)
     st_wl, idx = tensile_strength_weakest_link(st, E, dz)
     out['sigma_t_wl'] = st_wl
+    for name in st_relations_extra:
+        st_x = ST_RELATIONS[name](rho) * (1.0 - a * f)
+        out[f'sigma_t_mean__{name}'] = tensile_strength_mean(st_x, dz)
+        out[f'sigma_t_wl__{name}'] = tensile_strength_weakest_link(st_x, E, dz)[0]
     if idx < 0:
         return out
 
