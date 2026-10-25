@@ -265,3 +265,16 @@ class TestWriteSummaryCsv:
         write_summary_csv(rows, p)
         df = pd.read_csv(p)
         assert len(df) == 3
+
+
+def test_summary_csv_extra_cols_appended_only_when_asked(tmp_path):
+    from scenario_writer import write_summary_csv
+    rows = [{'scenario_id': 'scenario_001', 'trigger_cluster': 1,
+             'frac_outside_mask': 0.25, 'sk38_rank': 1}]
+    write_summary_csv(rows, tmp_path / 'a.csv')
+    write_summary_csv(rows, tmp_path / 'b.csv', extra_cols=('frac_outside_mask',))
+    import pandas as pd
+    a, b = pd.read_csv(tmp_path / 'a.csv'), pd.read_csv(tmp_path / 'b.csv')
+    assert 'frac_outside_mask' not in a.columns and 'sk38_rank' not in a.columns
+    assert list(b.columns) == list(a.columns) + ['frac_outside_mask']
+    assert b['frac_outside_mask'].iloc[0] == 0.25

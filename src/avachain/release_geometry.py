@@ -148,6 +148,17 @@ RING_STEP_M           = None
 # any value ≥ 1 000 gives the same answer — raising it is not tuning.
 MAX_BFS_CLUSTERS = 2000
 
+# ---- Arrest rule and start-zone mask use (path-energy brief) ---------------
+# 'legacy' is propagate_release as before. 'energy' is the path-energy
+# hypothesis (energy_path.py, propagate_release_energy). 'slope_only' and
+# 'stability_connected' are mechanics-free baselines (baselines.py). Every
+# mode but 'legacy' has no rectangle fallback and no MIN_POLYGON_AREA floor.
+ARREST_MODE = 'legacy'
+# 'gate': the BFS rejects clusters outside the start-zone KML and the polygon is
+# clipped to it. 'diagnostic': the KML is used only in reporting
+# (frac_outside_mask); 17% of the observed Jan 18 crown lies outside it.
+MASK_MODE   = 'gate'
+
 
 def mode3_speed_cap_ratio(trigger_cluster_id: int,
                           meloche_df: pd.DataFrame) -> Optional[float]:
@@ -588,9 +599,15 @@ def make_release_polygon_2d(
         size_factor: float = 1.0,
         stauchwall_deg: float = STAUCHWALL_DEG,
         max_clusters: int = MAX_BFS_CLUSTERS,
-        use_propagation: bool = True):
+        use_propagation: bool = True,
+        pixel_index: Optional[dict] = None,
+        state_out: Optional[dict] = None):
     """
     Build a 2D release polygon.
+
+    MASK_MODE == 'diagnostic' ignores start_zone_mask (no BFS gate, no clip).
+    In any ARREST_MODE but 'legacy' there is no rectangle fallback and no
+    MIN_POLYGON_AREA floor: a trigger-only arrest is the result, not a failure.
 
     Primary method (use_propagation=True):
         BFS cluster flood-fill with per-direction arrest criteria:
@@ -606,6 +623,11 @@ def make_release_polygon_2d(
 
     Returns shapely Polygon (UTM) or None.
     """
+    if MASK_MODE not in ('gate', 'diagnostic'):
+        raise ValueError(f"unknown MASK_MODE {MASK_MODE!r}")
+    if MASK_MODE == 'diagnostic':
+        start_zone_mask = None      # mask is used only in reporting
+
     slope_grid, _ = compute_slope_aspect(dem)
 
     # --- Build start zone polygon for post-clipping ---
@@ -635,7 +657,7 @@ def make_release_polygon_2d(
         # Simplify to keep intersection fast — 1m tolerance at 1m grid
         sw_polygon = sw_polygon.simplify(1.0, preserve_topology=True)
 
-    def _clip_polygon(poly):
+    def _clip_polygon(poly, min_area=MIN_POLYGON_AREA):
         """Clip polygon to start zone AND stauchwall, return largest piece."""
         if poly is None or poly.is_empty:
             return None
@@ -655,12 +677,14 @@ def make_release_polygon_2d(
             poly = unary_union(polys)
         if poly.geom_type == 'MultiPolygon':
             poly = max(poly.geoms, key=lambda p: p.area)
-        if poly.is_empty or poly.area < MIN_POLYGON_AREA:
+        if poly.is_empty or poly.area < min_area:
             return None
         return poly
 
+    energy_mode = ARREST_MODE != 'legacy'    # energy and the baselines
+
     # --- Primary: BFS propagation ---
-    if use_propagation and not meloche_df.empty:
+    if use_propagation and (energy_mode or not meloche_df.empty):
         polygon, failed = propagate_release(
             trigger_cluster_id = trigger_cluster_id,
             meloche_df         = meloche_df,
@@ -674,11 +698,15 @@ def make_release_polygon_2d(
             A_ca               = A_ca,
             snap_features      = snap_features,
             max_clusters       = max_clusters,
+            pixel_index        = pixel_index,
+            state_out          = state_out,
         )
         if polygon is not None:
-            polygon = _clip_polygon(polygon)
+            polygon = _clip_polygon(polygon, 0.0 if energy_mode else MIN_POLYGON_AREA)
             if polygon is not None:
                 return polygon
+        if energy_mode:
+            return None
         print(f"  propagate_release returned None for cluster {trigger_cluster_id}"
               f" — falling back to rectangle")
 
@@ -746,10 +774,17 @@ def propagate_release(
         snap_features: 'Optional[pd.DataFrame]' = None,
         k_neighbours: int = 8,
         max_clusters: int = MAX_BFS_CLUSTERS,
-        wave_callback=None):
+        wave_callback=None,
+        pixel_index: Optional[dict] = None,
+        aspect_grid: Optional[np.ndarray] = None,
+        state_out: Optional[dict] = None):
     """
     Identify release zone as the connected region of clusters with
     Pi1 >= Pi1_trigger that is reachable from the trigger cluster.
+
+    ARREST_MODE == 'energy' hands off to propagate_release_energy(), and
+    'slope_only' / 'stability_connected' to baselines.py; pixel_index,
+    aspect_grid and state_out are used only by those modes.
 
     Parameters
     ----------
@@ -775,6 +810,25 @@ def propagate_release(
       < 1.0 → looser threshold  → larger release  (more terrain qualifies)
       = 1.0 → baseline: all terrain as unstable as trigger
     """
+    if ARREST_MODE == 'energy':
+        return propagate_release_energy(
+            trigger_cluster_id, cluster_map, dem, slope_grid, transform,
+            start_zone_mask=start_zone_mask, stauchwall_deg=stauchwall_deg,
+            snap_features=snap_features, k_neighbours=k_neighbours,
+            max_clusters=max_clusters, pixel_index=pixel_index,
+            aspect_grid=aspect_grid, wave_callback=wave_callback,
+            state_out=state_out)
+    if ARREST_MODE in ('slope_only', 'stability_connected'):
+        from baselines import propagate_baseline
+        return propagate_baseline(
+            ARREST_MODE, trigger_cluster_id, cluster_map, dem, slope_grid,
+            transform, start_zone_mask=start_zone_mask,
+            stauchwall_deg=stauchwall_deg, snap_features=snap_features,
+            k_neighbours=k_neighbours, max_clusters=max_clusters,
+            pixel_index=pixel_index, state_out=state_out)
+    if ARREST_MODE != 'legacy':
+        raise ValueError(f"unknown ARREST_MODE {ARREST_MODE!r}")
+
     from collections import deque
     from shapely.geometry import MultiPolygon
     from shapely.ops import unary_union
@@ -1290,6 +1344,243 @@ def propagate_release(
     polygon = fill_polygon_holes(polygon)
 
     return polygon, failed
+
+
+# -----------------------------------------------------------------------
+# Path-energy arrest (ARREST_MODE == 'energy') — hypothesis, not validated
+# -----------------------------------------------------------------------
+
+ENERGY_REASONS = ('no_weak_layer', 'energy_deficit', 'no_drive', 'stauchwall_slope',
+                  'outside_start_zone', 'domain_edge', 'no_data')
+
+
+def _domain_edge_pixels(cluster_map: np.ndarray, dem: np.ndarray) -> np.ndarray:
+    """Valid pixels with a 4-neighbour off the array, outside the cluster map or on NaN DEM."""
+    valid = (cluster_map > 0) & np.isfinite(dem)
+    pad = np.pad(valid, 1, constant_values=False)
+    interior = pad[:-2, 1:-1] & pad[2:, 1:-1] & pad[1:-1, :-2] & pad[1:-1, 2:]
+    return valid & ~interior
+
+
+def _cluster_graph(pixel_index: dict, transform, k_neighbours: int):
+    """k-NN cluster adjacency and UTM centroids (rounded to the pixel) for the BFS."""
+    from sklearn.neighbors import NearestNeighbors
+    cents_px   = cluster_centroids_px(pixel_index)
+    cids       = np.array(sorted(cents_px))
+    pxs        = np.array([cents_px[c] for c in cids])
+    k_actual   = min(k_neighbours + 1, len(cids))
+    nbrs       = NearestNeighbors(n_neighbors=k_actual).fit(pxs)
+    _, idxs    = nbrs.kneighbors(pxs)
+    neighbours = {int(cids[i]): [int(cids[j]) for j in idxs[i][1:]]
+                  for i in range(len(cids))}
+    centroids = {int(c): pixel_to_utm(int(round(pxs[i][0])),
+                                      int(round(pxs[i][1])), transform)
+                 for i, c in enumerate(cids)}
+    return neighbours, centroids
+
+
+def _reached_polygon(reached, cluster_map, transform, min_clusters: int = 2,
+                     min_area: float = MIN_POLYGON_AREA):
+    """Largest hole-filled polygon of the reached clusters, or None if too small."""
+    from shapely.ops import unary_union
+    from shapely.geometry import shape as shapely_shape
+    import rasterio.features
+
+    if len(reached) < min_clusters:
+        return None
+    mask   = np.isin(cluster_map, list(reached)).astype(np.uint8)
+    shapes = list(rasterio.features.shapes(
+        mask, mask=mask.astype(bool), transform=transform))
+    if not shapes:
+        return None
+    polygon = unary_union([shapely_shape(s) for s, v in shapes if v == 1])
+    if polygon.geom_type == 'MultiPolygon':
+        polygon = max(polygon.geoms, key=lambda p: p.area)
+    if polygon.is_empty or polygon.area < min_area:
+        return None
+    return fill_polygon_holes(polygon)
+
+
+def propagate_release_energy(
+        trigger_cluster_id: int,
+        cluster_map: np.ndarray,
+        dem: np.ndarray,
+        slope_grid: np.ndarray,
+        transform,
+        start_zone_mask: Optional[np.ndarray] = None,
+        stauchwall_deg: float = STAUCHWALL_DEG,
+        snap_features: 'Optional[pd.DataFrame]' = None,
+        k_neighbours: int = 8,
+        max_clusters: int = MAX_BFS_CLUSTERS,
+        pixel_index: Optional[dict] = None,
+        aspect_grid: Optional[np.ndarray] = None,
+        wave_callback=None,
+        state_out: Optional[dict] = None):
+    """Path-energy flood-fill (hypothesis): admit a cluster while the slab tension
+    carried to it releases G_avail >= G_c.
+
+    Steps only move away from the trigger, so the graph is acyclic and the best
+    (highest) tension per cluster is exact when clusters are taken in order of
+    distance. Each step c -> n is classed up/down/cross by the ±45° sector rule
+    of propagate_release, applied to the step vector against the trigger fall line.
+    Along-slope: N_n = clip(N_c + tau_net(c) ds, 0, N_max(n)), test G_avail(N_n),
+    with ds the growth of |y - y0|: y is the fall-line coordinate and y0 where this
+    path's tension started, so N is the detached fall-line extent, not path length.
+    Cross-slope: N_n = 0, admitted on tau_net(n) > 0 and R G_slab(n) >= G_c(n).
+
+    Returns (polygon, reached_cluster_ids); a trigger-only region still gives a polygon.
+    """
+    import heapq
+    import energy_path as ep
+
+    if snap_features is None:
+        return None, set()
+    if pixel_index is None:
+        pixel_index = cluster_pixel_index(cluster_map)
+    if trigger_cluster_id not in pixel_index:
+        return None, set()
+    px_m = abs(transform.a) if transform is not None else 1.0
+    if aspect_grid is None:
+        _, aspect_grid = compute_slope_aspect(dem, px_m)
+    R = ep.energy_r()
+
+    neighbours, centroids = _cluster_graph(pixel_index, transform, k_neighbours)
+    edge_px = _domain_edge_pixels(cluster_map, dem)
+
+    t_rows, t_cols = pixel_index[trigger_cluster_id]
+    t_aspect = float(aspect_grid[int(t_rows.mean()), int(t_cols.mean())])
+    fall_x, fall_y = np.sin(np.radians(t_aspect)), np.cos(np.radians(t_aspect))
+    t_xy = centroids[trigger_cluster_id]
+
+    cells: dict[int, dict] = {}
+
+    def _cell(cid):
+        if cid not in cells:
+            px = pixel_index[cid]
+            psi = float(slope_grid[px[0], px[1]].mean())
+            row = (snap_features.loc[cid] if cid in snap_features.index
+                   else pd.Series(dtype=float))
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[0]
+            e = ep.cell_energy(row, psi)
+            tau_p = pd.to_numeric(row.get('wl_shear_strength', np.nan), errors='coerce')
+            h = pd.to_numeric(row.get('slab_thickness', np.nan), errors='coerce')
+            e.update(psi=psi, wl=bool(np.isfinite(tau_p) and np.isfinite(h)),
+                     edge=bool(edge_px[px[0], px[1]].any()))
+            if start_zone_mask is not None:
+                e['in_mask'] = bool(start_zone_mask[int(px[0].mean()), int(px[1].mean())])
+            cells[cid] = e
+        return cells[cid]
+
+    def _radius(cid):
+        xy = centroids[cid]
+        return float(np.hypot(xy[0] - t_xy[0], xy[1] - t_xy[1]))
+
+    def _fall(cid):
+        xy = centroids[cid]
+        return (xy[0] - t_xy[0]) * fall_x + (xy[1] - t_xy[1]) * fall_y
+
+    def _step(c, n):
+        (xc, yc), (xn, yn) = centroids[c], centroids[n]
+        ds = float(np.hypot(xn - xc, yn - yc))
+        dot = ((xn - xc) * fall_x + (yn - yc) * fall_y) / max(ds, 1e-6)
+        return 'down' if dot > 0.707 else 'up' if dot < -0.707 else 'cross'
+
+    def _try(c, n):
+        """(reason, kind, N_n, G_avail) for the step c -> n; reason None means admitted."""
+        kind = _step(c, n)
+        e = _cell(n)
+        if start_zone_mask is not None and not e.get('in_mask', True):
+            return 'outside_start_zone', kind, -1.0, np.nan
+        if kind != 'up' and e['psi'] < stauchwall_deg:
+            return 'stauchwall_slope', kind, -1.0, np.nan
+        if not e['wl']:
+            return 'no_weak_layer', kind, -1.0, np.nan
+        if not all(np.isfinite(e[k]) for k in ('tau_net', 'G_c', 'G_slab_path', 'N_max')) \
+                or e['N_max'] <= 0:
+            return 'no_data', kind, -1.0, np.nan
+        if kind == 'cross':
+            g_cap = R * e['G_slab_path']
+            if e['tau_net'] <= 0:
+                return 'no_drive', kind, 0.0, g_cap
+            if g_cap < e['G_c']:
+                return 'energy_deficit', kind, 0.0, g_cap
+            return None, kind, 0.0, g_cap
+        drive = _cell(c)['tau_net']
+        drive = drive if np.isfinite(drive) else 0.0
+        y0 = best[c]['y0']
+        ds = abs(_fall(n) - y0) - abs(_fall(c) - y0)
+        N = float(np.clip(best[c]['N'] + drive * ds, 0.0, e['N_max']))
+        if N <= 0.0:
+            return 'no_drive', kind, N, 0.0
+        G_av = R * e['G_slab_path'] * (N / e['N_max'])**2   # = R N^2 / (2 E' h)
+        if G_av < e['G_c']:
+            return 'energy_deficit', kind, N, G_av
+        return None, kind, N, G_av
+
+    best = {trigger_cluster_id: {'N': 0.0, 'G_avail': 0.0, 'parent': None,
+                                 'step': 'trigger', 'y0': 0.0}}
+    offers: dict[int, tuple] = {}        # never-reached cid -> (N, reason) of its best offer
+    first_rej: dict[int, dict] = {}
+    reached: set = set()
+    heap = [(0.0, trigger_cluster_id)]
+    n_pop = 0
+    if wave_callback is not None:
+        wave_callback(0, [trigger_cluster_id], [])
+
+    while heap and len(reached) < max_clusters:
+        r_c, c = heapq.heappop(heap)
+        if c in reached:
+            continue
+        reached.add(c)
+        n_pop += 1
+        admitted, arrested = [], []
+        if _cell(c)['edge']:
+            arrested.append({'cid': c, 'reason': 'domain_edge'})
+            first_rej.setdefault(c, {}).setdefault('edge', 'domain_edge')
+        for n in neighbours.get(c, []):
+            if n in reached or n not in centroids or _radius(n) <= r_c:
+                continue
+            reason, kind, N, G_av = _try(c, n)
+            if reason is None:
+                if n not in best or N > best[n]['N']:
+                    if n not in best:
+                        heapq.heappush(heap, (_radius(n), n))
+                    y0 = _fall(n) if kind == 'cross' else best[c]['y0']
+                    best[n] = {'N': N, 'G_avail': G_av, 'parent': c, 'step': kind, 'y0': y0}
+                admitted.append(n)
+            else:
+                arrested.append({'cid': n, 'reason': reason})
+                first_rej.setdefault(c, {}).setdefault(kind, reason)
+                if n not in offers or N > offers[n][0]:
+                    offers[n] = (N, reason)
+        if wave_callback is not None:
+            wave_callback(n_pop, admitted, arrested)
+
+    cap_bound = bool(heap) and len(reached) >= max_clusters
+    rejected = {n: r for n, (_, r) in offers.items() if n not in best}
+    counts = pd.Series(list(rejected.values()), dtype=object).value_counts().to_dict()
+    print(f"  Energy region: {len(reached)} clusters (R={R}, delta={ep.ENERGY_DELTA}, "
+          f"sigma_t={ep.SIGMA_T_COLUMN}); boundary rejections {counts}"
+          f"{'  [CAP-BOUND]' if cap_bound else ''}")
+    if cap_bound:
+        print(f"  WARNING: BFS hit the max_clusters cap ({max_clusters}); this "
+              f"polygon is bounded by the cap, not by arrest criteria.")
+
+    if state_out is not None:
+        state_out['cells'] = {
+            cid: {**{k: cells[cid][k] for k in
+                     ('tau_net', 'G_c', 'G_slab_path', 'N_max', 'psi')},
+                  'N': best[cid]['N'], 'G_avail': best[cid]['G_avail'],
+                  'parent': best[cid]['parent'], 'step': best[cid]['step'],
+                  **{f'first_rej_{k}': v for k, v in first_rej.get(cid, {}).items()}}
+            for cid in reached}
+        state_out['rejected'] = rejected
+        state_out['cap_bound'] = cap_bound
+
+    polygon = _reached_polygon(reached, cluster_map, transform,
+                               min_clusters=1, min_area=0.0)
+    return polygon, reached
 
 
 

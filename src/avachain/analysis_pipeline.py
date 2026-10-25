@@ -44,6 +44,8 @@ from snowpack_analysis import (
     compute_meloche_features,
     GROUP_COLORS, GROUP_LABELS,
 )
+import release_geometry as _rg
+import energy_path as _ep
 from release_geometry import (
     compute_slope_aspect,
     make_release_polygon_2d,
@@ -315,6 +317,8 @@ def step_analyze(cfg, args):
         cmd += ['--toml', str(args.toml)]
     if args.classifier:
         cmd.append('--classifier')
+    if getattr(args, 'feature_buffer_m', 0.0):
+        cmd += ['--feature-buffer-m', str(args.feature_buffer_m)]
     if args.plots:
         cmd.append('--plots')
     else:
@@ -487,6 +491,31 @@ def _build_scour_depth_map(ds, cluster_map, snap_features, snap_ts):
 # Step: scenarios
 # ---------------------------------------------------------------------------
 
+def frac_outside_mask(poly, mask: np.ndarray, transform) -> float:
+    """Share of the polygon's pixels outside the start-zone mask (NaN if no polygon)."""
+    import rasterio.features
+    if poly is None or poly.is_empty:
+        return float('nan')
+    inside = rasterio.features.geometry_mask(
+        [poly.__geo_interface__], out_shape=mask.shape,
+        transform=transform, invert=True)
+    n = int(inside.sum())
+    return float((inside & ~mask).sum() / n) if n else float('nan')
+
+
+def _write_arrest_state(state: dict, sdir: Path):
+    """Per-scenario arrest diagnostics for the non-legacy arrest modes."""
+    sdir.mkdir(parents=True, exist_ok=True)
+    rej = pd.Series(state.get('rejected', {}), name='reason', dtype=object) \
+        .rename_axis('cluster_id')
+    if 'cells' in state:
+        pd.DataFrame.from_dict(state['cells'], orient='index') \
+            .rename_axis('cluster_id').to_csv(sdir / 'energy_cells.csv')
+        rej.to_csv(sdir / 'energy_rejected.csv')
+    else:
+        rej.to_csv(sdir / 'rejected.csv')
+
+
 def step_scenarios(cfg, args):
     """
     Generate AvaFrame com1DFA release scenario ensemble.
@@ -497,6 +526,14 @@ def step_scenarios(cfg, args):
       - Slab depth:         SNOWPACK HS × depth_scale at given percentile
     """
     print(f"\n=== step_scenarios  snapshot={args.snapshot_date} ===")
+
+    # make_release_polygon_2d reads these module flags, so set them before any run.
+    _rg.ARREST_MODE  = getattr(args, 'arrest_mode', _rg.ARREST_MODE)
+    _rg.MASK_MODE    = getattr(args, 'mask_mode', _rg.MASK_MODE)
+    _ep.ENERGY_DELTA = getattr(args, 'energy_delta', _ep.ENERGY_DELTA)
+    if _rg.ARREST_MODE != 'legacy' or _rg.MASK_MODE != 'gate':
+        print(f"  arrest_mode={_rg.ARREST_MODE}  mask_mode={_rg.MASK_MODE}  "
+              f"energy_delta={_ep.ENERGY_DELTA}")
 
     # --- Load inputs ---
     dem, transform, crs_wkt, raster_profile = _load_dem(cfg)
@@ -848,6 +885,7 @@ def step_scenarios(cfg, args):
                         xfact=size_f, yfact=size_f,
                         origin=centroid)
                 else:
+                    arrest_state = {} if _rg.ARREST_MODE != 'legacy' else None
                     polygon = make_release_polygon_2d(
                         trigger_cluster_id = t_cid,
                         A_ca               = A_ca,
@@ -861,6 +899,7 @@ def step_scenarios(cfg, args):
                         stauchwall_deg     = args.stauchwall_deg,
                         max_clusters       = args.max_clusters,
                         use_propagation    = not args.no_propagation,
+                        state_out          = arrest_state,
                     )
 
                 if polygon is None:
@@ -912,6 +951,12 @@ def step_scenarios(cfg, args):
                 # Augment row with trigger rank and sk38
                 row['sk38_rank'] = t_rank + 1
                 row['min_sk38']  = float(sk38_vals[t_rank])
+                if _rg.MASK_MODE == 'diagnostic':
+                    row['frac_outside_mask'] = frac_outside_mask(
+                        polygon, start_zone_mask, transform)
+                if not args.use_observed_release and arrest_state:
+                    _write_arrest_state(arrest_state,
+                                        out_dir / "scenarios" / scenario_id)
                 rows.append(row)
                 weight_map[scenario_id] = weight
 
@@ -934,7 +979,8 @@ def step_scenarios(cfg, args):
 
     # Write ensemble outputs
     write_scenario_weights(weight_map, out_dir / "scenario_weights.json")
-    write_summary_csv(rows, out_dir / "summary.csv")
+    write_summary_csv(rows, out_dir / "summary.csv",
+                      extra_cols=('frac_outside_mask',) if _rg.MASK_MODE == 'diagnostic' else ())
     write_metadata(
         out_path          = out_dir / "metadata.json",
         snapshot_date     = args.snapshot_date,
@@ -1089,6 +1135,22 @@ def main():
                              'release area estimation.')
     parser.add_argument('--toml', default=None,
                         help="Path to slope_config.toml; overrides --project-dir when provided")
+    parser.add_argument('--feature-buffer-m', type=float, default=0.0,
+                        help='analyze: also extract features within this distance (m) '
+                             'of the start zone, for --mask-mode diagnostic (default 0).')
+    parser.add_argument('--arrest-mode', default=_rg.ARREST_MODE,
+                        choices=('legacy', 'energy', 'slope_only', 'stability_connected'),
+                        help=f"BFS arrest rule (default: {_rg.ARREST_MODE}). 'energy' is the "
+                             "path-energy hypothesis (energy_path.py) and writes "
+                             "energy_cells.csv / energy_rejected.csv per scenario; "
+                             "'slope_only' and 'stability_connected' are mechanics-free "
+                             "baselines (baselines.py) and write rejected.csv.")
+    parser.add_argument('--mask-mode', default=_rg.MASK_MODE, choices=('gate', 'diagnostic'),
+                        help=f"Start-zone KML use (default: {_rg.MASK_MODE}). 'diagnostic' "
+                             "runs the BFS without it and adds frac_outside_mask to summary.csv.")
+    parser.add_argument('--energy-delta', type=float, default=_ep.ENERGY_DELTA,
+                        help=f"delta in the energy-mode G_c (default: {_ep.ENERGY_DELTA}; "
+                             "R was fitted at 0). The Eq. 20 delta is unchanged.")
 
     args = parser.parse_args()
     args.snapshot_date = resolve_snapshot_date(args.snapshot_date)

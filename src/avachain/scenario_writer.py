@@ -322,14 +322,16 @@ def write_scenario_weights(weights: dict, out_path: Path) -> None:
     out_path.write_text(json.dumps(weights, indent=2))
 
 
-def write_summary_csv(rows: list[dict], out_path: Path) -> None:
+def write_summary_csv(rows: list[dict], out_path: Path,
+                      extra_cols: tuple = ()) -> None:
     """
     Write one-row-per-scenario summary CSV.
 
     Parameters
     ----------
-    rows     : list of dicts from write_scenario() return values
-    out_path : output .csv path
+    rows       : list of dicts from write_scenario() return values
+    out_path   : output .csv path
+    extra_cols : columns appended after the fixed set (e.g. frac_outside_mask)
     """
     df = pd.DataFrame(rows)
     col_order = [
@@ -337,7 +339,7 @@ def write_summary_csv(rows: list[dict], out_path: Path) -> None:
         'depth_percentile', 'release_area_m2', 'mean_depth_m',
         'total_volume_m3', 'weight',
         'scour_depth_m', 'scour_depth_mid_m', 'hand_hardness_value',
-    ]
+    ] + list(extra_cols)
     for col in col_order:
         if col not in df.columns:
             df[col] = np.nan

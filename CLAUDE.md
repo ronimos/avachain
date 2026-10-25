@@ -88,6 +88,15 @@ checking these leads to wrong conclusions about what produced a polygon.
 | `USE_LIGAMENT_BOUND` | `True` | — |
 | `THETA_ESTIMATOR` | `'plane_fit'` | `'knn'` reproduces every pre-2026-10-09 CSV. |
 | `E_RELATION` | `'vanherwijnen2016'` | — |
+| `release_geometry.ARREST_MODE` | `'legacy'` | `'energy'` (path-energy hypothesis, `energy_path.py`), `'slope_only'` / `'stability_connected'` (baselines, `baselines.py`). Non-legacy modes have no rectangle fallback. CLI `--arrest-mode`. |
+| `release_geometry.MASK_MODE` | `'gate'` | `'diagnostic'` runs the BFS without the start-zone KML; needs features outside it (`analyze --feature-buffer-m`). |
+| `energy_path.ENERGY_DELTA` | `0.0` | Energy-mode δ only; R was fitted at δ = 0. The Eq. 20 δ stays 1.0. |
+
+The observed Jan 18 crown in `data/boundaries/` is the **6 934 m²** mapping
+since 2026-10-25 (the standalone's). The 4 550 m² file avachain used before is
+in `data/boundaries/old/…_4550m2.geojson`; IoU from before that date is not
+comparable. The same file is the reinit scour mask for Jan 18
+(`cfg.event_mask_for`), so a forcing rebuild now uses the larger crown.
 
 **The README's parameter table is stale on two rows.** It gives
 `E = (ρ/300)^2.5 × 4 MPa` and `σ_t = (ρ/300)^1.4 × 5 kPa`, which describe

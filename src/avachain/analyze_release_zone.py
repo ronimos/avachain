@@ -630,6 +630,10 @@ def main():
     parser.add_argument('--zarr-path',  default=None)
     parser.add_argument('--release-geojson', default=None)
     parser.add_argument('--min-depth',  type=float, default=30.0)
+    parser.add_argument('--feature-buffer-m', type=float, default=0.0,
+                        help='Also extract features for clusters within this distance '
+                             '(m) of the start zone, for the BFS mask-diagnostic mode. '
+                             '0 (default) is the start zone only, as before.')
     parser.add_argument('--snapshot-date', default='2026-01-18',
                         help='Date for snapshot analysis (default: day before event)')
     parser.add_argument('--classifier', action='store_true',
@@ -832,7 +836,13 @@ def main():
     print("\nExtracting features for ALL start zone clusters...")
 
     # All cluster IDs in start zone
-    all_sz_ids = set(int(c) for c in np.unique(cluster_map[start_zone_mask])
+    feat_mask = start_zone_mask
+    if args.feature_buffer_m > 0:
+        from scipy.ndimage import distance_transform_edt
+        px_m = abs(transform.a)
+        feat_mask = distance_transform_edt(~start_zone_mask) * px_m <= args.feature_buffer_m
+        print(f"  Feature domain: start zone + {args.feature_buffer_m:.0f} m buffer")
+    all_sz_ids = set(int(c) for c in np.unique(cluster_map[feat_mask])
                      if c > 0)
     # Already-processed IDs (from release/adjacent/reference groups above)
     done_ids   = set()
