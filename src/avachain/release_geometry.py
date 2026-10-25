@@ -601,7 +601,8 @@ def make_release_polygon_2d(
         max_clusters: int = MAX_BFS_CLUSTERS,
         use_propagation: bool = True,
         pixel_index: Optional[dict] = None,
-        state_out: Optional[dict] = None):
+        state_out: Optional[dict] = None,
+        wave_callback=None):
     """
     Build a 2D release polygon.
 
@@ -700,6 +701,7 @@ def make_release_polygon_2d(
             max_clusters       = max_clusters,
             pixel_index        = pixel_index,
             state_out          = state_out,
+            wave_callback      = wave_callback,
         )
         if polygon is not None:
             polygon = _clip_polygon(polygon, 0.0 if energy_mode else MIN_POLYGON_AREA)

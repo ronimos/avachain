@@ -95,3 +95,11 @@ def test_profile_features_weakest_wl_element_thickness():
     assert feat['wl_shear_strength'] == pytest.approx(tau[:5].mean())
     assert feat['wl_weakest_thickness'] == pytest.approx(0.05)
     assert feat['wl_thickness'] > feat['wl_weakest_thickness']
+
+
+def test_energy_e_relation_switch(monkeypatch):
+    row = TestKwlThickness.ROW.copy()
+    row['E_eff__project_fit'] = 2.5e6
+    base = ep.cell_energy(row, 35.0)['G_slab_path']
+    monkeypatch.setattr(ep, 'ENERGY_E_RELATION', 'project_fit')
+    assert ep.cell_energy(row, 35.0)['G_slab_path'] == pytest.approx(2.0 * base)

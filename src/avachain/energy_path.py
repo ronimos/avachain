@@ -38,6 +38,7 @@ ENERGY_R            = None            # energy ratio R; None = arrest_indices.R_
 # 'weakest_element' = wl_weakest_thickness, the lowest-tau_p WL element;
 # a float = that thickness in m (the JGR calibration used 0.04).
 KWL_THICKNESS       = 'sequence'
+ENERGY_E_RELATION   = None            # E(rho) for the energy mode; None = E_RELATION (plain E_eff)
 
 
 def tau_net(rho, h, psi_deg, phi_deg=PHI_DEG):
@@ -111,6 +112,7 @@ def cell_energy(row, psi_deg, sigma_t_col=None, e_relation=None, delta=None,
             return np.nan
 
     rho, h = get('slab_density'), get('slab_thickness')
+    e_relation = ENERGY_E_RELATION if e_relation is None else e_relation
     E, sig = get(e_column(e_relation)), get(sigma_t_col)
     tau_p = get('wl_shear_strength')
     K_wl = G_wl / wl_thickness(row, kwl_thickness)
