@@ -96,12 +96,13 @@ if __name__ == '__main__':
     if len(sys.argv) > 2 and sys.argv[1] == '--tag':      # read experiments/<tag>/
         OUT = OUT / sys.argv[2]
         sys.argv = sys.argv[:1] + sys.argv[3:]
-    p_lnpi, p_runs = params_tables()
-    chk = json.loads((OUT / 'check.json').read_text()) if (OUT / 'check.json').exists() else {}
+    def _check():
+        f = OUT / 'check.json'
+        return json.dumps(json.loads(f.read_text()), indent=1) if f.exists() else '{}'
     sections = {
-        'modes': modes_table(), 'shipped': shipped_table(), 'mechanisms': mechanism_table(),
-        'lnpi': p_lnpi, 'param_runs': p_runs, 'envelope': envelope_table(),
-        'check': json.dumps(chk, indent=1, default=float)}
+        'modes': modes_table, 'shipped': shipped_table, 'mechanisms': mechanism_table,
+        'lnpi': lambda: params_tables()[0], 'param_runs': lambda: params_tables()[1],
+        'envelope': envelope_table, 'check': _check}
     which = sys.argv[1:] or list(sections)
     for k in which:
-        print(f'<!-- {k} -->\n{sections[k]}\n')
+        print(f'<!-- {k} -->\n{sections[k]()}\n')

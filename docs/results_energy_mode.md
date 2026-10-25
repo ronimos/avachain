@@ -243,3 +243,94 @@ for most crown cells. Same sign; h is 0.4 m thinner and D_wl 3.6 cm thicker here
 | zarr duplication | store deduplicated 2026-10-19, 6 565 locations; no runtime assertion added |
 | timestep sensitivity of G_c, G_slab | not run |
 | wind redistribution / h range | h 0.45–1.51 m (p05–p95), not uniform |
+
+
+## Round 2 (2026-10-25): basal FCxr as weak layer, fitted G_wl, saturated start
+
+Changes, in order: `split_wl_slab` admits a basal FCxr run (`BASAL_FCXR_IS_WL`,
+7b1c997; Jan 18 start zone 1429 → 1605 of 1608 clusters with a weak layer, all
+732 crown clusters); G_wl fitted to the **start-zone snowpack**, not the crown:
+the value that puts the start-zone median ln Π at 0 (0.61 MPa on Jan 18, 0.49 MPa
+on the 2026-03-07 snowpack, a date without an avalanche); optionally the trigger
+starts at N = N_max (`ENERGY_TRIGGER_SATURATED`, 5587a96). R, G_wl and D_wl enter
+Π as one product, so the fitted scale stands for all three.
+
+| state | ln Π median: crown | rest of start zone | outside start zone |
+|---|---|---|---|
+| sourced G_wl, after the FCxr fix | −0.98 | −1.19 | −0.72 |
+
+### Fixed triggers, fitted G_wl, N = 0 at the trigger (`experiments/fit_gwl`)
+
+Legacy and the baselines do not use G_wl; their rows show the FCxr fix alone.
+
+| mask_mode | mode | n | area_m2 | iou_median | iou_max | over_m2 | under_m2 | crown_offset_m | flank_left_m | flank_right_m | frac_outside_mask | cap_bound |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| gate | legacy | 23 | 6135.00 | 0.38 | 0.68 | 1771.63 | 3592.44 | 12.75 | -5.42 | 32.82 | 0.00 | 0 |
+| gate | energy | 23 | 103.00 | 0.01 | 0.21 | 0.07 | 6862.50 | 76.89 | -13.81 | -9.20 | 0.00 | 0 |
+| gate | slope_only | 23 | 14585.00 | 0.36 | 0.36 | 8892.75 | 1241.39 | -2.65 | -4.28 | 69.28 | 0.00 | 0 |
+| gate | stability_connected | 23 | 35.00 | 0.01 | 0.23 | 0.00 | 6898.64 | 67.07 | -8.60 | -1.09 | 0.00 | 0 |
+| diagnostic | legacy | 23 | 6719.00 | 0.28 | 0.48 | 4069.73 | 3088.23 | 17.14 | 28.12 | 32.82 | 0.36 | 0 |
+| diagnostic | energy | 23 | 171.00 | 0.01 | 0.21 | 99.85 | 6862.50 | 77.48 | -10.58 | -12.51 | 0.22 | 0 |
+| diagnostic | slope_only | 23 | 19511.00 | 0.29 | 0.31 | 13475.56 | 912.20 | -10.21 | 41.84 | 74.97 | 0.34 | 21 |
+| diagnostic | stability_connected | 23 | 7959.00 | 0.17 | 0.17 | 5811.29 | 4785.94 | -10.21 | 1.22 | -1.09 | 0.69 | 0 |
+
+### Envelope, fitted G_wl, N = 0 (`experiments/fit_gwl`)
+
+| mode | mask_mode | n | with_polygon | area_median | iou_median | iou_max | cap_bound |
+|---|---|---|---|---|---|---|---|
+| energy | diagnostic | 300 | 300 | 247.50 | 0.00 | 0.18 | 0 |
+| legacy | gate | 300 | 300 | 10569.00 | 0.35 | 0.68 | 0 |
+| slope_only | diagnostic | 300 | 300 | 19767.00 | 0.26 | 0.31 | 300 |
+| stability_connected | diagnostic | 300 | 300 | 11.00 | 0.00 | 0.17 | 0 |
+
+### Energy mode, saturated trigger (`experiments/fit_gwl_sat`, `experiments/sat`)
+
+Fitted G_wl:
+
+| mask_mode | mode | n | area_m2 | iou_median | iou_max | over_m2 | under_m2 | crown_offset_m | flank_left_m | flank_right_m | frac_outside_mask | cap_bound |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| gate | energy | 23 | 933.00 | 0.08 | 0.24 | 334.17 | 6321.81 | 57.05 | -8.34 | 26.23 | 0.00 | 0 |
+| diagnostic | energy | 23 | 1756.00 | 0.10 | 0.23 | 1297.82 | 6177.68 | 71.87 | 1.96 | 36.53 | 0.37 | 0 |
+
+| mode | mask_mode | n | with_polygon | area_median | iou_median | iou_max | cap_bound |
+|---|---|---|---|---|---|---|---|
+| energy | diagnostic | 300 | 300 | 1709.00 | 0.01 | 0.27 | 0 |
+
+Sourced G_wl (0.2 MPa), saturated: every trigger still stops at its own cluster
+(median 11 m², IoU ≤ 0.01).
+
+Boundary mechanisms, fitted G_wl, saturated:
+
+| mask_mode | mode | segment | n | reasons |
+|---|---|---|---|---|
+| diagnostic | energy | crown | 156 | energy_deficit 100% |
+| diagnostic | energy | flank_left | 764 | energy_deficit 88%, stauchwall_slope 12% |
+| diagnostic | energy | flank_right | 376 | energy_deficit 91%, stauchwall_slope 9% |
+| diagnostic | energy | stauchwall | 3 | stauchwall_slope 100% |
+| gate | energy | crown | 188 | outside_start_zone 52%, energy_deficit 48% |
+| gate | energy | flank_left | 495 | energy_deficit 61%, outside_start_zone 39% |
+| gate | energy | flank_right | 325 | energy_deficit 91%, stauchwall_slope 7%, outside_start_zone 2% |
+| gate | energy | stauchwall | 3 | outside_start_zone 100% |
+
+![energy, fitted G_wl, saturated](figures/energy_mode/fcxr_fit_sat_envelope_energy_diagnostic.png)
+![legacy after FCxr fix](figures/energy_mode/fcxr_envelope_legacy_gate.png)
+![slope_only after FCxr fix](figures/energy_mode/fcxr_envelope_slope_only_diagnostic.png)
+
+### Trigger ranking keys (operational candidate pool, Jan 18; second snowpack date 2026-03-07)
+
+Same pool as `step_scenarios` (τ_g ≥ 40 Pa, ψ ≥ 30°, Sk38 < 1, slab 0.5–cap,
+elevation ≥ P50, Π₁ ≥ median); only the ordering changes. `kept_vs_*`: triggers
+shared with the 2.0 m cap result. 2026-03-07 is a snowpack date only (10-20
+forcing, old weak-layer rule), not an event. Jan 18 IoU against the 6 934 m²
+crown, legacy, size factor 1.0.
+
+| how | spearman_key_vs_h | spearman_key_vs_h_snow2 | kept_vs_1.5 | kept_vs_2.5 | kept_vs_1.5_snow2 | kept_vs_2.5_snow2 | trig_h_med | trig_psi_med | iou_mean | iou_best | area_over_obs |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| sk38 | -0.82 | -0.82 | 1 | 2 | 0 | 0 | 1.57 | 40.50 | 0.43 | 0.58 | 1.10 |
+| taug | 0.65 | 0.65 | 0 | 3 | 0 | 0 | 1.57 | 34.10 | 0.38 | 0.62 | 0.72 |
+| slope | 0.29 | 0.12 | 3 | 2 | 0 | 2 | 1.50 | 40.60 | 0.44 | 0.58 | 0.92 |
+| stress_ratio | 0.66 | 0.70 | 1 | 2 | 0 | 1 | 1.60 | 40.50 | 0.37 | 0.58 | 0.94 |
+| taug_gate | -0.82 | -0.82 | 0 | 2 | 0 | 0 | 1.60 | 37.40 | 0.33 | 0.51 | 0.91 |
+| slope_gate | -0.82 | -0.82 | 1 | 2 | 0 | 0 | 1.60 | 40.50 | 0.37 | 0.58 | 0.94 |
+
+`taug_gate` / `slope_gate`: keep the upper half by τ_g or ψ, then rank by Sk38.
