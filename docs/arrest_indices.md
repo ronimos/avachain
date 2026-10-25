@@ -184,6 +184,16 @@ Expected differences from upslope, not yet simulated:
 
 ---
 
+### Path-energy BFS mode (`release_geometry.ARREST_MODE = 'energy'`)
+
+The cap above as a propagation rule: each cluster carries slab tension N, built
+along the trigger's fall line by τ_net = ρgh(sin ψ − cos ψ tan φ) and capped at
+σt h; a cluster is admitted while R N²/(2E′h) ≥ G_c. Cross-slope steps restart at
+N = 0 and need R G_slab ≥ G_c and τ_net > 0. Code: `energy_path.py`,
+`propagate_release_energy`; baselines `slope_only` / `stability_connected` in
+`baselines.py`. Off by default. Jan 18 results, including the parameter ranges:
+`docs/results_energy_mode.md`.
+
 ## 4. Inputs from SNOWPACK
 
 | Input | Source | Note |
