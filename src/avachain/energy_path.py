@@ -38,6 +38,11 @@ ENERGY_R            = None            # energy ratio R; None = arrest_indices.R_
 # 'weakest_element' = wl_weakest_thickness, the lowest-tau_p WL element;
 # a float = that thickness in m (the JGR calibration used 0.04).
 KWL_THICKNESS       = 'sequence'
+# Slab tension at the trigger. False: N = 0, built along the fall line, so the
+# first steps need Pi ~ (N_max / (tau_net ds))^2 >> 1. True: N = N_max, i.e. the
+# crack has already reached shear-driven propagation, which the brief assumes
+# (no a_c / anticrack stage is modelled).
+ENERGY_TRIGGER_SATURATED = False
 ENERGY_E_RELATION   = None            # E(rho) for the energy mode; None = E_RELATION (plain E_eff)
 
 

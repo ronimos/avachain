@@ -249,3 +249,17 @@ def test_unknown_mode_raises(monkeypatch):
     s = scene(30, 30, (16, 16), lambda y, x: {})
     with pytest.raises(ValueError):
         run(s)
+
+
+def test_saturated_trigger_runs_where_zero_tension_starves(monkeypatch):
+    """One cluster wide, so only along-slope steps exist. Pi = 1/0.9 everywhere:
+    from N = 0 even the longest k-NN first step (4 clusters, 12 m) gives
+    (tau_net ds / N_max)^2 = 0.85 < 0.9 of the cap and the crack stops at the
+    trigger; started saturated it runs the column. (Cross-slope steps test the
+    saturated cap and ignore N, so a wide slope spreads from N = 0 too.)"""
+    s = scene(60, 3, (31, 1), lambda y, x: {'wl_shear_strength': tau_p_for(0.9 * RG_SLAB)})
+    _, reached = run(s)
+    assert reached == {s['trigger']}
+    monkeypatch.setattr(ep, 'ENERGY_TRIGGER_SATURATED', True)
+    _, reached = run(s)
+    assert reached == set(s['pixel_index'])

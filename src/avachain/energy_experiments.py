@@ -286,14 +286,14 @@ def sampled_crown_triggers(scene, n, seed=SEED):
     return picked
 
 
-def step_fixed(scene, n_sampled=20):
+def step_fixed(scene, n_sampled=20, modes=MODES):
     seg_pts, seg_lab = boundary_segments(scene.observed, scene.frame)
     trig = [('shipped', t) for t in SHIPPED_TRIGGERS] + \
            [('sampled', t) for t in sampled_crown_triggers(scene, n_sampled)]
     rows, mech = [], []
     for src, t in trig:
         for mask_mode in MASK_MODES:
-            for mode in MODES:
+            for mode in modes:
                 poly, rej, row = run(scene, t, mode, mask_mode)
                 row['trigger_set'] = src
                 row['has_weak_layer'] = bool(np.isfinite(scene.feats_dom['wl_shear_strength'].get(t, np.nan)))
@@ -543,6 +543,8 @@ def main():
     ap.add_argument('--g-wl', type=float, default=None,
                     help='energy_path.G_WL for this run (e.g. the value from the fit step)')
     ap.add_argument('--tag', default='', help='write to experiments/<tag>/')
+    ap.add_argument('--trigger-saturated', action='store_true',
+                    help='start the energy BFS at N = N_max (energy_path.ENERGY_TRIGGER_SATURATED)')
     ap.add_argument('--project-dir', type=Path, default=Path(__file__).resolve().parents[2])
     ap.add_argument('--n-sampled', type=int, default=20)
     ap.add_argument('--n', type=int, default=300)
@@ -550,12 +552,13 @@ def main():
     args = ap.parse_args()
     if args.g_wl is not None:
         ep.G_WL = args.g_wl
+    ep.ENERGY_TRIGGER_SATURATED = args.trigger_saturated
     scene = Scene(args.project_dir, args.tag)
     scene.out.mkdir(parents=True, exist_ok=True)
     if args.step == 'fit':
         step_fit(scene)
     elif args.step == 'fixed':
-        step_fixed(scene, args.n_sampled)
+        step_fixed(scene, args.n_sampled, tuple(args.modes))
     elif args.step == 'envelope':
         step_envelope(scene, args.n, tuple(args.modes))
     elif args.step == 'params':

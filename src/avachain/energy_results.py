@@ -1,6 +1,7 @@
 """Build the table sections of docs/results_energy_mode.md from the experiment CSVs.
 
     python src/avachain/energy_results.py > /tmp/tables.md
+    python src/avachain/energy_results.py --tag fit_gwl modes envelope
 """
 import json
 import sys
@@ -92,6 +93,9 @@ def envelope_table():
 
 
 if __name__ == '__main__':
+    if len(sys.argv) > 2 and sys.argv[1] == '--tag':      # read experiments/<tag>/
+        OUT = OUT / sys.argv[2]
+        sys.argv = sys.argv[:1] + sys.argv[3:]
     p_lnpi, p_runs = params_tables()
     chk = json.loads((OUT / 'check.json').read_text()) if (OUT / 'check.json').exists() else {}
     sections = {

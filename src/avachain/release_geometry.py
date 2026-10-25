@@ -1520,7 +1520,11 @@ def propagate_release_energy(
             return 'energy_deficit', kind, N, G_av
         return None, kind, N, G_av
 
-    best = {trigger_cluster_id: {'N': 0.0, 'G_avail': 0.0, 'parent': None,
+    N0 = 0.0
+    if ep.ENERGY_TRIGGER_SATURATED:
+        n0 = _cell(trigger_cluster_id)['N_max']
+        N0 = float(n0) if np.isfinite(n0) else 0.0
+    best = {trigger_cluster_id: {'N': N0, 'G_avail': 0.0, 'parent': None,
                                  'step': 'trigger', 'y0': 0.0}}
     offers: dict[int, tuple] = {}        # never-reached cid -> (N, reason) of its best offer
     first_rej: dict[int, dict] = {}
