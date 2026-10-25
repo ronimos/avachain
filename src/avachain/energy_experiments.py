@@ -10,6 +10,8 @@ reproduces the operational polygons. Nothing here ranks triggers.
     python src/avachain/energy_experiments.py envelope [--n 300]
     python src/avachain/energy_experiments.py params
     python src/avachain/energy_experiments.py check
+    python src/avachain/energy_experiments.py fit      # G_wl so the start-zone median Pi = 1
+    python src/avachain/energy_experiments.py fixed --g-wl 6.1e5 --tag fit_gwl
 
 Writes outputs/little_prof_energy/experiments/. Hypothesis tooling; nothing
 here is validated.
@@ -74,7 +76,8 @@ def setting(module, **kw):
 class Scene:
     """Everything a run needs, loaded once."""
 
-    def __init__(self, project_dir: Path):
+    def __init__(self, project_dir: Path, tag: str = ''):
+        self.tag = tag
         import rasterio
         from analysis_pipeline import _load_observed_release_polygon, kml_to_mask
         self.cfg_live = ProjectConfig.from_toml(project_dir / 'slopes/little_prof/slope_config.toml')
@@ -98,6 +101,8 @@ class Scene:
         self.mel_dom = _csv(self.cfg, 'meloche_features_all')
         self.psi = {c: float(self.slope_grid[px].mean()) for c, px in self.pixel_index.items()}
         self.out = self.cfg.output_dir / 'experiments'
+        if getattr(self, 'tag', None):
+            self.out = self.out / self.tag
         self.out.mkdir(parents=True, exist_ok=True)
         self.frame = SlopeFrame.observed(self)
 
@@ -500,17 +505,56 @@ def step_check(scene, trigger=None):
          'spot_checks': ck.reset_index().to_dict(orient='records')}, indent=1, default=float))
 
 
+def fit_g_wl(lnpi: pd.Series, g_wl: float = None) -> float:
+    """G_wl that puts the median ln Pi of `lnpi` at 0 (Pi scales linearly with G_wl).
+
+    A loose fit to the start-zone snowpack, not to any crown: half the start
+    zone can carry a saturated crack. R and D_wl enter Pi as the same product,
+    so this one scale stands for all three.
+    """
+    g_wl = ep.G_WL if g_wl is None else g_wl
+    return float(g_wl * np.exp(-np.nanmedian(lnpi)))
+
+
+def step_fit(scene):
+    szc = {int(c) for c in np.unique(scene.cluster_map[scene.sz_mask]) if c > 0}
+    lp = ln_pi_by_cluster(scene).dropna()
+    sz = lp[lp.index.isin(szc)]
+    out = {'date': SNAPSHOT, 'n_start_zone': int(len(sz)),
+           'lnPi_median_at_default': float(sz.median()), 'G_wl_default': ep.G_WL,
+           'G_wl_fit': fit_g_wl(sz)}
+    # Same fit on the other dates on disk (start-zone features only)
+    for f in sorted(scene.cfg_live.analysis_dir.glob('all_start_zone_features_2026-*.csv')):
+        date = f.stem.rsplit('_', 1)[-1]
+        d = pd.read_csv(f, index_col=0)
+        d = d[~d.index.duplicated()]
+        v = pd.Series({c: ep.cell_energy(r, scene.psi[c])['ln_Pi']
+                       for c, r in d.iterrows() if c in szc and c in scene.psi}).dropna()
+        out[f'G_wl_fit_{date}'] = fit_g_wl(v) if len(v) else np.nan
+        out[f'n_{date}'] = int(len(v))
+    print(json.dumps(out, indent=1))
+    (scene.out / 'fit.json').write_text(json.dumps(out, indent=1))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('step', choices=('fixed', 'envelope', 'params', 'check'))
+    ap.add_argument('step', choices=('fixed', 'envelope', 'params', 'check', 'fit'))
+    ap.add_argument('--g-wl', type=float, default=None,
+                    help='energy_path.G_WL for this run (e.g. the value from the fit step)')
+    ap.add_argument('--tag', default='', help='write to experiments/<tag>/')
     ap.add_argument('--project-dir', type=Path, default=Path(__file__).resolve().parents[2])
     ap.add_argument('--n-sampled', type=int, default=20)
     ap.add_argument('--n', type=int, default=300)
     ap.add_argument('--modes', nargs='+', default=list(MODES))
     args = ap.parse_args()
-    scene = Scene(args.project_dir)
-    if args.step == 'fixed':
+    if args.g_wl is not None:
+        ep.G_WL = args.g_wl
+    scene = Scene(args.project_dir, args.tag)
+    scene.out.mkdir(parents=True, exist_ok=True)
+    if args.step == 'fit':
+        step_fit(scene)
+    elif args.step == 'fixed':
         step_fixed(scene, args.n_sampled)
     elif args.step == 'envelope':
         step_envelope(scene, args.n, tuple(args.modes))

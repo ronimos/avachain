@@ -94,6 +94,36 @@ class TestSplitWlSlab:
         slab, wl, iface = split_wl_slab(gt, z)
         assert slab is None
 
+    def test_basal_fcxr_under_fc_starts_the_wl(self):
+        # The Jan 18 crown case: 990 at the ground, FC above, RG slab
+        gt = np.array([990.0, 990.0, 450.0, 310.0])
+        z  = np.array([-1.9,  -1.85, -1.8,  -0.5])
+        slab, wl, iface = split_wl_slab(gt, z)
+        assert list(wl) == [True, True, True, False]
+        assert slab[3]
+        assert iface == pytest.approx(-1.8)
+
+    def test_basal_fcxr_alone_is_the_wl(self):
+        gt = np.array([990.0, 310.0, 310.0])
+        z  = np.array([-1.5,  -1.0,  -0.5])
+        slab, wl, iface = split_wl_slab(gt, z)
+        assert list(wl) == [True, False, False]
+
+    def test_fcxr_above_basal_fc_still_ends_the_block(self):
+        # Unchanged behaviour: FCxr is admitted only at the ground
+        gt = np.array([450.0, 990.0, 450.0, 310.0])
+        z  = np.array([-2.0,  -1.5,  -1.0,  -0.5])
+        slab, wl, iface = split_wl_slab(gt, z)
+        assert list(wl) == [True, False, False, False]
+        assert iface == pytest.approx(-2.0)
+
+    def test_basal_fcxr_switch_off_restores_the_old_rule(self, monkeypatch):
+        import snowpack_analysis as sa
+        monkeypatch.setattr(sa, 'BASAL_FCXR_IS_WL', False)
+        slab, wl, iface = split_wl_slab(np.array([990.0, 450.0, 310.0]),
+                                        np.array([-1.5, -1.0, -0.5]))
+        assert slab is None
+
     def test_all_wl_layers(self):
         gt = np.array([450.0, 450.0, 450.0])
         z  = np.array([-1.0,  -0.5,  -0.2])
@@ -410,3 +440,12 @@ def test_rc_wl_missing_variable_warns_instead_of_silent_nan():
     with pytest.warns(UserWarning, match='rc_flat'):
         feat = profile_features(_profile(_WL3_SLAB), 0.0)
     assert np.isnan(feat['rc_wl'])
+
+
+def test_snapshot_gap_refuses_dates_past_the_store():
+    """analyze must not read the last step for a date the store does not reach."""
+    import pandas as pd
+    from analyze_release_zone import MAX_SNAPSHOT_GAP, snapshot_gap
+    times = pd.date_range('2025-11-26 18:00', '2026-01-18 18:00', freq='6h').values
+    assert snapshot_gap(times, '2026-01-18') <= MAX_SNAPSHOT_GAP
+    assert snapshot_gap(times, '2026-03-07') > MAX_SNAPSHOT_GAP

@@ -620,6 +620,15 @@ def plot_meloche_comparison(meloche_df: pd.DataFrame, plots_dir: Path,
 # Main
 # -----------------------------------------------------------------------
 
+MAX_SNAPSHOT_GAP = pd.Timedelta(days=1)
+
+
+def snapshot_gap(times, snap_ts) -> pd.Timedelta:
+    """Distance from snap_ts to the nearest time in `times`."""
+    t = pd.to_datetime(np.asarray(times))
+    return pd.Timedelta(np.min(np.abs(t - pd.Timestamp(snap_ts))))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--project-dir',
@@ -714,6 +723,15 @@ def main():
 
     snap_ts = pd.Timestamp(args.snapshot_date)
     print(f"Snapshot: {snap_ts.date()}")
+    # Every read below is sel(time=snap_ts, method='nearest'), which silently
+    # returns the last step when the date is past the end of the store: on
+    # 2026-10-25 a 2026-03-07 run read 2026-01-18 18:00 profiles and wrote them
+    # as the Mar 7 CSVs. Refuse instead.
+    _gap = snapshot_gap(ds.coords['time'].values, snap_ts)
+    if _gap > MAX_SNAPSHOT_GAP:
+        raise SystemExit(f"ERROR: nearest SNOWPACK step is {_gap} from {snap_ts}; "
+                         f"the store covers {pd.Timestamp(ds.coords['time'].values.min())} "
+                         f"to {pd.Timestamp(ds.coords['time'].values.max())}.")
 
     print("Extracting per-cluster features at snapshot...")
     snap_data = {}

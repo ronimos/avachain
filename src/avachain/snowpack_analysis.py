@@ -265,6 +265,15 @@ def assign_cluster_groups(cluster_map, release_mask, start_zone_mask,
 # WL / slab boundary detection
 # -----------------------------------------------------------------------
 
+# Basal FCxr (9xx, rounding facets) under the FC/DH sequence counts as part of
+# the basal weak layer (Ron, 2026-10-25). Without it, 251 of 732 Jan 18 crown
+# clusters had no weak layer: 1-4 basal 990 elements (median 4.7 cm) sat under
+# FC and the first-element test failed. Only a run of FCxr AT THE GROUND is
+# admitted; FCxr above the first FC/DH element still ends the block, so every
+# profile with an FC/DH base splits exactly as before.
+BASAL_FCXR_IS_WL = True
+
+
 def split_wl_slab(grain_type, z):
     """
     Find the BASAL weak layer by scanning upward from the bottom.
@@ -289,8 +298,14 @@ def split_wl_slab(grain_type, z):
     order        = np.argsort(z_ok)
     gt_sorted    = gt_ok[order]
     z_sorted     = z_ok[order]
-    # Only FC (4xx) and DH (5xx) are weak layer grain types
+    # Only FC (4xx) and DH (5xx) are weak layer grain types, plus a basal
+    # FCxr (9xx) run when BASAL_FCXR_IS_WL.
     is_wl_sorted = (gt_sorted // 100 == 4) | (gt_sorted // 100 == 5)
+    n_fcxr = 0
+    if BASAL_FCXR_IS_WL:
+        while n_fcxr < len(gt_sorted) and gt_sorted[n_fcxr] // 100 == 9:
+            n_fcxr += 1
+        is_wl_sorted[:n_fcxr] = True
 
     # Must start with at least one WL layer at the base
     if not is_wl_sorted[0]:
