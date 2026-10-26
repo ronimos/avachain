@@ -55,3 +55,25 @@ def test_missing_sk38_is_never_a_trigger():
 def test_csv_without_rc_column_ranks_by_sk38_alone():
     df = _cands([(1, 0.80, 0.1), (2, 0.77, 0.1)]).drop(columns='rc_wl')
     assert list(_rank_triggers(df, 2, 'min_sk38').index) == [2, 1]
+
+
+def _slope_cands(rows):
+    return pd.DataFrame(rows, columns=['cid', 'min_sk38', 'rc_wl', 'mean_slope']).set_index('cid')
+
+
+def test_slope_ranking_puts_steepest_first_regardless_of_sk38():
+    df = _slope_cands([(1, 0.70, 0.1, 33.0), (2, 1.30, 0.1, 41.0), (3, 1.10, 0.1, 37.5)])
+    assert list(_rank_triggers(df, 3, 'min_sk38', by='slope').index) == [2, 3, 1]
+    # the default is unchanged
+    assert list(_rank_triggers(df, 3, 'min_sk38').index) == [1, 3, 2]
+
+
+def test_slope_tie_is_broken_by_sk38_then_rc():
+    df = _slope_cands([(1, 1.2, 0.1, 40.0), (2, 1.1, 0.3, 40.0), (3, 1.1, 0.2, 40.0)])
+    assert list(_rank_triggers(df, 3, 'min_sk38', by='slope').index) == [3, 2, 1]
+
+
+def test_unknown_ranking_is_refused():
+    import pytest
+    with pytest.raises(ValueError):
+        _rank_triggers(_slope_cands([(1, 1.0, 0.1, 35.0)]), 1, 'min_sk38', by='elevation')

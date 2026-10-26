@@ -145,10 +145,33 @@ def _load_groups(cfg, dem, transform, snapshot_date=None):
     return groups
 
 
+def _start_zone_clusters(cluster_map: np.ndarray,
+                         start_zone_mask: np.ndarray) -> set:
+    """
+    Cluster ids eligible as triggers: every pixel inside the start zone.
+
+    Stricter than the BFS gate in release_geometry, which admits a neighbour
+    by its centroid pixel. A trigger is never gated by _qualifies, so the old
+    any-pixel rule let a cluster the BFS would reject as 'outside_start_zone'
+    seed the BFS (56 of 1608 on 2026-01-18). Remote triggers are out of scope.
+    """
+    inside  = set(np.unique(cluster_map[start_zone_mask]).tolist())
+    outside = set(np.unique(cluster_map[~start_zone_mask]).tolist())
+    return set(int(c) for c in inside - outside if c > 0)
+
+
 def _rank_triggers(cand_df: pd.DataFrame, n: int, sk38_col: str,
-                   rc_col: str = 'rc_wl') -> pd.DataFrame:
+                   rc_col: str = 'rc_wl', by: str = 'sk38',
+                   slope_col: str = 'mean_slope') -> pd.DataFrame:
     """
     Top-n trigger candidates: lowest Sk38 first, ties broken by lowest r_c.
+
+    by='slope' ranks steepest first instead (slope_col, mean slope of the
+    cluster in degrees), with Sk38 then r_c breaking ties. Within the
+    2026-01-18 pool Sk38 is almost a function of slab thickness (Spearman
+    -0.96 at psi >= 30), so Sk38 ranking picks the thickest slab under the
+    cap; slope angle is the key least tied to thickness (+0.29), and the one
+    that changed fewest triggers when the cap moved.
 
     SNOWPACK reports Sk38 to two decimals, so places 3-5 regularly sit inside
     a tie (4-way at 0.79 on 2026-01-18, 10-way on 2026-03-07). nsmallest()
@@ -161,9 +184,14 @@ def _rank_triggers(cand_df: pd.DataFrame, n: int, sk38_col: str,
 
     rc_col is optional so older feature CSVs without it still rank by Sk38.
     """
+    if by not in ('sk38', 'slope'):
+        raise ValueError(f"unknown trigger ranking {by!r}")
     ranked = cand_df.dropna(subset=[sk38_col])
     keys = [sk38_col] + ([rc_col] if rc_col in ranked.columns else [])
-    return ranked.sort_values(keys, na_position='last').head(n)
+    asc = [True] * len(keys)
+    if by == 'slope':
+        keys, asc = [slope_col] + keys, [False] + asc
+    return ranked.sort_values(keys, ascending=asc, na_position='last').head(n)
 
 
 def _trigger_weights(n: int, sk38_values: list) -> list:
@@ -583,7 +611,10 @@ def step_scenarios(cfg, args):
     # whether arrest indices are computed at all; see the note there.
     MIN_TAU_G   = 40.0
     MIN_SLOPE   = 30.0   # degrees — well above the 27° friction angle
-    MAX_SK38    = 1.0    # Sk38 >= 1.0 = stable for skier triggering (Schweizer & Jamieson 2007)
+    # Sk38 >= 1.0 = stable for skier triggering (Schweizer & Jamieson 2007).
+    # --max-sk38 inf drops the gate: on 2026-01-18 no cluster with a slab
+    # under 1 m has Sk38 < 1 (min 1.11), so a thin-slab cap needs it off.
+    MAX_SK38    = args.max_sk38
     MIN_SLAB_THICKNESS = 0.5  # metres — too thin = D1 at most
     # metres — the deepest slab we expect explosive control to trigger at the
     # basal WL. This is an operational choice, not a physical result, and it
@@ -595,15 +626,15 @@ def step_scenarios(cfg, args):
     # operational reason.
     MAX_SLAB_THICKNESS = args.max_slab_thickness
 
-    # All clusters that overlap the start zone mask.
+    # Clusters lying wholly inside the start zone mask.
     # Iterate the feature index, not the set: ties that survive the r_c
     # tie-break in _rank_triggers fall back to row order, and set iteration
     # order would hand them to a different cluster than the standalone does.
-    sz_cids = set(int(c) for c in np.unique(cluster_map[start_zone_mask])
-                  if c > 0)
+    sz_cids = _start_zone_clusters(cluster_map, start_zone_mask)
     candidate_ids = [cid for cid in snap_features.index
                      if cid in sz_cids]
-    print(f"  Start zone clusters with features: {len(candidate_ids)}")
+    print(f"  Start zone clusters (wholly inside) with features: "
+          f"{len(candidate_ids)}")
 
     def _scalar_val(df, cid, col):
         """Safely get a scalar from a possibly multi-row index."""
@@ -706,7 +737,13 @@ def step_scenarios(cfg, args):
                   f"mean {pi1_mean:.2f}): "
                   f"{pre_gate} → {cand_df.shape[0]} candidates")
 
-    triggers = _rank_triggers(cand_df, args.n_triggers, sk38_col)
+    if args.trigger_rank == 'slope':
+        slope_grid, _ = compute_slope_aspect(dem)
+        cand_df['mean_slope'] = [float(slope_grid[cluster_map == cid].mean())
+                                 for cid in cand_df.index]
+    triggers = _rank_triggers(cand_df, args.n_triggers, sk38_col,
+                              by=args.trigger_rank)
+    print(f"  Ranked by {args.trigger_rank}")
 
     # Validate triggers: drop any that can't produce a release polygon
     # Test with median size_factor — if it fails at median, it fails at all
@@ -1121,6 +1158,12 @@ def main():
                              'Default 2.0, sized for explosive control. Use 1.5 for '
                              'skier-triggered scenarios (skier stress is negligible '
                              'below ~1.5 m) or 10.0 for natural triggers.')
+    parser.add_argument('--max-sk38', type=float, default=1.0,
+                        help='Trigger gate: accept clusters with Sk38 below this '
+                             '(default 1.0). "inf" disables the gate.')
+    parser.add_argument('--trigger-rank', default='sk38', choices=('sk38', 'slope'),
+                        help="Order of the trigger pool: lowest Sk38 (default) or "
+                             "steepest mean slope, Sk38 then r_c breaking ties.")
     parser.add_argument('--no-propagation', action='store_true',
                         help='Skip BFS propagation, use rectangle fallback')
     parser.add_argument('--restrict-to-release-area', action='store_true',
