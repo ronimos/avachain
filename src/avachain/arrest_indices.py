@@ -128,6 +128,30 @@ def tensile_length(sigma_t, k):
         return np.where(k > 0, sigma_t / k, np.inf)
 
 
+def slab_tensile_stress_cantilever(rho, h, l):
+    """sigma_max = 3 rho g l^2 / h (Pa): bending stress at the surface of an
+    unsupported slab of thickness h over a crack of length l.
+
+    SOURCE: Schweizer, Reuter, van Herwijnen, Gauthier & Jamieson (2014), "On
+    how the tensile strength of the slab affects crack propagation
+    propensity", ISSW 2014, Eq. 1: a horizontal cantilever under its own
+    weight, evaluated at l = r_c. Flat: no slope term, no E, no nu. Their check:
+    rho = 100, h = 0.3 m, r_c = 0.2 m gives ~400 Pa. Reuter & Schweizer (2018,
+    GRL 45, 7019) replace it with FE stresses and a layered index whose exact
+    form we could not read; this is the closed form, not that index.
+    """
+    return 3.0 * np.asarray(rho, dtype=float) * G_ACC * np.asarray(l, dtype=float) ** 2 \
+        / np.asarray(h, dtype=float)
+
+
+def slab_tensile_support(sigma_t, rho, h, r_c):
+    """S_t = sigma_t / sigma_max(l = r_c). S_t < 1: the slab breaks in tension
+    before the weak-layer crack reaches critical length, so it cannot carry
+    propagation (Schweizer et al. 2014). The threshold 1 is stress = strength,
+    not a fit."""
+    return np.asarray(sigma_t, dtype=float) / slab_tensile_stress_cantilever(rho, h, r_c)
+
+
 C_FIT = 0.045  # fitted from Meloche et al. 2025 Fig. 8 (two runs); see docs/arrest_indices.md
 
 

@@ -82,6 +82,7 @@ checking these leads to wrong conclusions about what produced a polygon.
 | Flag | Default | Effect when off |
 |---|---|---|
 | `USE_MELOCHE_ARREST` | `True` (since 2026-10-23, **avachain only** — the standalone is still `False`, so this is a parity difference until Ron decides) | `_qualifies` stops at the directional Meloche A_ca test (Eq. 20 via `arrest_indices.arrest_length`, with C = 0.045); the Λ/thickness discontinuity heuristics are then **skipped**, not run alongside. `TAU_G_ABS_FLOOR`, thin slab, low Λ and the distance caps still apply. It fires rarely (6 of ~1200 clusters for trigger 1772) and areas grow ~5-20% against the heuristics. |
+| `USE_SLAB_TENSILE_GATE` | `False` | No slab-tensile check. When on (CLI `--slab-tensile-gate`, both repos), a candidate is arrested when S_t = σ_t / (3ρg·r_c²/h) < 1 (Schweizer et al. 2014 ISSW Eq. 1, the closed form, not Reuter & Schweizer 2018's FE index). σ_t is `sigma_t_mean__jamieson1990` (J&J 1990 with the facet knockdown); a missing column means the gate never fires, so regenerate the standalone CSVs before using it there. |
 | `USE_MODE3_SPEED_CAP` | `False` | `d_lat` is the Gaume θ-ratio width (15 m floor) alone. |
 | `USE_MODE3_LAMBDA` | `False` | A single Λ is used in all directions. |
 | `USE_ANISOTROPIC_RINGS` | `False` | BFS rings grow isotropically. |

@@ -54,6 +54,17 @@ USE_MELOCHE_ARREST = True
 MELOCHE_DELTA      = 1.0   # softening coefficient δ (Meloche default; their Table 1)
 NU                 = 0.3   # slab Poisson's ratio
 
+# Slab tensile-failure gate (Ron, 2026-10-26; OFF by default). Arrest a
+# candidate whose slab would break in tension before its weak-layer crack
+# reaches critical length: S_t = sigma_t / (3 rho g r_c^2 / h) < 1, Schweizer et
+# al. (2014), via arrest_indices.slab_tensile_support. Per-cluster, like gates
+# 4-6, and placed after them. sigma_t is Jamieson & Johnston (1990) with the
+# facet knockdown (FACET_STRENGTH_FACTOR), the strength relation the 2014
+# paper uses; faceted slabs are ~half as strong at equal density, which is the
+# RG-inside / FC-outside contrast at Jan 18. The threshold is 1, not a fit.
+USE_SLAB_TENSILE_GATE = False
+SLAB_TENSILE_SIGMA_COL = 'sigma_t_mean__jamieson1990'
+
 THETA_MIN = 1e-6   # Pa/m; θ below this is treated as no usable gradient
 
 # Cross-slope θ sampling in estimate_cross_slope_width(). The lateral sample has
@@ -995,7 +1006,7 @@ def propagate_release(
                     props[col] = float(v)
         if snap_features is not None and cid in snap_features.index:
             for col in ['slab_thickness', 'slab_density',
-                        'wl_shear_strength', 'sigma_t']:
+                        'wl_shear_strength', 'sigma_t', SLAB_TENSILE_SIGMA_COL]:
                 if col in snap_features.columns:
                     v = snap_features.loc[cid, col]
                     if isinstance(v, pd.Series): v = v.iloc[0]
@@ -1080,6 +1091,16 @@ def propagate_release(
         lam_nbr_abs = directional_lambda(nbr_props, is_cross)
         if not np.isnan(lam_nbr_abs) and lam_nbr_abs < MIN_PROPAGATION_LAMBDA:
             return False, 'low_lambda'
+
+        # Slab tensile failure — the slab breaks before the crack reaches r_c.
+        # A cluster missing any input is not gated (as for gates 4-6).
+        if USE_SLAB_TENSILE_GATE:
+            s_t = _ai.slab_tensile_support(
+                nbr_props.get(SLAB_TENSILE_SIGMA_COL, np.nan),
+                nbr_props.get('slab_density', np.nan), h_nbr,
+                nbr_props.get('rc_wl', np.nan))
+            if np.isfinite(s_t) and s_t < 1.0:
+                return False, 'slab_tensile_failure'
 
         # --- Crack-arrest gradient test -------------------------------------
         if USE_MELOCHE_ARREST:

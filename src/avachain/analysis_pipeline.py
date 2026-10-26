@@ -538,6 +538,10 @@ def step_scenarios(cfg, args):
     _rg.ARREST_MODE  = getattr(args, 'arrest_mode', _rg.ARREST_MODE)
     _rg.MASK_MODE    = getattr(args, 'mask_mode', _rg.MASK_MODE)
     _ep.ENERGY_DELTA = getattr(args, 'energy_delta', _ep.ENERGY_DELTA)
+    _rg.USE_SLAB_TENSILE_GATE = (getattr(args, 'slab_tensile_gate', False)
+                                 or _rg.USE_SLAB_TENSILE_GATE)
+    if _rg.USE_SLAB_TENSILE_GATE:
+        print(f"  slab tensile-failure gate ON ({_rg.SLAB_TENSILE_SIGMA_COL})")
     if _rg.ARREST_MODE != 'legacy' or _rg.MASK_MODE != 'gate':
         print(f"  arrest_mode={_rg.ARREST_MODE}  mask_mode={_rg.MASK_MODE}  "
               f"energy_delta={_ep.ENERGY_DELTA}")
@@ -1155,6 +1159,10 @@ def main():
     parser.add_argument('--mask-mode', default=_rg.MASK_MODE, choices=('gate', 'diagnostic'),
                         help=f"Start-zone KML use (default: {_rg.MASK_MODE}). 'diagnostic' "
                              "runs the BFS without it and adds frac_outside_mask to summary.csv.")
+    parser.add_argument('--slab-tensile-gate', action='store_true',
+                        help='legacy mode: also arrest where the slab breaks in tension '
+                             'before the crack reaches r_c (Schweizer et al. 2014; '
+                             'release_geometry.USE_SLAB_TENSILE_GATE, default off).')
     parser.add_argument('--energy-delta', type=float, default=_ep.ENERGY_DELTA,
                         help=f"delta in the energy-mode G_c (default: {_ep.ENERGY_DELTA}; "
                              "R was fitted at 0). The Eq. 20 delta is unchanged.")
