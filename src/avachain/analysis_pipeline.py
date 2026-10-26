@@ -657,6 +657,13 @@ def step_scenarios(cfg, args):
         ]
         print(f"  Candidates after slab_thickness {MIN_SLAB_THICKNESS}-{MAX_SLAB_THICKNESS}m filter: "
             f"{len(candidate_ids)}")
+    # Slab tensile gate on the trigger: rank only triggers whose slab can carry
+    # a crack to r_c, so the ranking still yields n_triggers releases.
+    if _rg.USE_SLAB_TENSILE_GATE and _rg.ARREST_MODE == 'legacy':
+        candidate_ids = [
+            cid for cid in candidate_ids
+            if not (_rg.cluster_tensile_support(cid, meloche_df, snap_features) < 1.0)]
+        print(f"  Candidates after slab tensile support S_t >= 1: {len(candidate_ids)}")
     # Optional: restrict to observed release area (validation mode only)
     if args.restrict_to_release_area:
         from snowpack_analysis import geojson_to_mask

@@ -120,3 +120,39 @@ def test_missing_input_is_not_gated(scene, monkeypatch):
     monkeypatch.setattr(rg, 'USE_SLAB_TENSILE_GATE', True)
     reached, _ = _run(scene, snap=scene['snap'].drop(columns=[SIG]))
     assert scene['band'] <= reached
+
+
+# --- the trigger itself -----------------------------------------------------
+
+def _polygon(scene, trigger, state):
+    return rg.make_release_polygon_2d(
+        trigger_cluster_id=trigger, A_ca=200.0, meloche_df=scene['meloche_df'],
+        cluster_map=scene['cluster_map'], dem=scene['dem'], transform=T,
+        snap_features=scene['snap'], pixel_index=scene['pixel_index'],
+        max_clusters=20000, state_out=state)
+
+
+def test_cluster_support_matches_the_gate(scene):
+    cid = next(iter(scene['band']))
+    assert rg.cluster_tensile_support(cid, scene['meloche_df'], scene['snap']) == \
+        pytest.approx(ai.slab_tensile_support(2800.0, 330.0, 1.0, 1.2))
+    assert np.isnan(rg.cluster_tensile_support(
+        cid, scene['meloche_df'], scene['snap'].drop(columns=[SIG])))
+
+
+def test_trigger_in_failing_slab_releases_nothing(scene, monkeypatch):
+    """No polygon and, in particular, no rectangle fallback."""
+    trigger = next(iter(scene['band']))
+    monkeypatch.setattr(rg, 'USE_SLAB_TENSILE_GATE', True)
+    state = {}
+    assert _polygon(scene, trigger, state) is None
+    assert state.get('trigger_tensile_failure') is True
+
+
+def test_trigger_gate_off_or_sound_slab_still_releases(scene, monkeypatch):
+    monkeypatch.setattr(rg, 'USE_SLAB_TENSILE_GATE', False)
+    assert _polygon(scene, next(iter(scene['band'])), {}) is not None
+    monkeypatch.setattr(rg, 'USE_SLAB_TENSILE_GATE', True)
+    state = {}
+    assert _polygon(scene, scene['trigger'], state) is not None
+    assert 'trigger_tensile_failure' not in state

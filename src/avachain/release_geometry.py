@@ -65,6 +65,27 @@ NU                 = 0.3   # slab Poisson's ratio
 USE_SLAB_TENSILE_GATE = False
 SLAB_TENSILE_SIGMA_COL = 'sigma_t_mean__jamieson1990'
 
+
+def cluster_tensile_support(cid, meloche_df, snap_features) -> float:
+    """S_t of one cluster (NaN if an input is missing): r_c from the Meloche
+    CSV, slab density / thickness / sigma_t from the snapshot features, as the
+    BFS gate reads them. The same gate applies to the trigger itself: a slab
+    that breaks before its own crack reaches r_c cannot start a release."""
+    def _get(df, col):
+        if df is None or df.empty or cid not in df.index or col not in df.columns:
+            return np.nan
+        v = df.loc[cid, col]
+        v = v.iloc[0] if isinstance(v, pd.Series) else v
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return np.nan
+    return float(_ai.slab_tensile_support(
+        _get(snap_features, SLAB_TENSILE_SIGMA_COL),
+        _get(snap_features, 'slab_density'),
+        _get(snap_features, 'slab_thickness'),
+        _get(meloche_df, 'rc_wl')))
+
 THETA_MIN = 1e-6   # Pa/m; θ below this is treated as no usable gradient
 
 # Cross-slope θ sampling in estimate_cross_slope_width(). The lateral sample has
@@ -694,6 +715,18 @@ def make_release_polygon_2d(
         return poly
 
     energy_mode = ARREST_MODE != 'legacy'    # energy and the baselines
+
+    # Slab tensile gate on the trigger itself: no release, and no rectangle
+    # fallback, which would otherwise put a polygon on a slab that cannot
+    # carry a crack.
+    if USE_SLAB_TENSILE_GATE and not energy_mode and use_propagation:
+        s_t = cluster_tensile_support(trigger_cluster_id, meloche_df, snap_features)
+        if np.isfinite(s_t) and s_t < 1.0:
+            print(f"  Trigger {trigger_cluster_id}: slab tensile support "
+                  f"S_t = {s_t:.2f} < 1 — no release")
+            if state_out is not None:
+                state_out['trigger_tensile_failure'] = True
+            return None
 
     # --- Primary: BFS propagation ---
     if use_propagation and (energy_mode or not meloche_df.empty):
