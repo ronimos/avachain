@@ -147,6 +147,13 @@ class ProjectConfig:
     # it, so a replay must not share the live slope's copy. None = the
     # historical default, <boundaries_dir>/avalanche_events.json.
     avalanche_events_file: Optional[Path] = None
+    # Validation release polygons ([paths] validation_dir), named like the
+    # boundaries_dir ones (avalanche_release_area_<YYYYMMDD>.geojson). A file
+    # here replaces boundaries_dir's for the same date in
+    # release_geojsons_for_date, i.e. for everything a model is scored
+    # against, but never in event_mask_for: reinit keeps the mapped crown.
+    # None (the default) = off, so a blind replay slope cannot pick it up.
+    validation_dir: Optional[Path] = None
 
     def __post_init__(self):
         """Resolve paths relative to project_dir."""
@@ -161,6 +168,8 @@ class ProjectConfig:
         self.release_geojson = self.project_dir / self.release_geojson
         if self.avalanche_events_file is not None:
             self.avalanche_events_file = self.project_dir / self.avalanche_events_file
+        if self.validation_dir is not None:
+            self.validation_dir = self.project_dir / self.validation_dir
 
     @property
     def boundaries_dir(self) -> Path:
@@ -200,6 +209,11 @@ class ProjectConfig:
         Return all avalanche_release_area_{YYYYMMDD}.geojson paths whose
         embedded date is ≤ snapshot_date, sorted chronologically.
 
+        A validation_dir file wins over the boundaries_dir file of the same
+        date. This is the validation seam: the comparison plot, the
+        release/adjacent/reference groups, --use-observed-release and the
+        energy experiments all read the observed polygon through here.
+
         snapshot_date : YYYY-MM-DD string
         """
         from datetime import date as _date
@@ -207,9 +221,13 @@ class ProjectConfig:
             snap = _date.fromisoformat(snapshot_date)
         except ValueError:
             return []
+        by_name = {p.name: p for p in self.boundaries_dir.glob(
+            "avalanche_release_area_????????.geojson")}
+        if self.validation_dir is not None:
+            by_name.update({p.name: p for p in self.validation_dir.glob(
+                "avalanche_release_area_????????.geojson")})
         paths = []
-        for p in sorted(self.boundaries_dir.glob(
-                "avalanche_release_area_????????.geojson")):
+        for p in (by_name[n] for n in sorted(by_name)):
             date_str = p.stem.replace("avalanche_release_area_", "")
             if len(date_str) == 8:
                 try:
@@ -330,6 +348,8 @@ class ProjectConfig:
             output_dir=Path(paths.get("output_dir", "outputs")),
             avalanche_events_file=(Path(paths["avalanche_events"])
                                    if "avalanche_events" in paths else None),
+            validation_dir=(Path(paths["validation_dir"])
+                            if "validation_dir" in paths else None),
             windninja_library_dir=Path(paths.get("windninja_library_dir", "windninja/library")),
             clean_survey_pixels=bool(processing.get("clean_survey_pixels", True)),
             slope_name=slope_name,

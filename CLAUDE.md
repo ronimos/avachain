@@ -92,11 +92,22 @@ checking these leads to wrong conclusions about what produced a polygon.
 | `release_geometry.MASK_MODE` | `'gate'` | `'diagnostic'` runs the BFS without the start-zone KML; needs features outside it (`analyze --feature-buffer-m`). |
 | `energy_path.ENERGY_DELTA` | `0.0` | Energy-mode δ only; R was fitted at δ = 0. The Eq. 20 δ stays 1.0. |
 
-The observed Jan 18 crown in `data/boundaries/` is the **6 934 m²** mapping
-since 2026-10-25 (the standalone's). The 4 550 m² file avachain used before is
-in `data/boundaries/old/…_4550m2.geojson`; IoU from before that date is not
-comparable. The same file is the reinit scour mask for Jan 18
-(`cfg.event_mask_for`), so a forcing rebuild now uses the larger crown.
+**The Jan 18 validation target is the survey-derived polygon** (Ron,
+2026-10-26): `data/validation/avalanche_release_area_20260118.geojson`,
+5 810 m², from `survey_release_polygon.py` (`avalanche.delineate_crown` on the
+01-14 → 01-20 surveys). `[paths] validation_dir` makes
+`cfg.release_geojsons_for_date` prefer it, which covers every scoring reader
+(comparison plot, groups, `--use-observed-release`, `analyze_release_zone`,
+energy experiments). It is off by default, so the blind Jan replay cannot see
+it. IoU from before 2026-10-26 is against a mapped crown and is not comparable.
+
+The mapped crowns stay in `data/boundaries/`: the **6 934 m²** one since
+2026-10-25 (the standalone's) and the 4 550 m² one before it in
+`data/boundaries/old/…_4550m2.geojson`. Each has IoU 0.65 against the survey
+polygon. The 6 934 m² file is still the reinit scour mask
+(`cfg.event_mask_for`), which never reads `validation_dir`. Conclusions drawn
+against the mapped crown, such as "slab and τ_p rise outward at the crown", do
+not hold against the survey polygon. Redo them before acting on them.
 
 **The README's parameter table is stale on two rows.** It gives
 `E = (ρ/300)^2.5 × 4 MPa` and `σ_t = (ρ/300)^1.4 × 5 kPa`, which describe

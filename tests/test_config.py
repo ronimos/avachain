@@ -223,3 +223,57 @@ class TestReleaseGeojsonsForDate:
         self._write_geojson(tmp_path, "20260115")
         result = cfg.release_geojsons_for_date("not-a-date")
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# validation_dir: the scoring target, never the reinit mask
+# ---------------------------------------------------------------------------
+
+class TestValidationDir:
+    """A validation_dir polygon replaces the boundaries_dir one of the same
+    date for scoring (release_geojsons_for_date) and nowhere else."""
+
+    def _cfg(self, tmp_path: Path) -> ProjectConfig:
+        (tmp_path / "boundaries").mkdir()
+        (tmp_path / "validation").mkdir()
+        cfg = ProjectConfig(project_dir=tmp_path, validation_dir=Path("validation"))
+        cfg.boundary_kml = tmp_path / "boundaries" / "dummy.kml"
+        return cfg
+
+    def _gj(self, d: Path, date_str: str) -> Path:
+        p = d / f"avalanche_release_area_{date_str}.geojson"
+        p.write_text('{"type": "FeatureCollection", "features": []}')
+        return p
+
+    def test_validation_file_wins_for_its_date(self, tmp_path):
+        cfg = self._cfg(tmp_path)
+        self._gj(tmp_path / "boundaries", "20260110")
+        self._gj(tmp_path / "boundaries", "20260118")
+        val = self._gj(tmp_path / "validation", "20260118")
+        result = cfg.release_geojsons_for_date("2026-01-20")
+        assert [p.name[-13:-8] for p in result] == ["60110", "60118"]
+        assert result[-1] == val
+
+    def test_validation_only_date_is_included(self, tmp_path):
+        cfg = self._cfg(tmp_path)
+        val = self._gj(tmp_path / "validation", "20260118")
+        assert cfg.release_geojsons_for_date("2026-01-18") == [val]
+        assert cfg.release_geojsons_for_date("2026-01-17") == []
+
+    def test_reinit_mask_ignores_validation_dir(self, tmp_path):
+        from datetime import date
+        cfg = self._cfg(tmp_path)
+        obs = self._gj(tmp_path / "boundaries", "20260118")
+        self._gj(tmp_path / "validation", "20260118")
+        assert cfg.event_mask_for(date(2026, 1, 18)) == obs
+
+    def test_off_by_default(self, tmp_path):
+        p = _write_toml(tmp_path, MINIMAL_TOML.format(project_dir=tmp_path))
+        assert ProjectConfig.from_toml(p).validation_dir is None
+
+    def test_read_from_toml(self, tmp_path):
+        toml = MINIMAL_TOML.format(project_dir=tmp_path).replace(
+            'slope_dir   = "snowpack/test"',
+            'slope_dir   = "snowpack/test"\nvalidation_dir = "data/validation"')
+        cfg = ProjectConfig.from_toml(_write_toml(tmp_path, toml))
+        assert cfg.validation_dir == tmp_path / "data/validation"

@@ -110,7 +110,14 @@ def _load_groups(cfg, dem, transform, snapshot_date=None):
     cache_name = (f"release_zone_groups_{snapshot_date}.json"
                   if snapshot_date else "release_zone_groups.json")
     groups_path = cfg.analysis_dir / cache_name
-    if groups_path.exists():
+    # A cache older than any release polygon it would be built from is stale
+    # (the validation target changing must not be masked by the cache).
+    sources = (cfg.release_geojsons_for_date(snapshot_date) if snapshot_date
+               else [cfg.release_geojson] if cfg.release_geojson.exists() else [])
+    if groups_path.exists() and any(
+            p.stat().st_mtime > groups_path.stat().st_mtime for p in sources):
+        print(f"  {cache_name} is older than its release polygon(s) — rebuilding")
+    elif groups_path.exists():
         with open(str(groups_path)) as f:
             raw = json.load(f)
         return {k: set(v) for k, v in raw.items()}

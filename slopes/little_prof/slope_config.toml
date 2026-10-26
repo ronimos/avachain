@@ -18,6 +18,9 @@ weather_csv           = "data/weather/weather_data.csv"
 boundary_kml          = "data/boundaries/Little_Proff.kml"
 start_zone_kml        = "data/boundaries/Litte_prof_start_zone.kml"
 release_geojson       = "data/boundaries/avalanche_release_area.geojson"
+# Validation targets (survey-derived release polygons, survey_release_polygon.py).
+# Preferred over boundaries/ for scoring only; reinit keeps the mapped crown.
+validation_dir        = "data/validation"
 output_dir            = "outputs/little_prof"
 windninja_library_dir = "windninja/library"
 slope_dir             = "snowpack/little_prof"

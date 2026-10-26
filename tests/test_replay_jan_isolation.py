@@ -55,3 +55,9 @@ def test_jan_replay_state_is_namespaced():
     for attr in ("output_dir", "slope_dir", "avalanche_events_path", "zarr_path"):
         assert getattr(jan, attr) != getattr(live, attr), attr
         assert "little_prof_replay_jan" in str(getattr(jan, attr)), attr
+
+
+def test_jan_replay_has_no_validation_dir():
+    """The survey-derived Jan 18 polygon is a validation answer too."""
+    assert _cfg(JAN).validation_dir is None
+    assert _cfg(LIVE).validation_dir is not None
