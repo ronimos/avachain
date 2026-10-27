@@ -42,7 +42,8 @@ from pyproj import Transformer
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import xsnow
 from config import ProjectConfig
-from snowpack_io import load_dataset, kml_to_mask
+from snowpack_io import (load_dataset, kml_to_mask, MAX_SNAPSHOT_GAP,
+                         snapshot_gap)
 from snowpack_analysis import (
     geojson_to_mask, assign_cluster_groups,
     split_wl_slab, profile_features,
@@ -619,15 +620,6 @@ def plot_meloche_comparison(meloche_df: pd.DataFrame, plots_dir: Path,
 # -----------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------
-
-MAX_SNAPSHOT_GAP = pd.Timedelta(days=1)
-
-
-def snapshot_gap(times, snap_ts) -> pd.Timedelta:
-    """Distance from snap_ts to the nearest time in `times`."""
-    t = pd.to_datetime(np.asarray(times))
-    return pd.Timedelta(np.min(np.abs(t - pd.Timestamp(snap_ts))))
-
 
 def main():
     parser = argparse.ArgumentParser()

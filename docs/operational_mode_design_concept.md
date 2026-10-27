@@ -194,7 +194,7 @@ The reinit step scours release cluster `.sno` files by removing layers from the 
 
 1. **Pass 1:** SNOWPACK from season start (or last restart) to event date
 2. **Reinit:** scour release cluster `.sno` files
-3. **Pass 2:** SNOWPACK from event date to current date (scoured clusters only)
+3. **Pass 2:** SNOWPACK from event date to current date, all clusters from their restarts (scoured ones from the scoured state; a scoured-only pass 2 strands every other cluster at the event date)
 4. **Save anchor `.sno`** — copy each scoure-adjusted `output/${cid}_${cid}.sno` to `output/${cid}_anchor.sno` for all reinit-affected clusters. The post-avalanche snowpack state supersedes the last survey anchor for those clusters (see §3.2).
 
 ### 5.3 Multiple events per season

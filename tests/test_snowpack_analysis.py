@@ -451,6 +451,44 @@ def test_snapshot_gap_refuses_dates_past_the_store():
     assert snapshot_gap(times, '2026-03-07') > MAX_SNAPSHOT_GAP
 
 
+class TestSnapshotTimeIndex:
+    """Every snapshot read goes through snowpack_io.snapshot_time_index. On
+    2026-10-27 the whole store ended at 2026-01-18 18:00 (reinit pass 2 had
+    continued only the scoured clusters) and the scenarios path picked its
+    step by a bare argmin, so a later date would have read Jan 18 silently.
+    Jan 18 itself cannot see this, hence unit tests."""
+
+    import pandas as _pd
+    times = _pd.date_range('2025-11-26 18:00', '2026-01-18 18:00', freq='6h').values
+
+    def _ds(self):
+        return xr.Dataset({'HS': (('location', 'time'), np.ones((2, len(self.times))))},
+                          coords={'location': ['cluster_0001', 'cluster_0002'],
+                                  'time': self.times})
+
+    def test_returns_nearest_inside_the_store(self):
+        from snowpack_io import snapshot_time_index
+        i = snapshot_time_index(self.times, '2026-01-18T12:00')
+        assert str(self.times[i])[:16] == '2026-01-18T12:00'
+
+    def test_refuses_past_the_end(self):
+        from snowpack_io import snapshot_time_index
+        with pytest.raises(ValueError, match='store covers'):
+            snapshot_time_index(self.times, '2026-02-15T12:00')
+
+    def test_scenarios_scour_map_refuses(self):
+        import analysis_pipeline as ap
+        cmap = np.array([[1, 2]])
+        with pytest.raises(ValueError, match='store covers'):
+            ap._build_scour_depth_map(self._ds(), cmap, None,
+                                      np.datetime64('2026-02-15T18:00'))
+
+    def test_release_depth_refuses(self):
+        import release_geometry as rg
+        with pytest.raises(ValueError, match='store covers'):
+            rg.depth_from_snowpack(np.array([[1, 2]]), self._ds(), '2026-02-15')
+
+
 # ---------------------------------------------------------------------------
 # Facet knockdown source (grain class since 2026-10-27)
 # ---------------------------------------------------------------------------

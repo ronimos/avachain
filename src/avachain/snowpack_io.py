@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 import xsnow
 from pyproj import Transformer
@@ -68,6 +69,35 @@ def load_dataset(pro_dir: Path,
     ds = xsnow.read(str(pro_dir), lazy=False, n_cpus_use=n_cpus)
     print(f"  dims: { {k: v for k, v in ds.sizes.items()} }")
     return ds
+
+
+# -----------------------------------------------------------------------
+# Snapshot time lookup
+# -----------------------------------------------------------------------
+
+# A snapshot read picks the nearest SNOWPACK step, and nearest never fails:
+# past the end of the store it returns the last step. On 2026-10-25 a
+# 2026-03-07 analyze read 2026-01-18 18:00 profiles and wrote them as the Mar 7
+# CSVs; on 2026-10-27 the whole store ended at 01-18 because reinit pass 2 had
+# continued only the scoured clusters. Every snapshot read goes through
+# snapshot_time_index, which refuses instead.
+MAX_SNAPSHOT_GAP = pd.Timedelta(days=1)
+
+
+def snapshot_gap(times, snap_ts) -> pd.Timedelta:
+    """Distance from snap_ts to the nearest time in `times`."""
+    t = pd.to_datetime(np.asarray(times))
+    return pd.Timedelta(np.min(np.abs(t - pd.Timestamp(snap_ts))))
+
+
+def snapshot_time_index(times, snap_ts, max_gap=MAX_SNAPSHOT_GAP) -> int:
+    """Index of the step nearest snap_ts; ValueError if it is > max_gap away."""
+    t = pd.to_datetime(np.asarray(times))
+    gap = snapshot_gap(t, snap_ts)
+    if gap > max_gap:
+        raise ValueError(f"nearest SNOWPACK step is {gap} from {pd.Timestamp(snap_ts)}; "
+                         f"the store covers {t.min()} to {t.max()}")
+    return int(np.argmin(np.abs(t - pd.Timestamp(snap_ts))))
 
 
 # -----------------------------------------------------------------------

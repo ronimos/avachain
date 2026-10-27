@@ -189,15 +189,19 @@ if [[ $REINIT -eq 1 ]]; then
     fi
     $REINIT_CMD
 
+    # Pass 2 continues EVERY cluster, each from its own restart .sno
+    # (run_snowpack.sh starts a restart at that file's ProfileDate): scoured
+    # clusters from the scoured state, the rest unchanged from pass 1. It used
+    # to pass reinit_stats as a cluster filter, which left every unscoured
+    # cluster (6145 of 6565 in the 2026-10-23 rebuild) ending at the event
+    # date; the Zarr store then ended there for all locations, and a later
+    # snapshot read silently returned the event date. The old reinit_stats
+    # path bug had hidden this by falling back to all clusters.
     echo ""
-    echo "    Pass 2: $EVENT_DATE → end of season (scoured clusters only)"
+    echo "    Pass 2: $EVENT_DATE → end of season (all clusters, from their restarts)"
     REINIT_STATS="$OUT_DIR/analysis/reinit_stats_${EVENT_DATE}.json"
-    if [[ -f "$REINIT_STATS" ]]; then
-        bash "$SLOPE_SCRIPTS/run_snowpack.sh" "" "" "$REINIT_STATS"
-    else
-        echo "    WARNING: reinit stats not found, rerunning all clusters"
-        bash "$SLOPE_SCRIPTS/run_snowpack.sh"
-    fi
+    [[ -f "$REINIT_STATS" ]] || echo "    WARNING: reinit stats not found at $REINIT_STATS"
+    bash "$SLOPE_SCRIPTS/run_snowpack.sh"
 else
     # --- Single-pass SNOWPACK ---
     echo ""

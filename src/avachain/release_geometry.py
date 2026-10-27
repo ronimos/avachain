@@ -1672,7 +1672,8 @@ def depth_from_snowpack(cluster_map: np.ndarray,
     """
     snap_ts = np.datetime64(f"{snapshot}T12:00")
     times   = ds.coords['time'].values
-    tidx    = int(np.argmin(np.abs(times - snap_ts)))
+    from snowpack_io import snapshot_time_index
+    tidx    = snapshot_time_index(times, snap_ts)
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')

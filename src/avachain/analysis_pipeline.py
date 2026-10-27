@@ -36,7 +36,8 @@ import rasterio
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import ProjectConfig, RASTER_EPSG, replay_as_of
-from snowpack_io import load_dataset, load_boundaries, kml_to_mask
+from snowpack_io import (load_dataset, load_boundaries, kml_to_mask,
+                         snapshot_time_index)
 from snowpack_analysis import (
     assign_cluster_groups,
     profile_features,
@@ -434,7 +435,7 @@ def _build_scour_depth_map(ds, cluster_map, snap_features, snap_ts):
     # Pre-compute the snapshot time index and load all variables at that time
     # step into memory once — avoids per-cluster lazy zarr reads (which incur
     # dask scheduler overhead 6500+ times and make this loop very slow).
-    tidx_sd  = int(np.argmin(np.abs(ds.coords['time'].values - snap_ts)))
+    tidx_sd  = snapshot_time_index(ds.coords['time'].values, snap_ts)
     sq_dims  = [d for d in ('slope', 'realization') if d in ds.dims]
     import warnings as _warnings
     with _warnings.catch_warnings():
@@ -854,7 +855,7 @@ def step_scenarios(cfg, args):
             print(f"    scour_depth: trigger cid={t_cid} not found in Zarr")
         else:
             try:
-                tidx  = int(np.argmin(np.abs(ds.coords['time'].values - snap_ts_sd)))
+                tidx  = snapshot_time_index(ds.coords['time'].values, snap_ts_sd)
                 ds_t  = ds.sel(location=t_loc_str).isel(time=tidx)
                 sq    = [d for d in ('slope', 'realization') if d in ds_t.dims]
                 if sq:
