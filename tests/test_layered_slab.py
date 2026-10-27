@@ -56,9 +56,24 @@ class TestFacetednessGrainClass:
         assert f == pytest.approx([1.0, 1.0, 1.0, 1.0, 1.0])
 
     def test_other_classes_are_not(self):
-        # PP, DF, RG, SH, MF, IF, and RG with a faceted secondary (34x)
-        f = ai.facetedness_grain_class([110, 220, 330, 660, 772, 880, 340])
+        # PP, DF, RG, SH, MF, IF with non-faceted secondaries
+        f = ai.facetedness_grain_class([110, 220, 330, 660, 772, 880, 320])
         assert f == pytest.approx(np.zeros(7))
+
+    def test_mixed_rounded_faceted_is_faceted(self):
+        # J&J group II includes grains "which showed both faceting and
+        # rounding": a PP/DF/RG primary with an FC/DH/FCxr secondary.
+        f = ai.facetedness_grain_class([341, 350, 390, 240, 140])
+        assert f == pytest.approx(np.ones(5))
+
+    def test_melt_forms_stay_unfaceted_with_faceted_secondary(self):
+        # J&J tested no melted layers; MF/IF/SH primaries are outside both groups.
+        f = ai.facetedness_grain_class([740, 840, 640])
+        assert f == pytest.approx(np.zeros(3))
+
+    def test_primary_only_rule_ignores_the_secondary(self):
+        f = ai.facetedness_grain_class([341, 440, 990], secondary=False)
+        assert f == pytest.approx([0.0, 1.0, 1.0])
 
     def test_missing_codes_are_zero(self):
         f = ai.facetedness_grain_class([np.nan, 0.0, -1.0, 440.0])
@@ -93,9 +108,19 @@ class TestAggregateFacetSource:
         assert a['f_mean_weighted'] == pytest.approx(0.25)   # (0.1 + 0.4) / 2
 
     def test_grain_class_needs_grain_type(self):
-        with pytest.raises(ValueError, match='grain_type_i'):
-            ai.aggregate_slab(self.rho, self.dz, self.sp, self.dd,
-                              facet_source='grain_class')
+        for src in ('grain_class', 'grain_class_primary'):
+            with pytest.raises(ValueError, match='grain_type_i'):
+                ai.aggregate_slab(self.rho, self.dz, self.sp, self.dd,
+                                  facet_source=src)
+
+    def test_primary_source_ignores_mixed_layer(self):
+        gt = np.array([341.0, 990.0])
+        mixed = ai.aggregate_slab(self.rho, self.dz, self.sp, self.dd,
+                                  grain_type_i=gt, facet_source='grain_class')
+        prim = ai.aggregate_slab(self.rho, self.dz, self.sp, self.dd,
+                                 grain_type_i=gt, facet_source='grain_class_primary')
+        assert mixed['f_mean_weighted'] == pytest.approx(1.0)
+        assert prim['f_mean_weighted'] == pytest.approx(0.5)
 
     def test_unknown_source_rejected(self):
         with pytest.raises(ValueError, match='facet_source'):

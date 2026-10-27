@@ -289,29 +289,43 @@ def facetedness(sphericity, dendricity, sp_ref=None):
     return np.clip(np.where(np.isfinite(f), f, 0.0), 0.0, 1.0)
 
 
-# Primary grain classes counted as faceted (SNOWPACK codes: 4xx FC, 5xx DH,
-# 9xx FCxr). Jamieson & Johnston (1990) grouped their layers by grain class,
-# FC and DH in the faceted group; FCxr (rounding facets) is still faceted.
+# Grain classes counted as faceted (SNOWPACK codes: 4 FC, 5 DH, 9 FCxr).
+# Jamieson & Johnston (1990), Microstructure: group II is "layers of faceted
+# grains and of layers of grains which showed both faceting and rounding"
+# (8 of their 23 group II layers), group I "new snow, partly settled grains or
+# rounded grains", both with no evidence of melting. So FCxr is faceted, and
+# so is a group I primary (PP/DF/RG) with a faceted secondary form, e.g. 341.
 FACETED_GRAIN_CLASSES = (4, 5, 9)
+MIXED_PRIMARY_CLASSES = (1, 2, 3)
 
 
-def facetedness_grain_class(grain_type, classes=FACETED_GRAIN_CLASSES):
-    """f in {0, 1}: 1 where the primary grain class (code // 100) is faceted.
+def facetedness_grain_class(grain_type, classes=FACETED_GRAIN_CLASSES,
+                            mixed_primary=MIXED_PRIMARY_CLASSES,
+                            secondary=True):
+    """f in {0, 1}: 1 where the layer is faceted by Jamieson & Johnston's
+    (1990) grouping, from the SNOWPACK code 100 F1 + 10 F2 + marker.
 
-    The categorical reading of Jamieson & Johnston (1990), who grouped by
-    grain class. 1 - sphericity under-counts FCxr as faceted (sphericity
-    rises as facets round), so it gives them only part of the knockdown.
-    Missing or non-positive codes get f = 0.
+    Faceted: primary F1 in `classes`, or (secondary=True) a group I primary
+    F1 in `mixed_primary` whose secondary F2 is in `classes` - J&J's grains
+    "which showed both faceting and rounding". Melt forms (MF/IF) and SH
+    stay 0 whatever F2 is: J&J tested no melted layers. secondary=False is
+    the primary-only rule (2026-10-27, 163ea0f). 1 - sphericity under-counts
+    both FCxr and the mixed forms. Missing or non-positive codes get f = 0.
     """
     gt = np.asarray(grain_type, dtype=float)
     ok = np.isfinite(gt) & (gt > 0)
-    cls = np.where(ok, np.round(np.where(ok, gt, 0.0)) // 100, -1)
-    return np.where(ok & np.isin(cls, classes), 1.0, 0.0)
+    code = np.round(np.where(ok, gt, 0.0)).astype(int)
+    f1, f2 = code // 100, (code // 10) % 10
+    fac = np.isin(f1, classes)
+    if secondary:
+        fac |= np.isin(f1, mixed_primary) & np.isin(f2, classes)
+    return np.where(ok & fac, 1.0, 0.0)
 
 
-# How f is derived: 'grain_class' (FACETED_GRAIN_CLASSES) or 'sphericity'
-# (1 - sphericity, the form before 2026-10-27).
-FACET_SOURCES = ('grain_class', 'sphericity')
+# How f is derived: 'grain_class' (primary or mixed, see
+# facetedness_grain_class), 'grain_class_primary' (primary class only,
+# 163ea0f) or 'sphericity' (1 - sphericity, the form before 2026-10-27).
+FACET_SOURCES = ('grain_class', 'grain_class_primary', 'sphericity')
 
 
 def layer_tensile_strength(rho, f, a=FACET_STRENGTH_FACTOR, **kw):
@@ -673,13 +687,14 @@ def aggregate_slab(rho_i, dz_i, sphericity_i, dendricity_i,
     sigma_t_wl__<name> with the same facet knockdown.
 
     facet_source picks f: 'sphericity' (facetedness, from sphericity_i and
-    dendricity_i) or 'grain_class' (facetedness_grain_class, from
-    grain_type_i, which is then required).
+    dendricity_i), or 'grain_class' / 'grain_class_primary'
+    (facetedness_grain_class with / without mixed forms, from grain_type_i,
+    which is then required).
     """
     if facet_source not in FACET_SOURCES:
         raise ValueError(f'facet_source {facet_source!r} not in {FACET_SOURCES}')
-    if facet_source == 'grain_class' and grain_type_i is None:
-        raise ValueError("facet_source='grain_class' needs grain_type_i")
+    if facet_source.startswith('grain_class') and grain_type_i is None:
+        raise ValueError(f"facet_source={facet_source!r} needs grain_type_i")
     rho = np.asarray(rho_i, dtype=float)
     dz = np.asarray(dz_i, dtype=float)
     ok = np.isfinite(rho) & np.isfinite(dz) & (dz > 0) & (rho > 0)
@@ -697,8 +712,9 @@ def aggregate_slab(rho_i, dz_i, sphericity_i, dendricity_i,
     rho, dz = rho[ok], dz[ok]
     gsz = (None if grain_size_i is None
            else np.asarray(grain_size_i, dtype=float)[ok])
-    if facet_source == 'grain_class':
-        f = facetedness_grain_class(np.asarray(grain_type_i, dtype=float)[ok])
+    if facet_source.startswith('grain_class'):
+        f = facetedness_grain_class(np.asarray(grain_type_i, dtype=float)[ok],
+                                    secondary=facet_source == 'grain_class')
     else:
         f = facetedness(np.asarray(sphericity_i, dtype=float)[ok],
                         np.asarray(dendricity_i, dtype=float)[ok], sp_ref)

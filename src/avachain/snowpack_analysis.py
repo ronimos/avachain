@@ -41,11 +41,14 @@ NU   = 0.3      # slab Poisson's ratio
 # Layered-slab aggregation of sigma_t / E (arrest_indices.aggregate_slab).
 # Faceted snow is ~half as strong in tension as rounded snow at equal density
 # (Jamieson & Johnston 1990): sigma_t,i = sigma_t,RG(rho_i) (1 - a f_i).
-# FACET_SOURCE = 'grain_class' (Ron, 2026-10-27) sets f = 1 for FC/DH/FCxr
-# and 0 otherwise, as J&J grouped their layers. 'sphericity' is the earlier
-# continuous f = 1 - sphericity, which under-counts FCxr: over the Jan 18
-# start-zone slabs it gave f 0.35 inside the release / 0.52 outside, against
-# 0.50 / 1.00 by grain class. FACET_SP_REF applies to 'sphericity' only
+# FACET_SOURCE = 'grain_class' (Ron, 2026-10-27) sets f = 1 for J&J's group
+# II: primary FC/DH/FCxr, or a PP/DF/RG primary with a faceted secondary
+# (e.g. 341, "both faceting and rounding"), and 0 otherwise. Code 341 is 24%
+# of Jan 18 slab thickness inside the release, 12% outside.
+# 'grain_class_primary' ignores the secondary form (163ea0f). 'sphericity' is
+# the earlier continuous f = 1 - sphericity, which under-counts FCxr: over the
+# Jan 18 start-zone slabs it gave f 0.35 inside the release / 0.52 outside,
+# against 0.50 / 1.00 by primary class. FACET_SP_REF applies to 'sphericity' only
 # (None = 1 - sphericity outright; rounded layers at ~0.86 keep f ~0.14).
 # The legacy Eq. 20 arrest reads the plain sigma_t column, which has no
 # knockdown, so this moves sigma_t_mean/_wl/_ligament (and A_ca_* built on
