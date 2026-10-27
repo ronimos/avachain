@@ -358,8 +358,12 @@ def _scour_depth_for_cluster(ds_t, slab_thick_m):
     if 'hand_hardness' not in ds_t:
         return None, None, None
 
-    hh    = ds_t['hand_hardness'].values.ravel()
-    hs_cm = float(np.nanmean(ds_t['HS'].values))
+    hh   = ds_t['hand_hardness'].values.ravel()
+    # HS and element heights are metres in the Zarr store (xsnow units 'm').
+    # This used to treat them as cm: with a slab the failure plane landed at
+    # HS - 100 h, below ground, so every scour depth came out 0; without one
+    # it was 100x too small (cluster 1772, Jan 18: 0.019 m for 1.9 m).
+    hs_m = float(np.nanmean(ds_t['HS'].values))
 
     z_var = next((v for v in ('height', 'z', 'layer_height') if v in ds_t), None)
     if z_var is None:
@@ -371,20 +375,20 @@ def _scour_depth_for_cluster(ds_t, slab_thick_m):
     z        = z[:n_layers]
     has_hh   = ~np.isnan(hh) & (hh < 0)
 
-    # Failure plane: bottom at fp_height_cm, midpoint at fp_mid_cm
+    # Failure plane: bottom at fp_height_m, midpoint at fp_mid_m
     if slab_thick_m is not None and not np.isnan(slab_thick_m) and slab_thick_m > 0:
-        fp_height_cm = hs_cm - slab_thick_m * 100.0
-        fp_mid_cm    = hs_cm - slab_thick_m * 50.0
+        fp_height_m = hs_m - slab_thick_m
+        fp_mid_m    = hs_m - slab_thick_m / 2.0
         # Layer index at the failure plane (layers are bottom-to-top)
         fp_layer_idx = 0
         for li in range(n_layers - 1, -1, -1):
-            if z[li] <= fp_height_cm:
+            if z[li] <= fp_height_m:
                 fp_layer_idx = li
                 break
     else:
         # No failure plane — scan from surface (full entrainable depth)
-        fp_height_cm = hs_cm
-        fp_mid_cm    = hs_cm
+        fp_height_m  = hs_m
+        fp_mid_m     = hs_m
         fp_layer_idx = n_layers - 1
 
     # Scan downward from failure plane for first hard layer (harder than 1F → hh < -3)
@@ -396,13 +400,13 @@ def _scour_depth_for_cluster(ds_t, slab_thick_m):
 
     if hard_layer_idx is not None:
         hard_z         = float(z[hard_layer_idx])
-        hh_depth_m     = max((fp_height_cm - hard_z) / 100.0, 0.0)
-        hh_depth_mid_m = max((fp_mid_cm    - hard_z) / 100.0, 0.0)
+        hh_depth_m     = max(fp_height_m - hard_z, 0.0)
+        hh_depth_mid_m = max(fp_mid_m    - hard_z, 0.0)
         hh_value       = float(hh[hard_layer_idx])
     else:
         # No hard layer — entrainable to ground
-        hh_depth_m     = max(fp_height_cm / 100.0, 0.0)
-        hh_depth_mid_m = max(fp_mid_cm    / 100.0, 0.0)
+        hh_depth_m     = max(fp_height_m, 0.0)
+        hh_depth_mid_m = max(fp_mid_m,    0.0)
         hh_value       = None
 
     return hh_depth_m, hh_depth_mid_m, hh_value
@@ -876,9 +880,9 @@ def step_scenarios(cfg, args):
                     _scour_depth_for_cluster(ds_t, slab_thick_m)
 
                 if hh_depth_m is not None:
-                    hs_cm = float(np.nanmean(ds_t['HS'].values))
+                    hs_m = float(np.nanmean(ds_t['HS'].values))
                     print(f"    scour_depth trigger cid={t_cid}: "
-                          f"HS={hs_cm:.1f}cm  "
+                          f"HS={hs_m:.2f}m  "
                           f"slab={slab_thick_m:.2f}m  "
                           f"scour={hh_depth_m:.2f}m  "
                           f"HH={hh_value}")
