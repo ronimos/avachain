@@ -298,3 +298,59 @@ class TestStepReinitMultiEvent:
 
         _, kwargs = mock_single.call_args
         assert kwargs["release_geojson"] is None
+
+
+# ---------------------------------------------------------------------------
+# classify_period — the known-events label must hold
+# ---------------------------------------------------------------------------
+
+class TestClassifyPeriod:
+    """step_avalanche used to turn every known period into 'avalanche' and
+    ignore its label; auto-detected periods are appended to the known file, so
+    all 22 Little Professor periods became avalanches with a reinit."""
+
+    def setup_method(self):
+        from forcing_pipeline import classify_period
+        self.cp = classify_period
+
+    def test_known_wind_scour_with_crown_is_not_an_avalanche(self):
+        assert self.cp(True, True, 'wind_scour') == ('wind_scour', False, False)
+
+    def test_known_avalanche_with_crown(self):
+        assert self.cp(True, True, 'avalanche') == ('avalanche', True, True)
+
+    def test_known_without_label_stays_an_avalanche(self):
+        assert self.cp(True, True, None) == ('avalanche', True, True)
+
+    def test_unknown_unchanged_crown_wins_and_reinits(self):
+        assert self.cp(True, False, None, caic_hit=False) == ('wind_scour', True, True)
+        assert self.cp(False, False, None, caic_hit=True) == ('avalanche', False, True)
+
+
+class TestAvalancheCorrectionPath:
+    """gap_fill applied avalanche_dhs / transport_corrected whenever the file
+    existed, so a period relabelled no-avalanche kept its correction."""
+
+    def _cfg(self, tmp_path, meta):
+        import json
+        from types import SimpleNamespace
+        (tmp_path / "avalanche_dhs_a__b.npy").write_bytes(b"")
+        if meta is not None:
+            (tmp_path / "avalanche_events.json").write_text(json.dumps(meta))
+        return SimpleNamespace(analysis_dir=tmp_path)
+
+    def test_relabelled_period_is_not_applied(self, tmp_path):
+        from forcing_pipeline import avalanche_correction_path
+        cfg = self._cfg(tmp_path, {"a__b": {"transport_corrected": False}})
+        assert avalanche_correction_path(cfg, "a__b", "avalanche_dhs") is None
+
+    def test_corrected_period_is_applied(self, tmp_path):
+        from forcing_pipeline import avalanche_correction_path
+        cfg = self._cfg(tmp_path, {"a__b": {"transport_corrected": True}})
+        assert avalanche_correction_path(cfg, "a__b", "avalanche_dhs") == tmp_path / "avalanche_dhs_a__b.npy"
+
+    def test_no_events_file_falls_back_to_existence(self, tmp_path):
+        from forcing_pipeline import avalanche_correction_path
+        cfg = self._cfg(tmp_path, None)
+        assert avalanche_correction_path(cfg, "a__b", "avalanche_dhs") is not None
+        assert avalanche_correction_path(cfg, "a__b", "transport_corrected") is None

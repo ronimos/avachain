@@ -526,6 +526,48 @@ def step_validate(cfg: ProjectConfig):
 # Step 5: Avalanche detection and correction
 # =====================================================================
 
+def avalanche_correction_path(cfg, pair_id: str, kind: str):
+    """<kind>_<pair_id>.npy ('transport_corrected' or 'avalanche_dhs') if the
+    avalanche step marked the period transport_corrected, else None.
+
+    gap_fill used to apply these whenever the file existed. A period
+    reclassified as no avalanche keeps its old arrays, so all 22 Little
+    Professor periods were applied after Ron confirmed one avalanche. With
+    no avalanche_events.json the file's existence still decides.
+    """
+    path = cfg.analysis_dir / f"{kind}_{pair_id}.npy"
+    if not path.exists():
+        return None
+    meta_path = cfg.analysis_dir / "avalanche_events.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text()).get(pair_id, {})
+        if not meta.get("transport_corrected", False):
+            return None
+    return path
+
+
+def classify_period(has_crown: bool, is_known: bool,
+                    known_label: str | None = None, caic_hit: bool = False):
+    """(label, avalanche_path, reinit_needed) for one survey period.
+
+    A known period keeps the label in the known-events file; one without a
+    label is an avalanche, as every known period used to be. Before
+    2026-10-27 the label was ignored: every known period became 'avalanche',
+    and auto-detected periods are appended to that file, so on Little
+    Professor all 22 periods came out 'avalanche' with a reinit (Ron: the
+    only avalanche of the season is 2026-01-18). A known non-avalanche is
+    neither transport-corrected nor reinitialised, crown or not. Unknown
+    periods are unchanged: a crown takes the avalanche path whatever CAIC
+    says, and every candidate gets a reinit.
+    """
+    if is_known:
+        label = known_label or 'avalanche'
+    else:
+        label = 'avalanche' if caic_hit else 'wind_scour'
+    manual_non_event = is_known and label != 'avalanche'
+    return label, has_crown and not manual_non_event, not manual_non_event
+
+
 def step_avalanche(cfg: ProjectConfig):
     """
     Classify inter-survey periods and correct transport fields.
@@ -655,11 +697,9 @@ def step_avalanche(cfg: ProjectConfig):
                   f"frac_loss={frac_loss:.2f}")
             continue
 
-        # --- Determine label via CAIC lookup ---
-        if is_known:
-            label = 'avalanche'
-            period_caic = []
-        else:
+        # --- Determine label: known label, else CAIC lookup ---
+        period_caic = []
+        if not is_known:
             t_lo = _dt.strptime(d_a, '%Y-%m-%d') - _td(days=cfg.caic_obs_window_days)
             t_hi = _dt.strptime(d_b, '%Y-%m-%d') + _td(days=cfg.caic_obs_window_days)
             period_caic = [
@@ -667,7 +707,10 @@ def step_avalanche(cfg: ProjectConfig):
                 if o.get('date_parsed') and
                 t_lo <= o['date_parsed'].replace(tzinfo=None) <= t_hi
             ]
-            label = 'avalanche' if period_caic else 'wind_scour'
+        known_label = (next(ev for ev in known_events if ev.get('period') == pair_id)
+                       .get('label') if is_known else None)
+        label, avalanche_path, reinit_needed = classify_period(
+            has_crown, is_known, known_label, bool(period_caic))
 
         override_note = " *** CROWN OVERRIDE (widespread) ***" if crown_override else ""
         known_note    = " *** KNOWN ***" if is_known else ""
@@ -695,8 +738,8 @@ def step_avalanche(cfg: ProjectConfig):
         event_date_str = (pd.Timestamp(event_ts).strftime('%Y%m%d')
                          if event_ts else d_b.replace('-', ''))
 
-        # === AVALANCHE path (crown detected) ===
-        if has_crown:
+        # === AVALANCHE path (crown detected, not labelled otherwise) ===
+        if avalanche_path:
             combined_mask = np.zeros(dem.shape, dtype=bool)
             for r in regions:
                 combined_mask |= r['mask']
@@ -725,7 +768,7 @@ def step_avalanche(cfg: ProjectConfig):
             }
             event_mask = combined_mask
 
-        # === WIND SCOUR path (no crown, localized loss) ===
+        # === WIND SCOUR path (no crown, or a known non-avalanche) ===
         else:
             event_mask = (dhs < -cfg.min_scour_depth_m) & valid_sz
             corrected_periods[pair_id] = {
@@ -734,9 +777,9 @@ def step_avalanche(cfg: ProjectConfig):
                 'total_volume_m3':     float(np.nansum(dhs[event_mask])),
                 'corrected':           False,
                 'transport_corrected': False,
-                'reinit_needed':       True,
+                'reinit_needed':       reinit_needed,
                 'event_timestamp':     event_ts,
-                'label':               'wind_scour',
+                'label':               label if is_known else 'wind_scour',
                 'frac_loss':           round(frac_loss, 3),
             }
             print(f"    → Loss mask: {event_mask.sum()} cells  [no transport correction]")
@@ -940,9 +983,9 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
             wn_ang = np.load(str(wn_ang_path))
             transport = predict_transport_wn(model, terrain, wn_vel, wn_ang, valid)
         else:
-            corrected_path = cfg.analysis_dir / f"transport_corrected_{pair_id}.npy"
+            corrected_path = avalanche_correction_path(cfg, pair_id, "transport_corrected")
             smooth_path = cfg.analysis_dir / f"transport_smooth_{pair_id}.npy"
-            if corrected_path.exists():
+            if corrected_path is not None:
                 transport = np.load(str(corrected_path))
                 print(f"  Using avalanche-corrected transport")
             else:
@@ -982,8 +1025,8 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
         else:
             grids = gap_fill_period(hs_a, transport, stn_hs, wind_speed, valid)
 
-        avy_path = cfg.analysis_dir / f"avalanche_dhs_{pair_id}.npy"
-        if avy_path.exists():
+        avy_path = avalanche_correction_path(cfg, pair_id, "avalanche_dhs")
+        if avy_path is not None:
             from avalanche import apply_avalanche_event
             avy_dhs = np.where(inv_a | inv_b, 0.0, np.load(str(avy_path)))
             event_ts = t0 + (t1 - t0) / 2

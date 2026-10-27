@@ -6,7 +6,8 @@
     "trigger": null,
     "source": "CAIC API",
     "n_observations": 1,
-    "notes": "Auto-fetched from CAIC API. 1 observation(s) in this period. Location accuracy approximate."
+    "notes": "Auto-fetched from CAIC API. 1 observation(s) in this period. Location accuracy approximate. Ron 2026-10-27: the only avalanche of the season is 2026-01-18.",
+    "label": "no_avalanche"
   },
   {
     "period": "2026-01-06__2026-01-14",
@@ -15,7 +16,8 @@
     "trigger": null,
     "source": "CAIC API",
     "n_observations": 1,
-    "notes": "Auto-fetched from CAIC API. 1 observation(s) in this period. Location accuracy approximate."
+    "notes": "Auto-fetched from CAIC API. 1 observation(s) in this period. Location accuracy approximate. Ron 2026-10-27: the only avalanche of the season is 2026-01-18.",
+    "label": "no_avalanche"
   },
   {
     "period": "2026-01-14__2026-01-20",
@@ -24,7 +26,8 @@
     "trigger": null,
     "source": "CAIC API",
     "n_observations": 1,
-    "notes": "Auto-fetched from CAIC API. 1 observation(s) in this period. Location accuracy approximate."
+    "notes": "Auto-fetched from CAIC API. 1 observation(s) in this period. Location accuracy approximate. Ron 2026-10-27: the only avalanche of the season is 2026-01-18. Confirmed.",
+    "label": "avalanche"
   },
   {
     "period": "2025-11-26__2025-11-29",
@@ -40,13 +43,13 @@
   {
     "period": "2025-11-29__2025-12-04",
     "timestamp": "2025-12-01T12:00:00Z",
-    "label": "avalanche",
+    "label": "no_avalanche",
     "size": "unknown",
     "trigger": "natural",
     "source": "auto_detect + CAIC API",
     "frac_loss": 0.146,
     "n_regions": 21,
-    "notes": "Auto-detected. frac_loss=0.15"
+    "notes": "Auto-detected. frac_loss=0.15 Ron 2026-10-27: the only avalanche of the season is 2026-01-18."
   },
   {
     "period": "2025-12-12__2025-12-23",
@@ -84,13 +87,13 @@
   {
     "period": "2026-01-20__2026-01-27",
     "timestamp": "2026-01-23T12:00:00Z",
-    "label": "avalanche",
+    "label": "no_avalanche",
     "size": "unknown",
     "trigger": "natural",
     "source": "auto_detect + CAIC API",
     "frac_loss": 0.009,
     "n_regions": 16,
-    "notes": "Auto-detected. frac_loss=0.01"
+    "notes": "Auto-detected. frac_loss=0.01 Ron 2026-10-27: the only avalanche of the season is 2026-01-18."
   },
   {
     "period": "2026-01-27__2026-02-05",
