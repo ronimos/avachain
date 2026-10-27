@@ -176,7 +176,7 @@ if [[ $REINIT -eq 1 ]]; then
     PASS1_END_TIME="18:00:00"
     echo ""
     echo "    Pass 1: Season start → ${EVENT_DATE}T${PASS1_END_TIME:0:5}"
-    bash "$SLOPE_SCRIPTS/run_snowpack.sh" "" "${EVENT_DATE}T${PASS1_END_TIME:0:5}"
+    SKIP_ZARR=1 bash "$SLOPE_SCRIPTS/run_snowpack.sh" "" "${EVENT_DATE}T${PASS1_END_TIME:0:5}"
 
     echo ""
     echo "    Analyzing snowpack at $REINIT_SNAPSHOT for slab thickness..."
@@ -207,12 +207,22 @@ if [[ $REINIT -eq 1 ]]; then
     echo "    Pass 2: $EVENT_DATE → end of season (all clusters, from their restarts)"
     REINIT_STATS="$OUT_DIR/analysis/reinit_stats_${EVENT_DATE}.json"
     [[ -f "$REINIT_STATS" ]] || echo "    WARNING: reinit stats not found at $REINIT_STATS"
-    bash "$SLOPE_SCRIPTS/run_snowpack.sh"
+    SKIP_ZARR=1 bash "$SLOPE_SCRIPTS/run_snowpack.sh"
 else
     # --- Single-pass SNOWPACK ---
     echo ""
-    bash "$SLOPE_SCRIPTS/run_snowpack.sh"
+    SKIP_ZARR=1 bash "$SLOPE_SCRIPTS/run_snowpack.sh"
 fi
+
+# One Zarr build, from the finished .pro files, with --rebuild. run_snowpack's
+# own build resumes into an existing store and skips every location already
+# there: pass 1 wrote all 6565 to the event date, so pass 2 "SKIP"ped all 66
+# batches and the store ended at the event date (2026-10-23 rebuild). Without
+# --clean the same happens to a single pass over an old store.
+echo ""
+echo "    Zarr: rebuilding from the .pro files"
+python "$PROJECT_DIR/src/avachain/build_zarr_chunked.py" --rebuild \
+    --pro-dir "$SLOPE_DIR/output" --zarr-out "$SLOPE_DIR/output/slope_snowpack.zarr"
 
 phase2_elapsed=$((SECONDS - phase2_start))
 echo ""
