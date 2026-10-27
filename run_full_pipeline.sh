@@ -168,9 +168,15 @@ if [[ $REINIT -eq 1 ]]; then
                           python3 -c "from datetime import datetime, timedelta; print((datetime.strptime('$EVENT_DATE','%Y-%m-%d')-timedelta(1)).strftime('%Y-%m-%d'))")
     fi
 
+    # Pass 1 ends where the reinit stamps the scoured .sno, so pass 2 restarts
+    # scoured clusters at the time their state belongs to. With pass 1 at
+    # 18:00 and the reinit default 12:00, the 420 scoured clusters of the
+    # 2026-10-23 rebuild went back 6 h and their 12:00 profile came out
+    # post-scour. reinitialize_snowpack now refuses a mismatch.
+    PASS1_END_TIME="18:00:00"
     echo ""
-    echo "    Pass 1: Season start → ${EVENT_DATE}T18:00"
-    bash "$SLOPE_SCRIPTS/run_snowpack.sh" "" "${EVENT_DATE}T18:00"
+    echo "    Pass 1: Season start → ${EVENT_DATE}T${PASS1_END_TIME:0:5}"
+    bash "$SLOPE_SCRIPTS/run_snowpack.sh" "" "${EVENT_DATE}T${PASS1_END_TIME:0:5}"
 
     echo ""
     echo "    Analyzing snowpack at $REINIT_SNAPSHOT for slab thickness..."
@@ -180,7 +186,7 @@ if [[ $REINIT -eq 1 ]]; then
     echo "    Reinit: scouring release clusters for $EVENT_DATE event"
 
     REINIT_CMD="$PIPELINE reinit"
-    REINIT_CMD="$REINIT_CMD --event-date $EVENT_DATE"
+    REINIT_CMD="$REINIT_CMD --event-date $EVENT_DATE --event-time $PASS1_END_TIME"
     REINIT_CMD="$REINIT_CMD --date-before $DATE_BEFORE"
     REINIT_CMD="$REINIT_CMD --date-after $DATE_AFTER"
     REINIT_CMD="$REINIT_CMD --snapshot-date $REINIT_SNAPSHOT"

@@ -110,6 +110,26 @@ def write_sno(sno_data: dict, path: str) -> None:
             f.write('     '.join(vals) + '\n')
 
 
+def profile_date_mismatches(sno_paths, event_ts: str) -> list:
+    """(path, ProfileDate) for every .sno not dated event_ts.
+
+    scour_sno stamps the scoured file with event_ts, and SNOWPACK restarts at
+    that stamp, so a .sno simulated to a different time gets moved in time.
+    run_full_pipeline.sh ran pass 1 to 18:00 and reinit at the 12:00 default:
+    every scoured cluster went back 6 h with its 18:00 state, and its 12:00
+    profile was rewritten post-scour.
+    """
+    want = pd.Timestamp(event_ts)
+    bad = []
+    for p in sno_paths:
+        with open(p) as f:
+            pdate = next((ln.split('=', 1)[1].strip() for ln in f
+                          if ln.startswith('ProfileDate')), None)
+        if pdate is None or pd.Timestamp(pdate) != want:
+            bad.append((p, pdate))
+    return bad
+
+
 def scour_sno(sno_data: dict,
               scour_depth_m: float,
               event_timestamp: str) -> dict:
@@ -724,22 +744,26 @@ def run_reinit(cfg,
     n_skipped = 0
     stats = []
 
+    found = []
     for cid in sorted(release_cids):
-        sno_name = f"cluster_{cid:04d}_res.sno"
-        sno_path = sno_dir / sno_name
-
-        if not sno_path.exists():
-            sno_name = f"cluster_{cid:04d}_cluster_{cid:04d}_res.sno"
-            sno_path = sno_dir / sno_name
-
-        if not sno_path.exists():
-            sno_name = f"cluster_{cid:04d}_cluster_{cid:04d}.sno"
-            sno_path = sno_dir / sno_name
-
-        if not sno_path.exists():
+        for sno_name in (f"cluster_{cid:04d}_res.sno",
+                         f"cluster_{cid:04d}_cluster_{cid:04d}_res.sno",
+                         f"cluster_{cid:04d}_cluster_{cid:04d}.sno"):
+            if (sno_dir / sno_name).exists():
+                found.append((cid, sno_name, sno_dir / sno_name))
+                break
+        else:
             n_missing += 1
-            continue
 
+    # Before writing anything, so a ragged set is not left half scoured.
+    bad = profile_date_mismatches([p for _, _, p in found], event_ts)
+    if bad:
+        raise ValueError(
+            f"{len(bad)} of {len(found)} .sno file(s) are not at the event time "
+            f"{event_ts} (e.g. {bad[0][0].name}: ProfileDate {bad[0][1]}); run "
+            f"SNOWPACK to the event time first, or pass the matching --event-time")
+
+    for cid, sno_name, sno_path in found:
         sno_data = read_sno(str(sno_path))
         survey_hs = post_survey_hs.get(cid) if clean_window else None
         plan = scour_cluster(sno_data, event_ts, survey_hs,

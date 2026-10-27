@@ -18,7 +18,8 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "avachain"))
 
-from reinitialize_snowpack import read_sno, scour_sno, write_sno, sanitize_sno_dir
+from reinitialize_snowpack import (read_sno, scour_sno, write_sno, sanitize_sno_dir,
+                                   profile_date_mismatches)
 
 
 # ---------------------------------------------------------------------------
@@ -319,3 +320,25 @@ class TestSanitizeSnoDir:
         sanitize_sno_dir(tmp_path)
         data = read_sno(str(tmp_path / "cluster_0001_cluster_0001.sno"))
         assert float(data["header"]["HS_Last"]) == pytest.approx(0.5, abs=1e-5)
+
+
+class TestProfileDateMismatches:
+    """The scoured .sno is stamped with the event time and SNOWPACK restarts
+    there, so the input must already be at that time. Pass 1 at 18:00 with the
+    12:00 default rewound every scoured cluster by 6 h."""
+
+    _LAYERS = [{"Layer_Thick": "0.5"}]
+
+    def test_same_instant_in_another_format_passes(self, tmp_path):
+        p = _make_sno(tmp_path, self._LAYERS)                 # 2020-01-15T12:00
+        assert profile_date_mismatches([p], "2020-01-15T12:00:00") == []
+
+    def test_pass1_end_after_event_time_is_reported(self, tmp_path):
+        p = _make_sno(tmp_path, self._LAYERS)
+        bad = profile_date_mismatches([p], "2020-01-15T06:00:00")
+        assert bad == [(p, "2020-01-15T12:00")]
+
+    def test_missing_profile_date_is_reported(self, tmp_path):
+        p = tmp_path / "x.sno"
+        p.write_text("SMET 1.1 ASCII\n[HEADER]\n[DATA]\n")
+        assert profile_date_mismatches([p], "2020-01-15T12:00:00") == [(p, None)]
