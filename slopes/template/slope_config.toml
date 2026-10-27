@@ -78,7 +78,7 @@ sql_columns = ["pcpac", "depth", "snow24h"]
 n_triggers         = 5
 size_factors       = [0.70, 0.85, 1.00, 1.15, 1.30]
 depth_percentiles  = [10, 50, 90]
-stauchwall_deg     = 28.0
+stauchwall_deg     = 29.0
 
 # ---------------------------------------------------------------------------
 # [wrf] — WRF forecast forcing

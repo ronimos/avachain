@@ -7,7 +7,7 @@ Provides:
     project_along_aspect()     Project a UTM point distance along slope aspect
     make_release_polygon_2d()  Full 2D release polygon from four constraints:
                                  1. Meloche A_ca (upslope)
-                                 2. ~28° slope threshold (downslope / stauchwall)
+                                 2. ~29° slope threshold (downslope / stauchwall)
                                  3. θ cross-slope gradient (flanks)
                                  4. Start zone KML (hard lateral boundary)
     rasterize_release_polygon() Burn polygon to a depth raster on the DEM grid
@@ -38,7 +38,7 @@ from pyproj import Transformer
 import arrest_indices as _ai
 
 # Default physical parameters
-STAUCHWALL_DEG   = 28.0   # slope threshold for downslope arrest (degrees)
+STAUCHWALL_DEG   = 29.0   # slope threshold for downslope arrest (degrees); Ron 2026-10-27, was 28.0
 FRICTION_DEG     = 27.0   # snow friction angle (degrees), Meloche Table 1
 GAUME_ASPECT_CAP = 2.5    # max width/A_ca ratio (prevents runaway cross-slope)
 MIN_POLYGON_AREA = 200.0  # m² — discard degenerate polygons smaller than this
@@ -645,7 +645,7 @@ def make_release_polygon_2d(
     Primary method (use_propagation=True):
         BFS cluster flood-fill with per-direction arrest criteria:
           - Upslope:   Meloche brittle Π₁ at candidate < Π₁ at trigger
-          - Downslope: slope < stauchwall_deg (~28°)
+          - Downslope: slope < stauchwall_deg (~29°)
           - Lateral:   distance > d_lat — the Gaume θ-ratio cross-slope width
                        (floor 15 m), additionally capped by the mode III crack
                        speed when USE_MODE3_SPEED_CAP is on (currently off)

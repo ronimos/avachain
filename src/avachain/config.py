@@ -86,7 +86,7 @@ class ProjectConfig:
     depth_scales: dict = field(default_factory=lambda: {10: 0.75, 50: 1.00, 90: 1.30})
     mu: float = 0.155           # Voellmy dry friction (uncalibrated default)
     xi: float = 1500.0          # Voellmy turbulent friction m/s² (uncalibrated default)
-    stauchwall_deg: float = 28.0
+    stauchwall_deg: float = 29.0   # Ron, 2026-10-27 (was 28.0)
 
     # --- Survey file pattern ---
     # Expected format: YYMMDD_*_snowHeight.tif
@@ -366,7 +366,7 @@ class ProjectConfig:
             max_bfs_clusters=int(scenarios.get("max_bfs_clusters", 2000)),
             size_factors=list(scenarios.get("size_factors", [0.70, 0.85, 1.00, 1.15, 1.30])),
             depth_percentiles=list(scenarios.get("depth_percentiles", [10, 50, 90])),
-            stauchwall_deg=float(scenarios.get("stauchwall_deg", 28.0)),
+            stauchwall_deg=float(scenarios.get("stauchwall_deg", 29.0)),
             stations=data.get("stations", []),
             wrf_smet_file=Path(wrf["wrf_smet_file"]) if wrf.get("wrf_smet_file") else None,
             wrf_smet_dir= Path(wrf["wrf_smet_dir"])  if wrf.get("wrf_smet_dir")  else None,

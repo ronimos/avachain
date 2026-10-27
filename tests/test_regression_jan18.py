@@ -4,6 +4,12 @@ Reference generated 2026-10-25 on the frozen fixture (tests/jan18_fixture.py)
 against the 6 934 m2 observed crown. The areas equal the 2026-10-23 rebuild's
 scenarios for the same triggers (code at 2f79a8e), so the energy-mode port left
 the legacy path unchanged. Triggers are the top three of that rebuild.
+
+Re-pinned 2026-10-27 for STAUCHWALL_DEG 28 -> 29 (Ron). At 28 the polygons
+still reproduce the old references exactly (1772 11309 m2, 1998 10954,
+4300 10458), so the angle is the only change. All three are walled in by a
+neighbouring cluster whose mean slope is 28-29 deg, the per-cluster downslope
+arrest; they are not the current operational triggers.
 """
 import pytest
 
@@ -13,9 +19,9 @@ import release_geometry as rg
 
 # trigger_cluster -> (release_area_m2, iou)
 REFERENCE = {
-    1772: (11309.0, 0.37951249290593514),
-    1998: (10954.0, 0.2559321379801468),     # BFS returns None; rectangle fallback
-    4300: (10458.0, 0.35233404708842153),
+    1772: (615.0, 0.05109608184675175),
+    1998: (1370.0, 0.02304515046757521),
+    4300: (1570.0, 0.09157456180556534),
 }
 
 

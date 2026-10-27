@@ -210,7 +210,7 @@ Two complementary models generate release area polygons:
 **Physics-based BFS model** — deterministic flood-fill from a trigger cluster through
 the k=8 cluster neighbour graph. Arrest criteria: slab thickness discontinuity
 (THICKNESS_JUMP_FACTOR=0.25), elastic length discontinuity (LAMBDA_JUMP_FACTOR=0.5),
-stauchwall (slope < 28°), τ_g < 50 Pa, start zone boundary. Calibrated on 75% of
+stauchwall (slope < 29°), τ_g < 50 Pa, start zone boundary. Calibrated on 75% of
 the Jan 18 release boundary, verified on 25%.
 
 **Probabilistic boundary model** — logistic regression trained on labeled cluster-pair
