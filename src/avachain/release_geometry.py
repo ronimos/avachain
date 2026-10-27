@@ -54,7 +54,8 @@ USE_MELOCHE_ARREST = True
 MELOCHE_DELTA      = 1.0   # softening coefficient δ (Meloche default; their Table 1)
 NU                 = 0.3   # slab Poisson's ratio
 
-# Slab tensile-failure gate (Ron, 2026-10-26; OFF by default). Arrest a
+# Slab tensile-failure gate (Ron, 2026-10-26; ON by default since 2026-10-27,
+# Ron, both repos; CLI --no-slab-tensile-gate turns it off). Arrest a
 # candidate whose slab would break in tension before its weak-layer crack
 # reaches critical length: S_t = sigma_t / (3 rho g r_c^2 / h) < 1, Schweizer et
 # al. (2014), via arrest_indices.slab_tensile_support. Per-cluster, like gates
@@ -62,7 +63,11 @@ NU                 = 0.3   # slab Poisson's ratio
 # facet knockdown (FACET_STRENGTH_FACTOR; f by grain class since 2026-10-27,
 # snowpack_analysis.FACET_SOURCE), the strength relation the 2014 paper uses; faceted slabs are ~half as strong at equal density, which is the
 # RG-inside / FC-outside contrast at Jan 18. The threshold is 1, not a fit.
-USE_SLAB_TENSILE_GATE = False
+# Why on: S_t beat every random-arrest control of the same count, and with
+# grain-class sigma_t it costs no trigger it lets through. Against: where
+# S_t = 1 falls depends on how r_c is scaled. A features CSV without
+# SLAB_TENSILE_SIGMA_COL makes it a no-op; step_scenarios warns.
+USE_SLAB_TENSILE_GATE = True
 SLAB_TENSILE_SIGMA_COL = 'sigma_t_mean__jamieson1990'
 
 

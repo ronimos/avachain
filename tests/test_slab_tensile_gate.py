@@ -41,10 +41,20 @@ class TestFormula:
         assert ai.slab_tensile_support(2000.0, 330.0, 1.0, 0.4) == pytest.approx(base / 2)
 
 
-def test_off_by_default():
+def test_on_by_default():
     import re
     src = Path(rg.__file__).read_text()
-    assert re.search(r'^USE_SLAB_TENSILE_GATE\s*=\s*False\b', src, re.M)
+    assert re.search(r'^USE_SLAB_TENSILE_GATE\s*=\s*True\b', src, re.M)
+
+
+def test_cli_leaves_default_or_overrides_it():
+    # store_true OR'd with the module flag could not turn an on-by-default
+    # gate off; None now means "keep release_geometry's default".
+    import analysis_pipeline as ap
+    p = ap.build_parser()
+    assert p.parse_args(['scenarios']).slab_tensile_gate is None
+    assert p.parse_args(['scenarios', '--no-slab-tensile-gate']).slab_tensile_gate is False
+    assert p.parse_args(['scenarios', '--slab-tensile-gate']).slab_tensile_gate is True
 
 
 @pytest.fixture

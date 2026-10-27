@@ -543,8 +543,8 @@ def step_scenarios(cfg, args):
     _rg.ARREST_MODE  = getattr(args, 'arrest_mode', _rg.ARREST_MODE)
     _rg.MASK_MODE    = getattr(args, 'mask_mode', _rg.MASK_MODE)
     _ep.ENERGY_DELTA = getattr(args, 'energy_delta', _ep.ENERGY_DELTA)
-    _rg.USE_SLAB_TENSILE_GATE = (getattr(args, 'slab_tensile_gate', False)
-                                 or _rg.USE_SLAB_TENSILE_GATE)
+    if getattr(args, 'slab_tensile_gate', None) is not None:
+        _rg.USE_SLAB_TENSILE_GATE = args.slab_tensile_gate
     if _rg.USE_SLAB_TENSILE_GATE:
         print(f"  slab tensile-failure gate ON ({_rg.SLAB_TENSILE_SIGMA_COL})")
     if _rg.ARREST_MODE != 'legacy' or _rg.MASK_MODE != 'gate':
@@ -664,6 +664,11 @@ def step_scenarios(cfg, args):
             f"{len(candidate_ids)}")
     # Slab tensile gate on the trigger: rank only triggers whose slab can carry
     # a crack to r_c, so the ranking still yields n_triggers releases.
+    if (_rg.USE_SLAB_TENSILE_GATE and _rg.ARREST_MODE == 'legacy'
+            and _rg.SLAB_TENSILE_SIGMA_COL not in snap_features.columns):
+        print(f"  WARNING: slab tensile gate is on but the features have no "
+              f"'{_rg.SLAB_TENSILE_SIGMA_COL}' column, so it never fires; "
+              f"re-run analyze")
     if _rg.USE_SLAB_TENSILE_GATE and _rg.ARREST_MODE == 'legacy':
         candidate_ids = [
             cid for cid in candidate_ids
@@ -1083,7 +1088,7 @@ def step_scenarios(cfg, args):
 # CLI
 # ---------------------------------------------------------------------------
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(
         description="Post-SNOWPACK analysis pipeline (Pipeline B)")
     parser.add_argument('step',
@@ -1171,15 +1176,19 @@ def main():
     parser.add_argument('--mask-mode', default=_rg.MASK_MODE, choices=('gate', 'diagnostic'),
                         help=f"Start-zone KML use (default: {_rg.MASK_MODE}). 'diagnostic' "
                              "runs the BFS without it and adds frac_outside_mask to summary.csv.")
-    parser.add_argument('--slab-tensile-gate', action='store_true',
+    parser.add_argument('--slab-tensile-gate', action=argparse.BooleanOptionalAction,
+                        default=None,
                         help='legacy mode: also arrest where the slab breaks in tension '
                              'before the crack reaches r_c (Schweizer et al. 2014; '
-                             'release_geometry.USE_SLAB_TENSILE_GATE, default off).')
+                             'default: release_geometry.USE_SLAB_TENSILE_GATE, on).')
     parser.add_argument('--energy-delta', type=float, default=_ep.ENERGY_DELTA,
                         help=f"delta in the energy-mode G_c (default: {_ep.ENERGY_DELTA}; "
                              "R was fitted at 0). The Eq. 20 delta is unchanged.")
+    return parser
 
-    args = parser.parse_args()
+
+def main():
+    args = build_parser().parse_args()
     args.snapshot_date = resolve_snapshot_date(args.snapshot_date)
     if args.toml:
         cfg = ProjectConfig.from_toml(args.toml)
