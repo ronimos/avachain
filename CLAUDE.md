@@ -83,7 +83,7 @@ checking these leads to wrong conclusions about what produced a polygon.
 | Flag | Default | Effect when off |
 |---|---|---|
 | `USE_MELOCHE_ARREST` | `True` (since 2026-10-23, both repos; standalone `config.USE_MELOCHE_ARREST`, 31e5192) | `_qualifies` stops at the directional Meloche A_ca test (Eq. 20 via `arrest_indices.arrest_length`, with C = 0.045); the Λ/thickness discontinuity heuristics are then **skipped**, not run alongside. `TAU_G_ABS_FLOOR`, thin slab, low Λ and the distance caps still apply. It fires rarely (6 of ~1200 clusters for trigger 1772) and areas grow ~5-20% against the heuristics. |
-| `USE_SLAB_TENSILE_GATE` | `False` | No slab-tensile check. When on (CLI `--slab-tensile-gate`, both repos), a candidate is arrested when S_t = σ_t / (3ρg·r_c²/h) < 1 (Schweizer et al. 2014 ISSW Eq. 1, the closed form, not Reuter & Schweizer 2018's FE index). σ_t is `sigma_t_mean__jamieson1990` (J&J 1990 with the facet knockdown); a missing column means the gate never fires, so regenerate the standalone CSVs before using it there. |
+| `USE_SLAB_TENSILE_GATE` | `True` (since 2026-10-27, Ron, both repos; CLI `--no-slab-tensile-gate`) | No slab-tensile check. When on, a candidate is arrested when S_t = σ_t / (3ρg·r_c²/h) < 1 (Schweizer et al. 2014 ISSW Eq. 1, the closed form, not Reuter & Schweizer 2018's FE index). σ_t is `sigma_t_mean__jamieson1990` (J&J 1990 with the facet knockdown); a missing column means the gate never fires; `step_scenarios` and the standalone's `generate_scenarios` print a WARNING when that happens. It also gates the trigger. On the ten no-event days it rejects no trigger, so it does not stop false alarms. |
 | `snowpack_analysis.FACET_SOURCE` | `'grain_class'` (since 2026-10-27, both repos; standalone `config.FACET_SOURCE`) | `'sphericity'` = f = 1 − sphericity, every CSV before 10-27. Grain class sets f = 1 for J&J's group II: primary FC/DH/FCxr, or PP/DF/RG with a faceted secondary (e.g. 341). `'grain_class_primary'` drops the secondary rule. It moves `sigma_t_mean/_wl/_ligament`, their `A_ca_*`, the energy mode and the tensile gate. It does **not** touch `A_ca_brittle` or the legacy Eq. 20, which read the plain `sigma_t` with no knockdown. Jan 18 start-zone median f goes from 0.45 to 0.97. |
 | `USE_MODE3_SPEED_CAP` | `False` | `d_lat` is the Gaume θ-ratio width (15 m floor) alone. |
 | `USE_MODE3_LAMBDA` | `False` | A single Λ is used in all directions. |
@@ -107,8 +107,11 @@ it. IoU from before 2026-10-26 is against a mapped crown and is not comparable.
 The mapped crowns stay in `data/boundaries/`: the **6 934 m²** one since
 2026-10-25 (the standalone's) and the 4 550 m² one before it in
 `data/boundaries/old/…_4550m2.geojson`. Each has IoU 0.65 against the survey
-polygon. The 6 934 m² file is still the reinit scour mask
-(`cfg.event_mask_for`), which never reads `validation_dir`. Conclusions drawn
+polygon. The 6 934 m² file is the reinit scour mask only on the
+`reinit --all-events` path (`cfg.event_mask_for`, which never reads
+`validation_dir`). `run_full_pipeline.sh --reinit` passes no GeoJSON, so the
+reinit auto-detects the release from the 01-14 → 01-20 surveys (3 550 m², 420
+clusters in the 2026-10-23 rebuild). The mapped crown gives 399 clusters. Conclusions drawn
 against the mapped crown, such as "slab and τ_p rise outward at the crown", do
 not hold against the survey polygon. Redo them before acting on them.
 
@@ -278,6 +281,11 @@ Layer trimming is measured, not assumed: the median Jan 18 profile uses 102 of
 338 layers, but across the dilated domain some profile uses all 338, so the
 trim currently saves nothing. Don't hardcode 258.
 
+**Units inside the store are metres** for `HS` and element `height` (xsnow
+attrs say so), unlike the SMET files below. `_scour_depth_for_cluster` treated
+them as cm until 52fe333. With a slab, every scour depth came out 0, and
+`scour_depth.tif` (com1DFA's entrainable depth) carried that.
+
 ## SMET units — write values in the file's own units, never SI
 
 The SMET header carries `units_offset = ... 273.15 ...` for `TA` and
@@ -328,6 +336,47 @@ There is no per-cycle WRF archive for this season, only one rolling file, so
 rows after a historical `T_stable` were written later than that date. The NWP
 path can be exercised for plumbing but **cannot support a forecast-skill
 claim**.
+
+## Avalanche events and the reinit — Jan 18 is the only avalanche
+
+Ron, 2026-10-27: the only avalanche of the 2025-26 season on Little Professor
+is 2026-01-18. Until 6e8f744 the `avalanche` step made all 22 survey periods
+avalanches:
+- It gave every period listed in `data/boundaries/avalanche_events.json` the
+  label `avalanche`, ignoring the label there.
+- It appends auto-detected periods to that file, so after one run every period
+  was listed.
+- `gap_fill` applied `transport_corrected_*` / `avalanche_dhs_*` wherever the
+  file existed.
+
+So the forcing before the 10-27 rebuild carried 21 false avalanche corrections,
+7 of them before Jan 18. Now:
+- A listed period keeps its label: `forcing_pipeline.classify_period`.
+- `gap_fill` follows the events file's `transport_corrected` flag:
+  `avalanche_correction_path`.
+- Every period except 2026-01-14__2026-01-20 is `wind_scour` or
+  `no_avalanche`, with no reinit.
+
+Do not relabel from auto-detection or CAIC hits. Ron's word is the ground
+truth.
+
+Three traps in the two-pass rebuild (`run_full_pipeline.sh --reinit`), all
+fixed on 10-27:
+1. **Pass 2 ran only the scoured clusters** (1b9a384), so 6 145 of 6 565
+   `.pro` files ended at the event date.
+2. **The Zarr store ended at the event date even after that fix** (ecc823d).
+   `run_snowpack.sh`'s build resumes and skips locations already in the
+   store, and pass 1 had written all of them. Both passes now run with
+   `SKIP_ZARR=1`, and the pipeline then builds once with `--rebuild`.
+3. **The reinit stamped `ProfileDate` 12:00 while pass 1 ran to 18:00**
+   (3902380). Pass 2 then put scoured clusters back 6 h and rewrote their
+   event-day 12:00 profile post-scour. `PASS1_END_TIME` now feeds both, and
+   `run_reinit` refuses any `.sno` not at the event time
+   (`profile_date_mismatches`).
+
+`analyze` reads `Timestamp(date)`, which is 00:00, so an event-day analysis is
+pre-scour. A 12:00 or 18:00 snapshot on the event day is post-scour on the
+scoured clusters.
 
 ## Output layout
 
