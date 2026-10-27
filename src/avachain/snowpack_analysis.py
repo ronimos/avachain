@@ -40,11 +40,18 @@ NU   = 0.3      # slab Poisson's ratio
 
 # Layered-slab aggregation of sigma_t / E (arrest_indices.aggregate_slab).
 # Faceted snow is ~half as strong in tension as rounded snow at equal density
-# (Jamieson & Johnston 1990), applied continuously via f = 1 - sphericity so
-# neighbouring cells cannot step across a grain-type boundary.
-# FACET_SP_REF = None means f is 1 - sphericity outright; our rounded layers
-# sit at sphericity ~0.86, so they still carry f ~0.14.
+# (Jamieson & Johnston 1990): sigma_t,i = sigma_t,RG(rho_i) (1 - a f_i).
+# FACET_SOURCE = 'grain_class' (Ron, 2026-10-27) sets f = 1 for FC/DH/FCxr
+# and 0 otherwise, as J&J grouped their layers. 'sphericity' is the earlier
+# continuous f = 1 - sphericity, which under-counts FCxr: over the Jan 18
+# start-zone slabs it gave f 0.35 inside the release / 0.52 outside, against
+# 0.50 / 1.00 by grain class. FACET_SP_REF applies to 'sphericity' only
+# (None = 1 - sphericity outright; rounded layers at ~0.86 keep f ~0.14).
+# The legacy Eq. 20 arrest reads the plain sigma_t column, which has no
+# knockdown, so this moves sigma_t_mean/_wl/_ligament (and A_ca_* built on
+# them), the energy mode and the slab tensile gate.
 FACET_STRENGTH_FACTOR = 0.5
+FACET_SOURCE          = 'grain_class'
 FACET_SP_REF          = None
 # Edge-crack bound: HYPOTHESIS, off because snow has no sourced slab-tension
 # K_Ic(rho). Supply SLAB_K_IC (Pa m^0.5) to enable.
@@ -583,6 +590,7 @@ def _slab_layer_aggregate(ds_t_loc, slab_sel, dz, z) -> dict:
         rho = ds_t_loc['density'].values.ravel()[slab_sel]
         sp  = ds_t_loc['sphericity'].values.ravel()[slab_sel]
         dd  = ds_t_loc['dendricity'].values.ravel()[slab_sel]
+        gt  = ds_t_loc['grain_type'].values.ravel()[slab_sel]
     except Exception:
         return {k: np.nan for k in keys}
     try:
@@ -592,6 +600,7 @@ def _slab_layer_aggregate(ds_t_loc, slab_sel, dz, z) -> dict:
     return _ai.aggregate_slab(
         rho, dz[slab_sel], sp, dd,
         a=FACET_STRENGTH_FACTOR, sp_ref=FACET_SP_REF,
+        grain_type_i=gt, facet_source=FACET_SOURCE,
         depth_i=-z[slab_sel],
         K_Ic=SLAB_K_IC if USE_LIGAMENT_BOUND else None,
         k_ic_relation=(K_IC_RELATION if USE_LIGAMENT_BOUND

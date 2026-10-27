@@ -48,6 +48,69 @@ class TestFacetedness:
         assert st == pytest.approx(0.5 * ai.slab_tensile_strength(RHO))
 
 
+class TestFacetednessGrainClass:
+    """f by primary grain class (Jamieson & Johnston 1990 grouped by class)."""
+
+    def test_fc_dh_fcxr_are_faceted(self):
+        f = ai.facetedness_grain_class([440, 450, 550, 990, 942])
+        assert f == pytest.approx([1.0, 1.0, 1.0, 1.0, 1.0])
+
+    def test_other_classes_are_not(self):
+        # PP, DF, RG, SH, MF, IF, and RG with a faceted secondary (34x)
+        f = ai.facetedness_grain_class([110, 220, 330, 660, 772, 880, 340])
+        assert f == pytest.approx(np.zeros(7))
+
+    def test_missing_codes_are_zero(self):
+        f = ai.facetedness_grain_class([np.nan, 0.0, -1.0, 440.0])
+        assert f == pytest.approx([0.0, 0.0, 0.0, 1.0])
+
+    def test_rounding_facets_differ_from_sphericity(self):
+        # The reason for the switch: FCxr with sphericity 0.6 gets f = 0.4 from
+        # 1 - sphericity but is fully faceted by class.
+        assert ai.facetedness([0.6], [0.0]) == pytest.approx([0.4])
+        assert ai.facetedness_grain_class([990]) == pytest.approx([1.0])
+
+
+class TestAggregateFacetSource:
+    rho = np.array([250.0, 250.0])
+    dz = np.array([0.5, 0.5])
+    sp = np.array([0.9, 0.6])
+    dd = np.zeros(2)
+    gt = np.array([330.0, 990.0])
+
+    def test_grain_class_knocks_down_the_fcxr_layer_fully(self):
+        agg = ai.aggregate_slab(self.rho, self.dz, self.sp, self.dd,
+                                grain_type_i=self.gt, facet_source='grain_class')
+        st_rg = ai.slab_tensile_strength(250.0)
+        assert agg['f_mean_weighted'] == pytest.approx(0.5)
+        assert agg['sigma_t_mean'] == pytest.approx(st_rg * (0.5 * 1.0 + 0.5 * 0.5))
+
+    def test_sphericity_ignores_grain_type(self):
+        a = ai.aggregate_slab(self.rho, self.dz, self.sp, self.dd)
+        b = ai.aggregate_slab(self.rho, self.dz, self.sp, self.dd,
+                              grain_type_i=self.gt, facet_source='sphericity')
+        assert a['sigma_t_mean'] == b['sigma_t_mean']
+        assert a['f_mean_weighted'] == pytest.approx(0.25)   # (0.1 + 0.4) / 2
+
+    def test_grain_class_needs_grain_type(self):
+        with pytest.raises(ValueError, match='grain_type_i'):
+            ai.aggregate_slab(self.rho, self.dz, self.sp, self.dd,
+                              facet_source='grain_class')
+
+    def test_unknown_source_rejected(self):
+        with pytest.raises(ValueError, match='facet_source'):
+            ai.aggregate_slab(self.rho, self.dz, self.sp, self.dd,
+                              grain_type_i=self.gt, facet_source='dendricity')
+
+    def test_extra_relations_use_the_same_f(self):
+        agg = ai.aggregate_slab(self.rho, self.dz, self.sp, self.dd,
+                                grain_type_i=self.gt, facet_source='grain_class',
+                                st_relations_extra=('jamieson1990',))
+        st = ai.slab_tensile_strength_jamieson1990(self.rho) * (1 - 0.5 * np.array([0.0, 1.0]))
+        assert agg['sigma_t_mean__jamieson1990'] == pytest.approx(
+            ai.tensile_strength_mean(st, self.dz))
+
+
 class TestHomogeneousSlab:
     """A uniform slab must give both bounds equal, and equal to current Eq. 20."""
 

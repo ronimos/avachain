@@ -449,3 +449,37 @@ def test_snapshot_gap_refuses_dates_past_the_store():
     times = pd.date_range('2025-11-26 18:00', '2026-01-18 18:00', freq='6h').values
     assert snapshot_gap(times, '2026-01-18') <= MAX_SNAPSHOT_GAP
     assert snapshot_gap(times, '2026-03-07') > MAX_SNAPSHOT_GAP
+
+
+# ---------------------------------------------------------------------------
+# Facet knockdown source (grain class since 2026-10-27)
+# ---------------------------------------------------------------------------
+
+class TestFacetSource:
+    """The feature path must pass grain_type through, or 'grain_class' would
+    fail (ValueError) or silently fall back. Jan 18 cannot see a wiring slip
+    that leaves every sigma_t column plausible, so it is pinned here."""
+
+    def _ds(self):
+        n = 2
+        return xr.Dataset({
+            'density':    ('layer', np.array([250.0, 250.0])),
+            'sphericity': ('layer', np.array([0.9, 0.6])),
+            'dendricity': ('layer', np.zeros(n)),
+            'grain_type': ('layer', np.array([330.0, 990.0])),
+        })
+
+    def test_default_is_grain_class(self):
+        import snowpack_analysis as sa
+        assert sa.FACET_SOURCE == 'grain_class'
+
+    def test_grain_type_reaches_the_aggregation(self, monkeypatch):
+        import snowpack_analysis as sa
+        dz, z, sel = np.array([0.5, 0.5]), np.array([-0.25, -0.75]), np.ones(2, bool)
+        monkeypatch.setattr(sa, 'FACET_SOURCE', 'grain_class')
+        by_class = sa._slab_layer_aggregate(self._ds(), sel, dz, z)
+        monkeypatch.setattr(sa, 'FACET_SOURCE', 'sphericity')
+        by_sph = sa._slab_layer_aggregate(self._ds(), sel, dz, z)
+        assert by_class['f_mean_weighted'] == pytest.approx(0.5)
+        assert by_sph['f_mean_weighted'] == pytest.approx(0.25)
+        assert by_class['sigma_t_mean__jamieson1990'] < by_sph['sigma_t_mean__jamieson1990']

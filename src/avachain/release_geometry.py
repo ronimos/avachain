@@ -59,8 +59,8 @@ NU                 = 0.3   # slab Poisson's ratio
 # reaches critical length: S_t = sigma_t / (3 rho g r_c^2 / h) < 1, Schweizer et
 # al. (2014), via arrest_indices.slab_tensile_support. Per-cluster, like gates
 # 4-6, and placed after them. sigma_t is Jamieson & Johnston (1990) with the
-# facet knockdown (FACET_STRENGTH_FACTOR), the strength relation the 2014
-# paper uses; faceted slabs are ~half as strong at equal density, which is the
+# facet knockdown (FACET_STRENGTH_FACTOR; f by grain class since 2026-10-27,
+# snowpack_analysis.FACET_SOURCE), the strength relation the 2014 paper uses; faceted slabs are ~half as strong at equal density, which is the
 # RG-inside / FC-outside contrast at Jan 18. The threshold is 1, not a fit.
 USE_SLAB_TENSILE_GATE = False
 SLAB_TENSILE_SIGMA_COL = 'sigma_t_mean__jamieson1990'
