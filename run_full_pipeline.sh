@@ -178,6 +178,15 @@ if [[ $REINIT -eq 1 ]]; then
     echo "    Pass 1: Season start → ${EVENT_DATE}T${PASS1_END_TIME:0:5}"
     SKIP_ZARR=1 bash "$SLOPE_SCRIPTS/run_snowpack.sh" "" "${EVENT_DATE}T${PASS1_END_TIME:0:5}"
 
+    # The reinit's day-before analysis reads the Zarr store, so pass 1 needs
+    # one of its own. Without it analyze fell back to xsnow.read on the .pro
+    # dir and died on the SMET units (10-27 rebuild). The build after pass 2
+    # replaces this store with --rebuild.
+    echo ""
+    echo "    Zarr: pass-1 store for the reinit analysis"
+    python "$PROJECT_DIR/src/avachain/build_zarr_chunked.py" --rebuild \
+        --pro-dir "$SLOPE_DIR/output" --zarr-out "$SLOPE_DIR/output/slope_snowpack.zarr"
+
     echo ""
     echo "    Analyzing snowpack at $REINIT_SNAPSHOT for slab thickness..."
     $ANALYSIS analyze --snapshot-date "$REINIT_SNAPSHOT"
