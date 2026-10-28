@@ -329,8 +329,10 @@ def scour_cluster(sno_data: dict, event_ts: str,
     """Choose a cluster's scour depth and apply it.
 
     Scour sources, in order: the post-event survey HS (only passed in a clean
-    window, and only when it is below the modelled HS), the slab thickness
-    from the features CSV, else 80% of HS.
+    window), the slab thickness from the features CSV, else 80% of HS. A
+    survey value decides alone: at or above the modelled HS it means no
+    scour, not a fall-through to the slab (on Jan 18 that stripped 9 clusters
+    the survey showed at 2.0-2.9 m down to 0.1-0.25 m).
 
     Frames: .sno Layer_Thick is slope-normal. Everything it is compared with
     is vertical: the survey HS; the forcing HS, which run_snowpack.sh
@@ -347,8 +349,8 @@ def scour_cluster(sno_data: dict, event_ts: str,
     hs_before = sum(float(l['Layer_Thick'])
                     for l in sno_data['layers']) / cos_slope
 
-    if survey_hs_m is not None and hs_before - survey_hs_m > 0:
-        scour_m = hs_before - survey_hs_m
+    if survey_hs_m is not None:
+        scour_m = max(hs_before - survey_hs_m, 0.0)
         source = 'survey_HS'
     elif slab_thickness_m is not None:
         scour_m = slab_thickness_m
@@ -549,6 +551,24 @@ def _update_header_line(sno_data, key, new_value):
 # Core workflow (callable from forcing_pipeline.py)
 # -----------------------------------------------------------------------
 
+def post_event_station_dhs(wx: pd.DataFrame, event_ts: str, date_after: str,
+                           flight_hour_utc: int = 18) -> float:
+    """Station HS change (m) from the avalanche to the post-event survey flight.
+
+    wx is pipeline_io.load_weather output (HS in cm, UTC). NaN when the
+    station has no HS at either end.
+    """
+    from pipeline_io import station_hs_at
+    hs_event = wx['HS'].asof(pd.Timestamp(event_ts)) / 100.0
+    return station_hs_at(wx, pd.Timestamp(date_after).date(),
+                         flight_hour_utc) - hs_event
+
+
+def is_clean_window(stn_dhs_m: float, max_dhs_m: float = 0.05) -> bool:
+    """True when the station gained less than max_dhs_m (NaN is not clean)."""
+    return bool(np.isfinite(stn_dhs_m) and stn_dhs_m < max_dhs_m)
+
+
 def run_reinit(cfg,
                date_before: str = '2026-01-14',
                date_after: str = '2026-01-20',
@@ -582,8 +602,8 @@ def run_reinit(cfg,
     smet_dir : cluster forcing SMETs to align to the scour (default: cfg.smet_dir)
     dry_run : if True, report without modifying files
     no_backup : if True, skip .sno.bak creation
-    clean_window_max_stn_dhs_m : max station dHS (m) between event_date and
-        date_after that qualifies as a "clean window".  When clean, cluster-mean
+    clean_window_max_stn_dhs_m : max station dHS (m) between the event time and
+        the date_after flight that qualifies as a "clean window".  When clean, cluster-mean
         HS from the post-event UAS survey is used as the scour target instead of
         the modeled slab thickness.  Default 0.05 m (5 cm).
 
@@ -618,14 +638,18 @@ def run_reinit(cfg,
         hs_after = np.load(str(cfg.resampled_dir /
                                f"hs_{date_after}.npy"))
 
-        # Station dHS
+        # Station dHS between the two flights, in m as detect_minkernel
+        # expects. This read wx.iloc[:, 11], which is snow24h, not depth, and
+        # scaled tenths of an inch to cm.
         try:
-            wx = pd.read_csv(str(cfg.weather_csv),
-                             parse_dates=[0], index_col=0)
-            hs_col = wx.iloc[:, 11]
-            period = hs_col.loc[date_before:date_after]
-            stn_dhs = float((period.iloc[-1] - period.iloc[0])
-                            * 0.1 * 2.54)
+            from pipeline_io import load_weather, station_hs_at
+            wx = load_weather(cfg)
+            stn_dhs = (station_hs_at(wx, pd.Timestamp(date_after).date(),
+                                     cfg.flight_hour_utc)
+                       - station_hs_at(wx, pd.Timestamp(date_before).date(),
+                                       cfg.flight_hour_utc))
+            if np.isnan(stn_dhs):
+                stn_dhs = 0.0
         except Exception:
             stn_dhs = 0.0
 
@@ -711,19 +735,18 @@ def run_reinit(cfg,
         for c in invalid_clusters(cfg.analysis_dir, date_after):
             post_survey_hs.pop(c, None)
 
-        # Station dHS from event_date to date_after to judge window cleanliness
+        # Station dHS from the avalanche to the post-event flight judges the
+        # window. It used to read snow24h (wx.iloc[:, 11]) instead of depth
+        # and compared cm with a threshold in m, so Jan 18 came out
+        # "contaminated" (0.254) with the station depth flat, and the scour
+        # fell back to the modelled slab.
         try:
-            wx = pd.read_csv(str(cfg.weather_csv), parse_dates=[0], index_col=0)
-            hs_col = wx.iloc[:, 11]
-            window = hs_col.loc[event_date:date_after]
-            if len(window) >= 2:
-                stn_new = float((window.iloc[-1] - window.iloc[0]) * 0.1 * 2.54)
-                clean_window = stn_new < clean_window_max_stn_dhs_m
-                print(f"  Post-event stn_dHS={stn_new:.3f}m  "
-                      f"window={'clean' if clean_window else 'contaminated, using slab_thickness'}")
-            else:
-                print("  Insufficient station data for clean-window check "
-                      "— using slab_thickness")
+            from pipeline_io import load_weather
+            stn_new = post_event_station_dhs(load_weather(cfg), event_ts,
+                                             date_after, cfg.flight_hour_utc)
+            clean_window = is_clean_window(stn_new, clean_window_max_stn_dhs_m)
+            print(f"  Post-event stn_dHS={stn_new:+.3f}m  "
+                  f"window={'clean' if clean_window else 'contaminated, using slab_thickness'}")
         except Exception as exc:
             print(f"  Weather CSV error ({exc}) — using slab_thickness")
 

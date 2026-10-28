@@ -911,13 +911,16 @@ if __name__ == '__main__':
     print(f"Period: {date_before} -> {date_after}")
 
     # Station dHS for this period
+    # In m, between the flights. This read wx.iloc[:, 11] (snow24h, not
+    # depth) and passed cm to detectors that subtract it from a dHS in m.
     try:
-        wx_path = cfg.project_dir / "data" / "weather" / "weather_data.csv"
-        wx = pd.read_csv(str(wx_path), parse_dates=[0], index_col=0)
-        hs_col = wx.iloc[:, 11]
-        period = hs_col.loc[date_before:date_after]
-        stn_dhs = float((period.iloc[-1] - period.iloc[0]) * 0.1 * 2.54)
-        print(f"Station dHS {date_before}->{date_after}: {stn_dhs:.1f} cm")
+        from pipeline_io import load_weather, station_hs_at
+        wx = load_weather(cfg)
+        stn_dhs = (station_hs_at(wx, pd.Timestamp(date_after).date(), cfg.flight_hour_utc)
+                   - station_hs_at(wx, pd.Timestamp(date_before).date(), cfg.flight_hour_utc))
+        if np.isnan(stn_dhs):
+            stn_dhs = 0.0
+        print(f"Station dHS {date_before}->{date_after}: {stn_dhs * 100:.1f} cm")
     except Exception as e:
         print(f"Warning: could not load station dHS ({e}), using 0.0")
         stn_dhs = 0.0
@@ -942,14 +945,15 @@ if __name__ == '__main__':
             pre_date = pre_path.name.replace('hs_','').replace('.npy','')
             hs_pre_event = np.load(str(pre_path))
             try:
-                wx_path = cfg.project_dir / "data" / "weather" / "weather_data.csv"
-                wx = pd.read_csv(str(wx_path), parse_dates=[0], index_col=0)
-                hs_col = wx.iloc[:, 11]
-                pre_period = hs_col.loc[pre_date:date_before]
-                stn_dhs_pre = float(
-                    (pre_period.iloc[-1] - pre_period.iloc[0]) * 0.1 * 2.54)
+                from pipeline_io import load_weather, station_hs_at
+                wx = load_weather(cfg)
+                stn_dhs_pre = (
+                    station_hs_at(wx, pd.Timestamp(date_before).date(), cfg.flight_hour_utc)
+                    - station_hs_at(wx, pd.Timestamp(pre_date).date(), cfg.flight_hour_utc))
+                if np.isnan(stn_dhs_pre):
+                    stn_dhs_pre = 0.0
                 print(f"Pre-event survey: {pre_path.name}  "
-                      f"station dHS: {stn_dhs_pre:.1f} cm")
+                      f"station dHS: {stn_dhs_pre * 100:.1f} cm")
             except Exception as e:
                 print(f"  Pre-event station dHS: failed ({e}), using 0")
                 stn_dhs_pre = 0.0

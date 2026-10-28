@@ -192,6 +192,16 @@ class TestScourClusterFrame:
         normal = sum(float(l["Layer_Thick"]) for l in scoured["layers"])
         assert normal / math.cos(math.radians(60.0)) == pytest.approx(1.2)
 
+    def test_survey_at_or_above_model_hs_means_no_scour(self, tmp_path):
+        # 2.0 m vertical modelled; the survey sees 2.5 m (or exactly 2.0 m).
+        # The survey says the snow is still there, so the slab thickness must
+        # not be removed instead. Jan 18 2026: 9 release clusters had survey
+        # 2.0-2.9 m and were stripped to 0.1-0.25 m by the slab fallback.
+        sno = _make_sno(tmp_path, 60.0, [0.25] * 4)
+        for survey in (2.5, 2.0):
+            assert scour_cluster(sno, "2026-03-03T12:00", survey_hs_m=survey,
+                                 slab_thickness_m=1.5) is None
+
     def test_survey_between_normal_and_vertical_hs_is_a_loss(self, tmp_path):
         # 1.0 m normal = 2.0 m vertical, so a 1.5 m survey is a real loss
         sno = _make_sno(tmp_path, 60.0, [0.25] * 4)
