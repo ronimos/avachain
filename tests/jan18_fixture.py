@@ -1,7 +1,8 @@
 """Frozen Jan 18 2026 inputs for release-geometry regression tests.
 
 tests/data/jan18/ holds copies of outputs/little_prof/ as of the 2026-10-23
-rebuild (commit 2f79a8e): DEM, cluster map, and the two feature CSVs. The live
+rebuild (commit 2f79a8e): DEM and cluster map. The two feature CSVs are from
+the 2026-10-27 forcing rebuild (7906e1c), analyze at 2026-01-18 00:00. The live
 outputs move with every rebuild; this copy does not. The observed crown and the
 start-zone KML are read from data/boundaries/, where they are tracked.
 """
