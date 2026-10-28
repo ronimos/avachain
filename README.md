@@ -16,6 +16,10 @@ probability envelopes.
 # Full rebuild (new DEM, first setup, or major config change)
 ./run_full_pipeline.sh
 
+# Full season rebuild with the Jan 18 avalanche reinitialization (two-pass)
+./run_full_pipeline.sh --clean --keep-cluster-map --reinit \
+    --event-date 2026-01-18 --date-before 2026-01-14 --date-after 2026-01-20
+
 # Operational update after a new UAS survey (Little Professor)
 ./run_little_prof.sh --snapshot 2026-01-17
 
@@ -149,10 +153,34 @@ python src/avachain/forcing_pipeline.py gap_fill --use-model     # RF + WindNinj
 bash snowpack/little_prof/run_snowpack.sh
 ```
 
-Runs SNOWPACK independently at each of ~6,636 cluster locations. On first run,
-uses template initial conditions; on reruns, restarts from `_res.sno` files
-(incremental simulation). Output `.pro` files are aggregated to a Zarr store
-by `build_zarr_chunked.py` (called automatically at end of `run_snowpack.sh`).
+Runs SNOWPACK independently at each of the 6 565 cluster locations. On first
+run, uses template initial conditions; on reruns, restarts each cluster from its
+`.sno` at that file's ProfileDate (incremental simulation). Output `.pro` files
+are aggregated to the Zarr store `slope_snowpack.zarr` by `build_zarr_chunked.py`
+(chunks location 256 × time 1 × layer 338; HS and heights in metres).
+`run_snowpack.sh` builds it at the end unless `SKIP_ZARR=1`.
+
+**Avalanche reinitialization (`--reinit`).** `run_full_pipeline.sh --reinit`
+runs SNOWPACK in two passes:
+1. Pass 1 runs to the event at 18:00, and the pipeline builds a pass-1 store.
+2. `analyze` runs on the day before the event.
+3. `forcing_pipeline.py reinit` scours the `.sno` of every release cluster.
+   The release is auto-detected from the bracketing surveys.
+4. Pass 2 continues every cluster to season end, each from its own restart.
+5. The store is rebuilt once with `--rebuild`.
+
+The scour depth comes from the **post-event survey HS** whenever the station
+gained less than 5 cm between the avalanche and the survey flight. Where the
+survey shows as much snow as the model or more, the cluster is not scoured.
+The modelled slab thickness is used only when the window is not clean or a
+cluster has no valid survey cells. The reinit refuses `.sno` files that are
+not at the event time.
+
+**Avalanche events.** `data/boundaries/avalanche_events.json` is the ground
+truth for which survey periods had avalanches, and its labels are honoured.
+For 2025-26 on Little Professor the only avalanche is 2026-01-14 → 01-20
+(Jan 18). Every other period is `no_avalanche` or `wind_scour`, gets no
+avalanche correction in `gap_fill`, and gets no reinit.
 
 ### Phase 3: Analysis + scenarios (`analysis_pipeline.py`)
 
@@ -193,10 +221,10 @@ python src/avachain/analysis_pipeline.py scenarios \
 
 ## Full vs Operational Pipeline
 
-| | `run_full_pipeline.sh` | `run_operational.sh` |
+| | `run_full_pipeline.sh` | `run_little_prof.sh` |
 |---|---|---|
 | **When** | New DEM, first setup, config change | After a new UAS survey |
-| **Runs** | All forcing + SNOWPACK + analysis | resample → gap_fill → smet → SNOWPACK → analysis |
+| **Runs** | All forcing + SNOWPACK (two-pass with `--reinit`) + analysis | resample → gap_fill → smet → SNOWPACK → analysis |
 | **Skips** | — | transport, features, train, avalanche, cluster |
 | **SNOWPACK** | Full season from bare ground | Incremental from restart files |
 | **Runtime** | ~4–6 hours | ~1–2 hours |
@@ -205,13 +233,49 @@ python src/avachain/analysis_pipeline.py scenarios \
 
 ## Release Geometry
 
-Two complementary models generate release area polygons:
+The release-area model is the same as the standalone reference implementation
+in `~/avalanche-release-areas`. Its `docs/release_area_methods.md` is the full
+method write-up, and any physics difference between the two repos is a
+porting defect.
 
-**Physics-based BFS model** — deterministic flood-fill from a trigger cluster through
-the k=8 cluster neighbour graph. Arrest criteria: slab thickness discontinuity
-(THICKNESS_JUMP_FACTOR=0.25), elastic length discontinuity (LAMBDA_JUMP_FACTOR=0.5),
-stauchwall (slope < 29°), τ_g < 50 Pa, start zone boundary. Calibrated on 75% of
-the Jan 18 release boundary, verified on 25%.
+**Trigger selection** (`analysis_pipeline.py scenarios`). Start-zone clusters
+pass a filter chain, then a ranking:
+1. τ_g ≥ 40 Pa, mean slope ≥ Stauchwall + 2° (31°), Sk38 < 1.
+2. Slab thickness 0.5–2.0 m.
+3. The slab tensile gate, S_t ≥ 1.
+4. Elevation ≥ the median of the survivors.
+5. Π₁ ≥ the median of the survivors.
+6. Rank by Sk38 (ties by r_c), and take the top `n_triggers` (5 in the Little
+   Professor TOML).
+
+Steps 4–6 are relative, so a trigger is always returned unless steps 1–3
+leave nothing. The model therefore has no "no release" answer.
+
+**Physics-based BFS model.** A deterministic flood-fill from each trigger
+through the k = 8 cluster neighbour graph. It arrests on:
+- the directional Meloche A_ca test (`USE_MELOCHE_ARREST`, on since
+  2026-10-23);
+- the slab tensile gate S_t = σ_t / (3ρg·r_c²/h) < 1 (Schweizer et al. 2014,
+  `USE_SLAB_TENSILE_GATE`, on since 2026-10-27). σ_t is Jamieson & Johnston
+  (1990) with a grain-class facet knockdown;
+- the Stauchwall: a cluster whose **mean** slope is below 29°;
+- τ_g < 350 Pa;
+- the distance caps and the start-zone boundary.
+
+`MAX_BFS_CLUSTERS` = 2000 is a safety cap, not physics. CLI
+`--no-slab-tensile-gate` and `--stauchwall-deg` override the defaults, and the
+slope TOML's `[scenarios] stauchwall_deg` wins over the module constant.
+
+**Validation and scoring.** The Jan 18 target is the survey-derived release
+polygon `data/validation/avalanche_release_area_20260118.geojson` (5 810 m²),
+wired through `[paths] validation_dir`. `src/avachain/event_scoring.py` sums
+the scenario weights per pixel into P(pixel in release | release). It scores
+event days by Brier skill and AUC, and no-event days by predicted area:
+
+```bash
+python src/avachain/event_scoring.py --toml slopes/little_prof/slope_config.toml \
+    --scen-dir outputs/little_prof/scenarios/2026-01-18/<tag> --date 2026-01-18
+```
 
 **Probabilistic boundary model** — logistic regression trained on labeled cluster-pair
 transitions from observed events. Produces P(arrest) at each boundary. Improves with
@@ -293,10 +357,12 @@ python scripts/cluster_map_viewer.py \
 |-----------|--------|--------|---------------|
 | WL peak shear strength | τ_p | SNOWPACK `shear_strength` (kPa) | 1.5–3.5 kPa |
 | WL shear strength gradient | θ | neighbor cluster pairs | 10–50 Pa/m |
-| Slab elastic modulus | E | (ρ/300)^2.5 × 4 MPa | 2–6 MPa |
-| Slab tensile strength | σ_t | (ρ/300)^1.4 × 5 kPa | 3–7 kPa |
+| Slab elastic modulus | E | 0.93·ρ^2.8 Pa (van Herwijnen et al. 2016 Eq. 8, `E_RELATION = 'vanherwijnen2016'`) | 6–11 MPa (Jan 18 start zone, P5–P95) |
+| Slab tensile strength (A_ca_brittle) | σ_t | (ρ/300)^1.4 × 5 kPa (project relation, no published source) | 3–7 kPa |
+| Slab tensile strength (tensile gate) | σ_t | 79.7 (ρ/917)^2.39 kPa per layer (Jamieson & Johnston 1990) × facet knockdown, thickness-averaged | 2–6 kPa |
+| Slab tensile support | S_t | σ_t / (3ρg·r_c²/h); arrest when < 1 | — |
 | Elastic length | Λ | √(E'·h·D_wl/G_wl) | 2–5 m |
-| Gravitational shear stress | τ_g | ρ·g·h·sinψ·(1−tanϕ/tanψ) | 200–600 Pa |
+| Gravitational shear stress | τ_g | ρ·g·h·sinψ | 200–600 Pa |
 | Crack arrest length | A_ca | L_t·Π₁·√(σ_t/τ_g) | 50–500 m |
 | Voellmy dry friction | μ | **uncalibrated default** | 0.155 |
 | Voellmy turbulent friction | ξ | **uncalibrated default** | 1500 m/s² |
@@ -309,8 +375,9 @@ Fixed parameters: G_wl = 0.2 MPa, δ = 1, ν = 0.3, ϕ = 27°.
 
 ```bash
 # Python environment (uv)
-cd /home/ron/snowpack_model_feeder
+cd /home/ron/avachain
 source .venv/bin/activate
+python -m pytest tests/ -q
 
 # WindNinja (conda — separate environment)
 conda activate windninja
@@ -330,6 +397,9 @@ shapely, scipy, matplotlib, dask, zarr, folium.
 |----------|-------------|
 | `docs/new_slope_setup.md` | Step-by-step guide for adding and running a new slope |
 | `docs/release_area_geometry.md` | Release area method: BFS model, probabilistic model, validation |
+| `~/avalanche-release-areas/docs/release_area_methods.md` | Full release-area method (reference implementation): trigger selection, arrest, tensile gate, Stauchwall, Jan 18 results |
+| `docs/results_energy_mode.md` | Path-energy arrest experiments (non-default `--arrest-mode energy`) |
+| `CLAUDE.md` | Conventions, feature flags and known traps |
 | `docs/clustering_methods.md` | Clustering algorithm, quality metrics, group comparison |
 | `docs/TODO.md` | Prioritized task list |
 
@@ -350,5 +420,10 @@ shapely, scipy, matplotlib, dask, zarr, folium.
   *Journal of Glaciology*, 62(236).
 - Reiweger et al. (2010). Load-controlled test apparatus for snow.
   *Cold Regions Science and Technology*, 62(2-3).
+- Jamieson & Johnston (1990). In-situ tensile tests of snowpack layers.
+  *Journal of Glaciology*, 36(122), 102–106.
+- Schweizer, Reuter, van Herwijnen, Gauthier & Jamieson (2014). On how the
+  tensile strength of the slab affects crack propagation propensity.
+  *Proc. ISSW 2014*, Banff.
 - Perzl (2007). Stauchwall threshold. JRC report.
 - Veitinger et al. (2016). Stauchwall / start zone delineation.

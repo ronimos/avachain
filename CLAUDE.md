@@ -115,10 +115,9 @@ clusters in the 2026-10-23 rebuild). The mapped crown gives 399 clusters. Conclu
 against the mapped crown, such as "slab and τ_p rise outward at the crown", do
 not hold against the survey polygon. Redo them before acting on them.
 
-**The README's parameter table is stale on two rows.** It gives
-`E = (ρ/300)^2.5 × 4 MPa` and `σ_t = (ρ/300)^1.4 × 5 kPa`, which describe
-`E_RELATION = 'project_fit'`. The active default is `'vanherwijnen2016'`
-(`E = 0.93·ρ^2.8` Pa, van Herwijnen et al. 2016 Eq. 8). Trust the flag.
+The README's parameter table was corrected on 2026-10-28. E is now
+`vanherwijnen2016`, and σ_t has separate rows for the plain relation and the
+J&J 1990 one. If they disagree again, trust the flags in this file.
 
 ---
 
