@@ -528,9 +528,40 @@ def _write_arrest_state(state: dict, sdir: Path):
         rej.to_csv(sdir / 'rejected.csv')
 
 
+def scenario_set_dir(cfg, args) -> Path:
+    """Where a scenario set is published: <scenarios_dir>/<date>[/<horizon>]."""
+    base = cfg.scenarios_dir / args.snapshot_date
+    return base / args.forecast_horizon if args.forecast_horizon else base
+
+
 def step_scenarios(cfg, args):
     """
-    Generate AvaFrame com1DFA release scenario ensemble.
+    Build the scenario set in staging and publish it as a handoff set
+    (handoff.py): manifest.json, rename into place, READY last. Runout waits
+    for READY, so it never reads a set still being written or replaced. A
+    failed build discards its staging and leaves any published set alone.
+    """
+    import handoff
+    final = scenario_set_dir(cfg, args)
+    stage = handoff.staging_dir(final)
+    try:
+        _build_scenarios(cfg, args, stage)
+    except BaseException:
+        handoff.discard(stage)
+        raise
+    meta = stage / "metadata.json"
+    n = json.loads(meta.read_text())["n_scenarios"] if meta.exists() else 0
+    handoff.publish(stage, final, "release", toml=cfg.toml_path,
+                    path=cfg.slope_name, snapshot_date=args.snapshot_date,
+                    horizon=args.forecast_horizon,
+                    status="ok" if n else "no_scenarios", n_scenarios=n)
+    print(f"Published scenario set → {final}")
+    return final
+
+
+def _build_scenarios(cfg, args, out_dir: Path):
+    """
+    Generate AvaFrame com1DFA release scenario ensemble into out_dir.
 
     Axes:
       - Trigger location:   top-N weakest Sk38 clusters in start zone
@@ -777,10 +808,7 @@ def step_scenarios(cfg, args):
     print(f"Trigger clusters: {list(triggers.index)} "
           f"Sk38={list(triggers[sk38_col].round(3))}")
 
-    # --- Output directory ---
-    base = cfg.scenarios_dir / args.snapshot_date
-    out_dir = base / args.forecast_horizon if args.forecast_horizon else base
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # --- Output directory (staging; step_scenarios publishes it) ---
     (out_dir / "scenarios").mkdir(exist_ok=True)
 
     # Write trigger locations GeoJSON

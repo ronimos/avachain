@@ -1188,7 +1188,9 @@ def step_smet(cfg: ProjectConfig):
           f"max={max(sizes)}")
 
     # --- Augment with NWP refill ---
-    refill_path = cfg.project_dir / "data" / "weather" / "refill.smet"
+    # Beside the station CSV, not under project_dir: in a deployment the repo
+    # holds no data, and a missing refill is skipped silently.
+    refill_path = cfg.weather_csv.parent / "refill.smet"
     if refill_path.exists():
         from smet_writer import read_smet, augment_smet_with_refill, fill_smet_gaps_from_refill
         print(f"\nAugmenting SMET files from {refill_path.name}...")

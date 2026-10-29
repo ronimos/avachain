@@ -1,0 +1,102 @@
+# slope_config.toml — Little Professor, operational deployment in /home/avachain
+#
+# Same slope and physics as slopes/little_prof (the dev tree); only the paths
+# differ. The slope name is the survey producer's path token, so survey files
+# (YYMMDD_Professor_PTC_snowHeight.tif), folders, scripts and logs share one
+# name. Layout (Ron, 2026-10-28):
+#   data/      external arrivals only; nothing in the pipeline writes here,
+#              except the survey markers (READY -> RUNNING -> DONE/FAILED)
+#   work/      each part's private files
+#   handoff/   the only place parts exchange files (manifest.json + READY)
+#   outputs/   products;  logs/
+# Every path is absolute, so nothing resolves into the repo at code/avachain.
+
+[slope]
+name             = "Professor_PTC"
+display_name     = "Little Professor"
+aspect_deg       = 90.0
+slope_angle_deg  = 38.0
+elevation_m      = 3700
+latitude         = 39.63
+longitude        = -105.87
+notes            = "NE-facing slope above treeline; operational deployment of slopes/little_prof"
+
+[paths]
+project_dir           = "/home/avachain/code/avachain"   # stamped by install.py
+# --- arrivals (data/) ---
+survey_dir            = "/home/avachain/data/surveys/snow_height/Professor_PTC"
+weather_csv           = "/home/avachain/data/weather/weather_data.csv"
+dem                   = "/home/avachain/data/static/Professor_PTC/251110_Professor_Ground-DSM_aligned.tiff"
+boundary_kml          = "/home/avachain/data/static/Professor_PTC/Little_Proff.kml"
+start_zone_kml        = "/home/avachain/data/static/Professor_PTC/Litte_prof_start_zone.kml"
+# boundary_kml's folder is also where mapped crowns (avalanche_release_area_<YYYYMMDD>.geojson) are read
+release_geojson       = "/home/avachain/data/static/Professor_PTC/avalanche_release_area.geojson"
+validation_dir        = "/home/avachain/data/static/Professor_PTC/validation"
+windninja_library_dir = "/home/avachain/data/static/Professor_PTC/windninja_library"
+# --- snowpack part (work/) ---
+slope_dir             = "/home/avachain/work/snowpack/Professor_PTC"
+grids_dir             = "/home/avachain/work/snowpack/Professor_PTC/hourly_grids"
+resampled_dir         = "/home/avachain/work/snowpack/Professor_PTC/resampled_1m"
+models_dir            = "/home/avachain/work/snowpack/Professor_PTC/models"
+weather_cache_dir     = "/home/avachain/work/weather"
+# The avalanche step appends auto-detected events to this file, so it cannot live in data/.
+avalanche_events      = "/home/avachain/work/snowpack/Professor_PTC/avalanche_events.json"
+# --- release part (work/) ---
+# analysis_dir also holds the forcing pipeline's cluster map and features:
+# one analysis_dir serves both parts today.
+analysis_dir          = "/home/avachain/work/release/Professor_PTC/analysis"
+event_masks_dir       = "/home/avachain/work/release/Professor_PTC/event_masks"
+# --- release -> runout (handoff/) ---
+scenarios_dir         = "/home/avachain/handoff/Professor_PTC/release"
+# --- products and logs ---
+output_dir            = "/home/avachain/outputs/Professor_PTC"
+plots_dir             = "/home/avachain/outputs/Professor_PTC/plots"
+logs_dir              = "/home/avachain/logs/Professor_PTC"
+
+[surveys]
+# A survey counts once its marker is RUNNING or DONE (survey_markers.py).
+markers = true
+
+[snowpack]
+binary     = "/home/caic/caic/rtsys/snowpack/exe/snowpack"
+lib_dir    = "/home/caic/caic/rtsys/snowpack/src/snowpack/lib"
+season_start      = "2025-10-01"
+season_end        = "2026-03-31"
+max_parallel_jobs = 30
+
+[[stations]]
+role        = "summit"
+sql_id      = "CAABT"
+name        = "A-Basin SA-Summit"
+lat         = 39.6424
+lon         = -105.8718
+elev_m      = 3798.3
+sql_columns = ["swin", "temp", "dewp", "rh", "wspd", "wdir", "gust", "mxtemp24h", "mntemp24h"]
+
+[[stations]]
+role        = "base"
+sql_id      = "CAABM"
+name        = "A-Basin SA-Base"
+lat         = 39.6424
+lon         = -105.8718
+elev_m      = 3554.0
+sql_columns = ["pcpac", "depth", "snow24h"]
+
+[scenarios]
+n_triggers        = 5
+size_factors      = [0.70, 0.85, 1.00, 1.15, 1.30]
+depth_percentiles = [10, 50, 90]
+stauchwall_deg    = 29.0
+
+[wrf]
+fcst_base_dir = "/ssd/snowpack/fcst"
+season        = ""
+# Filled in by install.py:
+wrf_smet_dir  = "/ssd/snowpack/fcst/2025/zone055/077963"
+wrf_zone      = "zone055"
+wrf_grid_id   = "077963"
+wrf_smet_file = "/ssd/snowpack/fcst/2025/zone055/077963/0779632_res.smet"
+wrf_dist_km   = 0.714
+
+[cron]
+hour_utc = 3
