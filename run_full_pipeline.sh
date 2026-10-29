@@ -42,7 +42,10 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # SLOPE selects the config, output and SNOWPACK dirs (default little_prof);
 # run_snowpack.sh is shared and reads SLOPE_DIR from the environment.
 SLOPE=${SLOPE:-little_prof}
-SLOPE_SCRIPTS=$PROJECT_DIR/slopes/little_prof
+# The slope's own install.py-generated run_snowpack.sh (its master_config.ini,
+# binary, terrain); slopes without one (abl_pix, energy) share little_prof's.
+SLOPE_SCRIPTS=$PROJECT_DIR/slopes/$SLOPE
+[[ -f $SLOPE_SCRIPTS/run_snowpack.sh ]] || SLOPE_SCRIPTS=$PROJECT_DIR/slopes/little_prof
 # --toml on every call: without it a subprocess silently falls back to the
 # default ProjectConfig and reads/writes outputs/<step> instead of
 # outputs/little_prof/<step>.

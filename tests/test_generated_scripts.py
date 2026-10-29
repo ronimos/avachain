@@ -263,3 +263,16 @@ class TestAbsoluteSlopeDir:
     def test_relative_stays_under_the_repo(self, install):
         sh = install._render_run_snowpack(_cfg("little_prof"))
         assert "SLOPE_DIR=${SLOPE_DIR:-$REPO_DIR/snowpack/little_prof}" in sh
+
+
+def test_full_pipeline_runs_the_slopes_own_snowpack_script():
+    """It was hardwired to slopes/little_prof, so SLOPE=Professor_PTC would
+    have run little_prof's run_snowpack.sh and master_config.ini."""
+    import subprocess
+    sh = (REPO / "run_full_pipeline.sh").read_text()
+    head = "\n".join(l for l in sh.splitlines() if l.startswith(("SLOPE_SCRIPTS=", "[[ -f $SLOPE_SCRIPTS")))
+    for slope, want in (("little_prof_replay", "little_prof_replay"),
+                        ("little_prof_abl_pix", "little_prof")):
+        out = subprocess.run(["bash", "-c", f'PROJECT_DIR={REPO}; SLOPE={slope}\n{head}\necho $SLOPE_SCRIPTS'],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        assert out == str(REPO / "slopes" / want), (slope, out)
