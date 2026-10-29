@@ -276,3 +276,11 @@ def test_full_pipeline_runs_the_slopes_own_snowpack_script():
         out = subprocess.run(["bash", "-c", f'PROJECT_DIR={REPO}; SLOPE={slope}\n{head}\necho $SLOPE_SCRIPTS'],
                              capture_output=True, text=True, check=True).stdout.strip()
         assert out == str(REPO / "slopes" / want), (slope, out)
+
+
+def test_install_shows_paths_outside_the_repo(install, tmp_path):
+    """install.py printed every created dir and template.sno relative to the
+    repo; a deployment's slope_dir is outside it, and the rehearsal install
+    crashed on Path.relative_to."""
+    assert install._shown(REPO / "slopes" / "x", REPO) == Path("slopes/x")
+    assert install._shown(tmp_path / "work", REPO) == tmp_path / "work"
