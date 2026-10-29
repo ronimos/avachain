@@ -396,6 +396,7 @@ shapely, scipy, matplotlib, dask, zarr, folium.
 | Document | Description |
 |----------|-------------|
 | `docs/new_slope_setup.md` | Step-by-step guide for adding and running a new slope |
+| `docs/deployment.md` | The /home/avachain deployment: layout, survey markers, handoff sets, what each part reads and writes, setup and open items (copied to `/home/avachain/README.md`) |
 | `docs/release_area_geometry.md` | Release area method: BFS model, probabilistic model, validation |
 | `~/avalanche-release-areas/docs/release_area_methods.md` | Full release-area method (reference implementation): trigger selection, arrest, tensile gate, Stauchwall, Jan 18 results |
 | `docs/results_energy_mode.md` | Path-energy arrest experiments (non-default `--arrest-mode energy`) |
