@@ -1128,6 +1128,13 @@ def _shown(path: Path, base: Path) -> Path:
         return Path(path)
 
 
+def _cron_line(hour_utc, script, log_path) -> str:
+    """The crontab line. umask 002 because /home/avachain is a setgid group
+    tree (val:caic): without it cron's files are not group-writable, and the
+    other account cannot rerun or clean up after a run."""
+    return f"0 {hour_utc} * * * umask 002; {script} >> {log_path} 2>&1"
+
+
 def _cron_log_path(cfg: dict) -> Path:
     project_dir = Path(cfg["paths"]["project_dir"])
     logs = cfg["paths"].get("logs_dir", "outputs/logs")
@@ -1428,7 +1435,7 @@ def _render_admin_doc(
     lines.append(f"\nDaily run fires at **{hour_utc:02d}:00 UTC**.\n")
     lines.append("Add this line with `crontab -e`:\n")
     lines.append(f"```")
-    lines.append(f"0 {hour_utc} * * * {operational_script} >> {log_path} 2>&1")
+    lines.append(_cron_line(hour_utc, operational_script, log_path))
     lines.append("```")
 
     # --- Generated files ---
@@ -1695,7 +1702,7 @@ Examples:
     print("To schedule the daily run, add this line to your crontab")
     print("(run: crontab -e):")
     print()
-    print(f"  0 {hour_utc} * * * {operational_script} >> {log_path} 2>&1")
+    print(f"  {_cron_line(hour_utc, operational_script, log_path)}")
     print()
     # --- Admin summary doc ---
     admin_doc_path = project_dir / "slopes" / slope_name / "ADMIN.md"

@@ -66,7 +66,7 @@ Daily run fires at **03:00 UTC**.
 Add this line with `crontab -e`:
 
 ```
-0 3 * * * /home/ron/avachain/run_little_prof.sh >> /home/ron/avachain/outputs/logs/cron_little_prof.log 2>&1
+0 3 * * * umask 002; /home/ron/avachain/run_little_prof.sh >> /home/ron/avachain/outputs/logs/cron_little_prof.log 2>&1
 ```
 
 ## Generated Files

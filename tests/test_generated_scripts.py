@@ -284,3 +284,8 @@ def test_install_shows_paths_outside_the_repo(install, tmp_path):
     crashed on Path.relative_to."""
     assert install._shown(REPO / "slopes" / "x", REPO) == Path("slopes/x")
     assert install._shown(tmp_path / "work", REPO) == tmp_path / "work"
+
+
+def test_cron_line_sets_a_group_umask(install):
+    line = install._cron_line(3, "/x/run_P.sh", "/x/cron.log")
+    assert line == "0 3 * * * umask 002; /x/run_P.sh >> /x/cron.log 2>&1"
