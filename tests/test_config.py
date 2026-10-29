@@ -277,3 +277,89 @@ class TestValidationDir:
             'slope_dir   = "snowpack/test"\nvalidation_dir = "data/validation"')
         cfg = ProjectConfig.from_toml(_write_toml(tmp_path, toml))
         assert cfg.validation_dir == tmp_path / "data/validation"
+
+
+# ---------------------------------------------------------------------------
+# Per-directory [paths] overrides (deployment layout)
+# ---------------------------------------------------------------------------
+
+import subprocess
+
+from config import OVERRIDABLE_DIRS, shell_paths
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+class TestDirOverrides:
+    def test_defaults_are_the_historical_layout(self, tmp_path):
+        cfg = ProjectConfig.from_toml(_write_toml(tmp_path, MINIMAL_TOML.format(project_dir=tmp_path)))
+        out = tmp_path / "outputs" / "test"
+        assert cfg.analysis_dir == out / "analysis"
+        assert cfg.scenarios_dir == out / "scenarios"
+        assert cfg.grids_dir == out / "hourly_grids"
+        assert cfg.resampled_dir == out / "resampled_1m"
+        assert cfg.event_masks_dir == out / "event_masks"
+        assert cfg.logs_dir == out / "logs"
+        assert cfg.weather_cache_dir == tmp_path / "outputs" / "weather"
+
+    def test_relative_override_resolves_against_project_dir(self, tmp_path):
+        toml = MINIMAL_TOML.format(project_dir=tmp_path).replace(
+            '[paths]\n', '[paths]\nscenarios_dir = "handoff/P/release"\n')
+        cfg = ProjectConfig.from_toml(_write_toml(tmp_path, toml))
+        assert cfg.scenarios_dir == tmp_path / "handoff" / "P" / "release"
+        assert cfg.analysis_dir == tmp_path / "outputs" / "test" / "analysis"
+
+    def test_unknown_key_is_refused(self):
+        with pytest.raises(ValueError, match="unknown"):
+            ProjectConfig(dir_overrides={"analysis": "x"})
+
+    def test_deploy_tree_leaves_nothing_under_the_repo(self, tmp_path):
+        """Every path a deployment TOML sets is absolute; none may fall back
+        into the repo, which is where a forgotten key would silently write."""
+        deploy = tmp_path / "deploy"
+        keys = {
+            "survey_dir": "data/surveys/snow_height/P",
+            "dem": "data/static/P/dem.tif",
+            "weather_csv": "data/weather/weather_data.csv",
+            "boundary_kml": "data/static/P/boundary.kml",
+            "start_zone_kml": "data/static/P/start_zone.kml",
+            "release_geojson": "data/static/P/release.geojson",
+            "avalanche_events": "data/static/P/avalanche_events.json",
+            "validation_dir": "data/static/P/validation",
+            "output_dir": "outputs/P",
+            "slope_dir": "work/snowpack/P",
+            "analysis_dir": "work/release/P/analysis",
+            "event_masks_dir": "work/release/P/event_masks",
+            "grids_dir": "work/snowpack/P/hourly_grids",
+            "resampled_dir": "work/snowpack/P/resampled_1m",
+            "models_dir": "work/snowpack/P/models",
+            "scenarios_dir": "handoff/P/release",
+            "plots_dir": "outputs/P/plots",
+            "logs_dir": "logs/P",
+            "weather_cache_dir": "work/weather",
+        }
+        assert set(OVERRIDABLE_DIRS) <= set(keys)
+        body = "\n".join(f'{k} = "{deploy / v}"' for k, v in keys.items())
+        toml = (f'[slope]\nname = "P"\n\n[paths]\nproject_dir = "{REPO}"\n{body}\n')
+        cfg = ProjectConfig.from_toml(_write_toml(tmp_path, toml))
+
+        resolved = {name: getattr(cfg, name) for name in (
+            "survey_dir", "dem_path", "weather_csv", "boundary_kml", "start_zone_kml",
+            "release_geojson", "avalanche_events_path", "validation_dir", "output_dir",
+            "slope_dir", "smet_dir", "pro_dir", "zarr_path", *OVERRIDABLE_DIRS)}
+        inside = {k: v for k, v in resolved.items() if not Path(v).is_relative_to(deploy)}
+        assert not inside, f"paths left under the repo: {inside}"
+
+    def test_print_paths_is_shell_evaluable(self, tmp_path):
+        toml = MINIMAL_TOML.format(project_dir=tmp_path).replace(
+            '[paths]\n', '[paths]\nlogs_dir = "my logs/P"\n')
+        p = _write_toml(tmp_path, toml)
+        cfg = ProjectConfig.from_toml(p)
+        script = (f'eval "$({sys.executable} {REPO}/src/avachain/config.py '
+                  f'--toml {p} --print-paths)"; echo "$AVA_LOGS_DIR|$AVA_ANALYSIS_DIR"')
+        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+        logs, analysis = out.stdout.strip().split("|")
+        assert logs == str(tmp_path / "my logs" / "P")          # space survives quoting
+        assert analysis == str(cfg.analysis_dir)
+        assert set(shell_paths(cfg)) >= {"AVA_SLOPE_DIR", "AVA_LOGS_DIR",
+                                         "AVA_ANALYSIS_DIR", "AVA_SCENARIOS_DIR"}

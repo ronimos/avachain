@@ -40,8 +40,18 @@ def discover_surveys(cfg: ProjectConfig, as_of=None) -> list:
     no cutoff) are hidden. This is the single seam that keeps a replay from
     seeing the future: step_transport, step_avalanche and fetch_avalanche_obs
     each re-glob independently, so gating here covers all of them at once.
+
+    With cfg.survey_markers, only RUNNING and DONE surveys count
+    (survey_markers.py): a bare TIF may still be copying, READY is not yet
+    taken in, FAILED never completed.
     """
     survey_files = sorted(cfg.survey_dir.glob(cfg.survey_glob))
+    if cfg.survey_markers:
+        from survey_markers import VISIBLE, state_of
+        skipped = [f for f in survey_files if state_of(f) not in VISIBLE]
+        survey_files = [f for f in survey_files if f not in skipped]
+        if skipped:
+            print(f"Survey markers: ignoring {len(skipped)} survey(s) not RUNNING/DONE")
     surveys = [(parse_survey_date(f.name), f) for f in survey_files]
     surveys.sort(key=lambda x: x[0])
 

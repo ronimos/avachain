@@ -778,7 +778,7 @@ def step_scenarios(cfg, args):
           f"Sk38={list(triggers[sk38_col].round(3))}")
 
     # --- Output directory ---
-    base = cfg.output_dir / "scenarios" / args.snapshot_date
+    base = cfg.scenarios_dir / args.snapshot_date
     out_dir = base / args.forecast_horizon if args.forecast_horizon else base
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "scenarios").mkdir(exist_ok=True)

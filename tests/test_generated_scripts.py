@@ -143,7 +143,19 @@ class TestSlopeNamespacedPaths:
         """outputs/analysis/ (no slope) once made reinit pass 2 rerun everything."""
         sh = install._render_run_operational(_cfg(slope))
         assert "outputs/analysis/" not in sh
-        assert f"outputs/{slope}/analysis/cluster_map.npy" in sh
+        assert '"$AVA_ANALYSIS_DIR/cluster_map.npy"' in sh
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    @pytest.mark.parametrize("render", ["_render_run_operational", "_render_run_daily"])
+    def test_no_path_is_rebuilt_from_the_repo(self, install, slope, render):
+        """A deployment relocates analysis/logs/scenarios via [paths]; a script
+        that rebuilds $PROJECT_DIR/outputs/... would ignore it."""
+        sh = getattr(install, render)(_cfg(slope))
+        code = [l for l in sh.splitlines() if not l.lstrip().startswith("#")]
+        assert not [l for l in code if "outputs/" in l or "snowpack/" in l]
+        assert "--print-paths)" in sh and 'eval "$AVA_PATHS"' in sh
+        assert "SLOPE_DIR=${SLOPE_DIR:-$AVA_SLOPE_DIR}" in sh
+        assert "LOG_DIR=$AVA_LOGS_DIR" in sh
 
     @pytest.mark.parametrize("slope", SLOPES)
     def test_every_python_entry_point_gets_toml(self, install, slope):
@@ -215,7 +227,7 @@ class TestDailyFlow:
     def test_daily_is_slope_namespaced(self, install, slope):
         sh = install._render_run_daily(_cfg(slope))
         assert f"slopes/{slope}/slope_config.toml" in sh
-        assert f"outputs/{slope}/logs" in sh
+        assert "LOG_DIR=$AVA_LOGS_DIR" in sh
         assert "outputs/analysis/" not in sh
 
     @pytest.mark.parametrize("slope", SLOPES)
@@ -236,3 +248,18 @@ class TestDailyFlow:
         for mod in ("analysis_pipeline", "aws_ingest", "smet_append",
                     "nwp_ingest", "snowpack_cycle"):
             assert f"src/avachain/{mod}.py --toml $TOML" in sh, mod
+
+
+class TestAbsoluteSlopeDir:
+    """A deployment TOML gives slope_dir as an absolute path outside the repo."""
+
+    def test_run_snowpack_uses_it_as_is(self, install):
+        cfg = _cfg("little_prof")
+        cfg["paths"] = dict(cfg["paths"], slope_dir="/deploy/work/snowpack/P")
+        sh = install._render_run_snowpack(cfg)
+        assert "SLOPE_DIR=${SLOPE_DIR:-/deploy/work/snowpack/P}" in sh
+        assert "$REPO_DIR//" not in sh
+
+    def test_relative_stays_under_the_repo(self, install):
+        sh = install._render_run_snowpack(_cfg("little_prof"))
+        assert "SLOPE_DIR=${SLOPE_DIR:-$REPO_DIR/snowpack/little_prof}" in sh

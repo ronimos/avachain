@@ -198,7 +198,7 @@ SNOWPACK_BIN=${{SNOWPACK_BIN:-{snowpack_bin}}}
 export LD_LIBRARY_PATH=${{LD_LIBRARY_PATH:-}}:{snowpack_lib}
 
 REPO_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")/../.." && pwd)"
-SLOPE_DIR=${{SLOPE_DIR:-$REPO_DIR/{slope_dir_rel}}}
+SLOPE_DIR=${{SLOPE_DIR:-{slope_dir_default}}}
 SMET_DIR=${{SMET_DIR:-$SLOPE_DIR/input/smet}}
 SNOW_IN_DIR=$SLOPE_DIR/input/snow
 OUTPUT_DIR=$SLOPE_DIR/output
@@ -500,8 +500,6 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 SLOPE_SCRIPTS=$PROJECT_DIR/slopes/{slope_name}
-SLOPE_DIR=${{SLOPE_DIR:-$PROJECT_DIR/{slope_dir_rel}}}
-export SLOPE_DIR
 TOML=$PROJECT_DIR/slopes/{slope_name}/slope_config.toml
 PIPELINE="python $PROJECT_DIR/src/avachain/forcing_pipeline.py --toml $TOML"
 ANALYSIS="python $PROJECT_DIR/src/avachain/analysis_pipeline.py --toml $TOML"
@@ -509,7 +507,15 @@ NWP="python $PROJECT_DIR/src/avachain/nwp_ingest.py --toml $TOML"
 SMET_APPEND="python $PROJECT_DIR/src/avachain/smet_append.py --toml $TOML"
 CYCLE="python $PROJECT_DIR/src/avachain/snowpack_cycle.py --toml $TOML"
 VENV=$PROJECT_DIR/.venv/bin/activate
-LOG_DIR=$PROJECT_DIR/outputs/{slope_name}/logs
+# Every directory comes from the TOML (config.py --print-paths sets AVA_*),
+# never from $PROJECT_DIR/outputs/...: a deployment relocates them.
+source "$VENV"
+# Assign first: a failing config.py inside eval "$(...)" would not trip set -e.
+AVA_PATHS=$(python $PROJECT_DIR/src/avachain/config.py --toml $TOML --print-paths)
+eval "$AVA_PATHS"
+SLOPE_DIR=${{SLOPE_DIR:-$AVA_SLOPE_DIR}}
+export SLOPE_DIR
+LOG_DIR=$AVA_LOGS_DIR
 
 SNAPSHOT_DATE=""
 N_TRIGGERS={n_triggers}
@@ -536,12 +542,36 @@ done
 mkdir -p "$LOG_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOGFILE="$LOG_DIR/{slope_name}_${{TIMESTAMP}}.log"
+
+# Survey markers ([surveys] markers = true, survey_markers.py): claim the
+# oldest READY survey (READY → RUNNING) before the log opens, so a cron tick
+# with nothing new leaves no log. The EXIT trap moves RUNNING to DONE or
+# FAILED however the run ends. --snapshot is a manual rerun: no claim.
+MARKERS="python $PROJECT_DIR/src/avachain/survey_markers.py --toml $TOML"
+CLAIMED=""
+CURRENT_STEP="setup"
+if [[ $AVA_SURVEY_MARKERS -eq 1 && -z "$SNAPSHOT_DATE" ]]; then
+    CLAIMED=$($MARKERS claim --pid $$ --log "$LOGFILE")
+    [[ -z "$CLAIMED" ]] && exit 0
+fi
+_finish_marker() {{
+    local rc=$?
+    [[ -z "$CLAIMED" ]] && return
+    if [[ $rc -eq 0 ]]; then
+        $MARKERS finish --survey-date "$CLAIMED" --status DONE --exit-code 0 \
+            --log "$LOGFILE" --output "$AVA_SCENARIOS_DIR"
+    else
+        $MARKERS finish --survey-date "$CLAIMED" --status FAILED --exit-code $rc \
+            --step "$CURRENT_STEP" --log "$LOGFILE"
+    fi
+}}
+trap _finish_marker EXIT
+
 exec > >(tee -a "$LOGFILE") 2>&1
 
 cd "$PROJECT_DIR"
-source "$VENV"
 
-for f in outputs/{slope_name}/analysis/cluster_map.npy outputs/{slope_name}/analysis/cluster_map.tif; do
+for f in "$AVA_ANALYSIS_DIR/cluster_map.npy" "$AVA_ANALYSIS_DIR/cluster_map.tif"; do
     if [[ ! -f "$f" ]]; then
         echo "ERROR: $f not found. Run the full pipeline first." >&2
         exit 1
@@ -557,6 +587,7 @@ from pipeline_io import discover_surveys
 s = discover_surveys(ProjectConfig.from_toml(Path('$TOML')))
 print(s[-1][0].isoformat() if s else '')
 " 2>/dev/null | tail -1)
+[[ -n "$CLAIMED" ]] && SURVEY_DATE=$CLAIMED
 if [[ -z "$SURVEY_DATE" ]]; then
     echo "ERROR: no survey visible" >&2
     exit 1
@@ -576,6 +607,7 @@ SNAPSHOT_ARG=""
 [[ -n "$SNAPSHOT_DATE" ]] && SNAPSHOT_ARG="--snapshot-date $SNAPSHOT_DATE"
 
 echo ">>> Step 1: Resample"
+CURRENT_STEP="Step 1: Resample"
 step1_start=$SECONDS
 $PIPELINE resample
 step1_elapsed=$((SECONDS - step1_start))
@@ -583,6 +615,7 @@ echo "    Done: $((step1_elapsed / 60))m $((step1_elapsed % 60))s"
 echo ""
 
 echo ">>> Step 1b: Transport + avalanche detection on the new survey pair"
+CURRENT_STEP="Step 1b: Transport + avalanche detection on the new survey pair"
 step1b_start=$SECONDS
 $PIPELINE transport
 $PIPELINE avalanche
@@ -591,6 +624,7 @@ echo "    Done: $((step1b_elapsed / 60))m $((step1b_elapsed % 60))s"
 echo ""
 
 echo ">>> Step 2: Gap-fill"
+CURRENT_STEP="Step 2: Gap-fill"
 step2_start=$SECONDS
 $PIPELINE gap_fill
 step2_elapsed=$((SECONDS - step2_start))
@@ -598,6 +632,7 @@ echo "    Done: $((step2_elapsed / 60))m $((step2_elapsed % 60))s"
 echo ""
 
 echo ">>> Step 2b: Cluster update"
+CURRENT_STEP="Step 2b: Cluster update"
 step2b_start=$SECONDS
 if [[ $NO_CLUSTER_UPDATE -eq 0 ]]; then
     $PIPELINE cluster_update
@@ -609,6 +644,7 @@ echo "    Done: $((step2b_elapsed / 60))m $((step2b_elapsed % 60))s"
 echo ""
 
 echo ">>> Step 2c: SMET generation + observations since the survey"
+CURRENT_STEP="Step 2c: SMET generation + observations since the survey"
 step2c_start=$SECONDS
 $PIPELINE smet
 # smet ends at the survey time; append station observations up to now.
@@ -618,6 +654,7 @@ echo "    Done: $((step2c_elapsed / 60))m $((step2c_elapsed % 60))s"
 echo ""
 
 echo ">>> Step 2d: NWP forecast extension"
+CURRENT_STEP="Step 2d: NWP forecast extension"
 step2d_start=$SECONDS
 NWP_EDATE=""
 if [[ $NO_NWP -eq 0 ]]; then
@@ -652,6 +689,7 @@ echo "    Done: $((step2d_elapsed / 60))m $((step2d_elapsed % 60))s"
 echo ""
 
 echo ">>> Step 3: SNOWPACK survey cycle (re-run from the previous survey)"
+CURRENT_STEP="Step 3: SNOWPACK survey cycle (re-run from the previous survey)"
 step3_start=$SECONDS
 CYCLE_ARGS="survey --survey-date $SURVEY_DATE"
 [[ -n "$STABLE_TS" ]] && CYCLE_ARGS="$CYCLE_ARGS --stable-ts $STABLE_TS --nwp-edate $NWP_EDATE"
@@ -661,6 +699,7 @@ echo "    Done: $((step3_elapsed / 60))m $((step3_elapsed % 60))s"
 echo ""
 
 echo ">>> Step 4: Analysis + scenario generation"
+CURRENT_STEP="Step 4: Analysis + scenario generation"
 step4_start=$SECONDS
 $ANALYSIS analyze $SNAPSHOT_ARG
 if [[ $NO_SCENARIOS -eq 0 ]]; then
@@ -690,7 +729,7 @@ echo "  Step 2d (nwp_ingest):      $((step2d_elapsed / 60))m $((step2d_elapsed %
 echo "  Step 3  (SNOWPACK cycle):  $((step3_elapsed / 60))m $((step3_elapsed % 60))s"
 echo "  Step 4  (analysis):        $((step4_elapsed / 60))m $((step4_elapsed % 60))s"
 echo ""
-echo "  Scenarios: $PROJECT_DIR/outputs/{slope_name}/scenarios/"
+echo "  Scenarios: $AVA_SCENARIOS_DIR/"
 echo "  Log:       $LOGFILE"
 echo "============================================================"
 """
@@ -731,8 +770,6 @@ _RUN_DAILY_TEMPLATE = """\
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-SLOPE_DIR=${{SLOPE_DIR:-$PROJECT_DIR/{slope_dir_rel}}}
-export SLOPE_DIR
 TOML=$PROJECT_DIR/slopes/{slope_name}/slope_config.toml
 ANALYSIS="python $PROJECT_DIR/src/avachain/analysis_pipeline.py --toml $TOML"
 AWS="python $PROJECT_DIR/src/avachain/aws_ingest.py --toml $TOML"
@@ -740,7 +777,15 @@ SMET_APPEND="python $PROJECT_DIR/src/avachain/smet_append.py --toml $TOML"
 NWP="python $PROJECT_DIR/src/avachain/nwp_ingest.py --toml $TOML"
 CYCLE="python $PROJECT_DIR/src/avachain/snowpack_cycle.py --toml $TOML"
 VENV=$PROJECT_DIR/.venv/bin/activate
-LOG_DIR=$PROJECT_DIR/outputs/{slope_name}/logs
+# Every directory comes from the TOML (config.py --print-paths sets AVA_*),
+# never from $PROJECT_DIR/outputs/...: a deployment relocates them.
+source "$VENV"
+# Assign first: a failing config.py inside eval "$(...)" would not trip set -e.
+AVA_PATHS=$(python $PROJECT_DIR/src/avachain/config.py --toml $TOML --print-paths)
+eval "$AVA_PATHS"
+SLOPE_DIR=${{SLOPE_DIR:-$AVA_SLOPE_DIR}}
+export SLOPE_DIR
+LOG_DIR=$AVA_LOGS_DIR
 
 SNAPSHOT_DATE=""
 NO_NWP=0
@@ -772,7 +817,6 @@ echo "============================================================"
 echo ""
 
 cd "$PROJECT_DIR"
-source "$VENV"
 
 SECONDS=0
 SNAPSHOT_ARG=""
@@ -1069,6 +1113,12 @@ def _update_wrf_in_toml(toml_path: Path, wrf: dict) -> None:
 # Directory creation
 # ---------------------------------------------------------------------------
 
+def _cron_log_path(cfg: dict) -> Path:
+    project_dir = Path(cfg["paths"]["project_dir"])
+    logs = cfg["paths"].get("logs_dir", "outputs/logs")
+    return project_dir / logs / f"cron_{cfg['slope']['name']}.log"
+
+
 def _make_dirs(cfg: dict) -> None:
     project_dir = Path(cfg["paths"]["project_dir"])
     slope_name  = cfg["slope"]["name"]
@@ -1094,14 +1144,16 @@ def _make_dirs(cfg: dict) -> None:
         slope_dir / "output",
     ]
 
-    # Per-slope output dirs
-    for sub in ("analysis", "scenarios", "plots", "models", "hourly_grids",
-                "resampled_1m", "logs"):
-        dirs.append(output_dir / sub)
+    # Per-slope output dirs; a [paths] <key> relocates one (config.OVERRIDABLE_DIRS)
+    for key, sub in (("analysis_dir", "analysis"), ("scenarios_dir", "scenarios"),
+                     ("plots_dir", "plots"), ("models_dir", "models"),
+                     ("grids_dir", "hourly_grids"), ("resampled_dir", "resampled_1m"),
+                     ("logs_dir", "logs")):
+        dirs.append(project_dir / paths[key] if key in paths else output_dir / sub)
 
     # Shared dirs (not namespaced — used by all slopes)
     dirs += [
-        project_dir / "outputs" / "weather",
+        project_dir / paths.get("weather_cache_dir", "outputs/weather"),
         project_dir / "slopes" / slope_name / "config",
         project_dir / "slopes" / slope_name / "external_models",
     ]
@@ -1149,10 +1201,14 @@ def _render_run_snowpack(cfg: dict) -> str:
     project_dir = paths["project_dir"]
     slope_name  = slope["name"]
     slope_dir_rel = paths.get("slope_dir", f"snowpack/{slope_name}")
+    # An absolute slope_dir (a deployment) is used as is; "$REPO_DIR//abs"
+    # would point back inside the repo.
+    slope_dir_default = (slope_dir_rel if Path(slope_dir_rel).is_absolute()
+                         else f"$REPO_DIR/{slope_dir_rel}")
     return _RUN_SNOWPACK_TEMPLATE.format(
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,
-        slope_dir_rel = slope_dir_rel,
+        slope_dir_default = slope_dir_default,
         snowpack_bin  = sp.get("binary", "/path/to/snowpack"),
         snowpack_lib  = sp.get("lib_dir", ""),
         season_end    = sp.get("season_end", "YYYY-MM-DD"),
@@ -1169,7 +1225,6 @@ def _render_run_daily(cfg: dict) -> str:
     return _RUN_DAILY_TEMPLATE.format(
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,
-        slope_dir_rel = paths.get("slope_dir", f"snowpack/{slope_name}"),
     )
 
 
@@ -1179,13 +1234,11 @@ def _render_run_operational(cfg: dict) -> str:
     sc          = cfg.get("scenarios", {})
     project_dir = paths["project_dir"]
     slope_name  = slope["name"]
-    slope_dir_rel = paths.get("slope_dir", f"snowpack/{slope_name}")
     size_factors = sc.get("size_factors", [0.70, 0.85, 1.00, 1.15, 1.30])
     depth_pcts   = sc.get("depth_percentiles", [10, 50, 90])
     return _RUN_OPERATIONAL_TEMPLATE.format(
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,
-        slope_dir_rel = slope_dir_rel,
         n_triggers    = sc.get("n_triggers", 5),
         size_factors  = " ".join(str(x) for x in size_factors),
         depth_pcts    = " ".join(str(x) for x in depth_pcts),
@@ -1269,7 +1322,7 @@ def _render_admin_doc(
     name         = slope["name"]
     display_name = slope.get("display_name", name)
     hour_utc     = cron_cfg.get("hour_utc", 20)
-    log_path     = project_dir / "outputs" / "logs" / f"cron_{name}.log"
+    log_path     = _cron_log_path(cfg)
 
     lines: list[str] = []
 
@@ -1597,7 +1650,7 @@ Examples:
 
     # --- Cron ---
     hour_utc  = cfg.get("cron", {}).get("hour_utc", 20)
-    log_path  = project_dir / "outputs" / "logs" / f"cron_{slope_name}.log"
+    log_path  = _cron_log_path(cfg)
 
     print()
     print("=" * 60)

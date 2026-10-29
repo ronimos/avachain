@@ -43,8 +43,6 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # run_snowpack.sh is shared and reads SLOPE_DIR from the environment.
 SLOPE=${SLOPE:-little_prof}
 SLOPE_SCRIPTS=$PROJECT_DIR/slopes/little_prof
-SLOPE_DIR=${SLOPE_DIR:-$PROJECT_DIR/snowpack/$SLOPE}
-export SLOPE_DIR
 # --toml on every call: without it a subprocess silently falls back to the
 # default ProjectConfig and reads/writes outputs/<step> instead of
 # outputs/little_prof/<step>.
@@ -52,8 +50,15 @@ TOML=$PROJECT_DIR/slopes/$SLOPE/slope_config.toml
 PIPELINE="python $PROJECT_DIR/src/avachain/forcing_pipeline.py --toml $TOML"
 ANALYSIS="python $PROJECT_DIR/src/avachain/analysis_pipeline.py --toml $TOML"
 VENV=$PROJECT_DIR/.venv/bin/activate
-OUT_DIR=$PROJECT_DIR/outputs/$SLOPE
-LOG_DIR=$OUT_DIR/logs
+# Every directory comes from the TOML (config.py --print-paths sets AVA_*),
+# never from $PROJECT_DIR/outputs/...: a deployment relocates them.
+source "$VENV"
+# Assign first: a failing config.py inside eval "$(...)" would not trip set -e.
+AVA_PATHS=$(python $PROJECT_DIR/src/avachain/config.py --toml $TOML --print-paths)
+eval "$AVA_PATHS"
+SLOPE_DIR=${SLOPE_DIR:-$AVA_SLOPE_DIR}
+export SLOPE_DIR
+LOG_DIR=$AVA_LOGS_DIR
 
 # Defaults
 SNAPSHOT_DATE=""
@@ -109,7 +114,6 @@ echo "============================================================"
 echo ""
 
 cd "$PROJECT_DIR"
-source "$VENV"
 
 SECONDS=0
 
@@ -131,7 +135,7 @@ $PIPELINE features
 $PIPELINE train
 $PIPELINE avalanche
 if [[ $KEEP_CLUSTER_MAP -eq 1 ]]; then
-    echo "    --keep-cluster-map: skipping cluster (using $OUT_DIR/analysis/cluster_map.npy)"
+    echo "    --keep-cluster-map: skipping cluster (using $AVA_ANALYSIS_DIR/cluster_map.npy)"
 else
     $PIPELINE cluster
 fi
@@ -214,7 +218,7 @@ if [[ $REINIT -eq 1 ]]; then
     # path bug had hidden this by falling back to all clusters.
     echo ""
     echo "    Pass 2: $EVENT_DATE → end of season (all clusters, from their restarts)"
-    REINIT_STATS="$OUT_DIR/analysis/reinit_stats_${EVENT_DATE}.json"
+    REINIT_STATS="$AVA_ANALYSIS_DIR/reinit_stats_${EVENT_DATE}.json"
     [[ -f "$REINIT_STATS" ]] || echo "    WARNING: reinit stats not found at $REINIT_STATS"
     SKIP_ZARR=1 bash "$SLOPE_SCRIPTS/run_snowpack.sh"
 else
@@ -269,6 +273,6 @@ echo ""
 echo "  Outputs:"
 echo "    SMET files:    $SLOPE_DIR/input/smet/"
 echo "    SNOWPACK:      $SLOPE_DIR/output/"
-echo "    Scenarios:     $OUT_DIR/scenarios/"
+echo "    Scenarios:     $AVA_SCENARIOS_DIR/"
 echo "    Log:           $LOGFILE"
 echo "============================================================"

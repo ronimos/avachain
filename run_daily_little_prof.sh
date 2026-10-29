@@ -28,8 +28,6 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SLOPE_DIR=${SLOPE_DIR:-$PROJECT_DIR/snowpack/little_prof}
-export SLOPE_DIR
 TOML=$PROJECT_DIR/slopes/little_prof/slope_config.toml
 ANALYSIS="python $PROJECT_DIR/src/avachain/analysis_pipeline.py --toml $TOML"
 AWS="python $PROJECT_DIR/src/avachain/aws_ingest.py --toml $TOML"
@@ -37,7 +35,15 @@ SMET_APPEND="python $PROJECT_DIR/src/avachain/smet_append.py --toml $TOML"
 NWP="python $PROJECT_DIR/src/avachain/nwp_ingest.py --toml $TOML"
 CYCLE="python $PROJECT_DIR/src/avachain/snowpack_cycle.py --toml $TOML"
 VENV=$PROJECT_DIR/.venv/bin/activate
-LOG_DIR=$PROJECT_DIR/outputs/little_prof/logs
+# Every directory comes from the TOML (config.py --print-paths sets AVA_*),
+# never from $PROJECT_DIR/outputs/...: a deployment relocates them.
+source "$VENV"
+# Assign first: a failing config.py inside eval "$(...)" would not trip set -e.
+AVA_PATHS=$(python $PROJECT_DIR/src/avachain/config.py --toml $TOML --print-paths)
+eval "$AVA_PATHS"
+SLOPE_DIR=${SLOPE_DIR:-$AVA_SLOPE_DIR}
+export SLOPE_DIR
+LOG_DIR=$AVA_LOGS_DIR
 
 SNAPSHOT_DATE=""
 NO_NWP=0
@@ -69,7 +75,6 @@ echo "============================================================"
 echo ""
 
 cd "$PROJECT_DIR"
-source "$VENV"
 
 SECONDS=0
 SNAPSHOT_ARG=""

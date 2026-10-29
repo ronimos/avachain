@@ -16,6 +16,15 @@ from typing import Optional
 # rasterio returns EPSG=None for compound CRS; the horizontal component is 6342.
 RASTER_EPSG = 6342
 
+# Directories a slope TOML may relocate individually under [paths]. Each
+# defaults to its historical place under output_dir (weather_cache_dir: the
+# shared project_dir/outputs/weather). Relative values resolve against
+# project_dir; absolute ones are used as given.
+OVERRIDABLE_DIRS = (
+    "analysis_dir", "plots_dir", "grids_dir", "resampled_dir", "scenarios_dir",
+    "models_dir", "logs_dir", "event_masks_dir", "weather_cache_dir",
+)
+
 # Environment variable holding the simulated "now" for operational replay.
 AS_OF_ENV = "AVACHAIN_AS_OF"
 
@@ -92,6 +101,10 @@ class ProjectConfig:
     # Expected format: YYMMDD_*_snowHeight.tif
     # The date prefix is extracted automatically
     survey_glob: str = "*_snowHeight.tif"
+    # [surveys] markers: a survey counts only once its producer's marker says
+    # so (survey_markers.py: RUNNING or DONE). Off for trees whose surveys
+    # carry no markers (dev, replays); on in a deployment.
+    survey_markers: bool = False
     bare_ground_date: str = "251126"  # YYMMDD of the bare ground DEM
 
     # --- Station metadata ---
@@ -154,6 +167,11 @@ class ProjectConfig:
     # against, but never in event_mask_for: reinit keeps the mapped crown.
     # None (the default) = off, so a blind replay slope cannot pick it up.
     validation_dir: Optional[Path] = None
+    # Per-directory overrides ([paths] <name> for each name in OVERRIDABLE_DIRS).
+    # Unset keys keep the historical layout under output_dir, so the dev tree
+    # is unchanged; a deployment points them at work/, handoff/, outputs/ and
+    # logs/ separately, which fixed sub-paths of output_dir cannot express.
+    dir_overrides: dict = field(default_factory=dict)
 
     def __post_init__(self):
         """Resolve paths relative to project_dir."""
@@ -170,6 +188,14 @@ class ProjectConfig:
             self.avalanche_events_file = self.project_dir / self.avalanche_events_file
         if self.validation_dir is not None:
             self.validation_dir = self.project_dir / self.validation_dir
+        unknown = set(self.dir_overrides) - set(OVERRIDABLE_DIRS)
+        if unknown:
+            raise ValueError(f"unknown [paths] directory key(s): {sorted(unknown)}")
+        self.dir_overrides = {k: self.project_dir / Path(v)
+                              for k, v in self.dir_overrides.items()}
+
+    def _dir(self, name: str, default: Path) -> Path:
+        return self.dir_overrides.get(name, default)
 
     @property
     def boundaries_dir(self) -> Path:
@@ -178,7 +204,7 @@ class ProjectConfig:
     @property
     def weather_cache_dir(self) -> Path:
         """Shared weather-station parquet cache — not slope-namespaced."""
-        return self.project_dir / "outputs" / "weather"
+        return self._dir("weather_cache_dir", self.project_dir / "outputs" / "weather")
 
     @property
     def avalanche_events_path(self) -> Path:
@@ -193,7 +219,7 @@ class ProjectConfig:
         used to write its masks there, where a replay's masks would have been
         read back by a later live reinit as if they were observed.
         """
-        return self.output_dir / "event_masks"
+        return self._dir("event_masks_dir", self.output_dir / "event_masks")
 
     def event_mask_for(self, event_date) -> Optional[Path]:
         """Release polygon for an event: an observed/hand-drawn one in
@@ -242,11 +268,11 @@ class ProjectConfig:
 
     @property
     def analysis_dir(self) -> Path:
-        return self.output_dir / "analysis"
+        return self._dir("analysis_dir", self.output_dir / "analysis")
 
     @property
     def plots_dir(self) -> Path:
-        return self.output_dir / "plots"
+        return self._dir("plots_dir", self.output_dir / "plots")
     
 
     @property
@@ -259,11 +285,11 @@ class ProjectConfig:
 
     @property
     def grids_dir(self) -> Path:
-        return self.output_dir / "hourly_grids"
+        return self._dir("grids_dir", self.output_dir / "hourly_grids")
 
     @property
     def resampled_dir(self) -> Path:
-        return self.output_dir / "resampled_1m"
+        return self._dir("resampled_dir", self.output_dir / "resampled_1m")
 
     @property
     def pro_dir(self) -> Path:
@@ -288,15 +314,15 @@ class ProjectConfig:
 
     @property
     def scenarios_dir(self) -> Path:
-        return self.output_dir / "scenarios"
+        return self._dir("scenarios_dir", self.output_dir / "scenarios")
 
     @property
     def models_dir(self) -> Path:
-        return self.output_dir / "models"
+        return self._dir("models_dir", self.output_dir / "models")
 
     @property
     def logs_dir(self) -> Path:
-        return self.output_dir / "logs"
+        return self._dir("logs_dir", self.output_dir / "logs")
 
     @property
     def dem_1m_path(self) -> Path:
@@ -328,6 +354,7 @@ class ProjectConfig:
         slope     = data.get("slope", {})
         scenarios = data.get("scenarios", {})
         processing = data.get("processing", {})
+        surveys   = data.get("surveys", {})
         wrf       = data.get("wrf", {})
         stations  = {s["role"]: s for s in data.get("stations", [])}
         summit    = stations.get("summit", {})
@@ -352,6 +379,7 @@ class ProjectConfig:
                             if "validation_dir" in paths else None),
             windninja_library_dir=Path(paths.get("windninja_library_dir", "windninja/library")),
             clean_survey_pixels=bool(processing.get("clean_survey_pixels", True)),
+            survey_markers=bool(surveys.get("markers", False)),
             slope_name=slope_name,
             slope_dir=Path(paths.get("slope_dir", f"snowpack/{slope_name}")),
             summit_id=summit.get("sql_id", ""),
@@ -370,5 +398,43 @@ class ProjectConfig:
             stations=data.get("stations", []),
             wrf_smet_file=Path(wrf["wrf_smet_file"]) if wrf.get("wrf_smet_file") else None,
             wrf_smet_dir= Path(wrf["wrf_smet_dir"])  if wrf.get("wrf_smet_dir")  else None,
+            dir_overrides={k: paths[k] for k in OVERRIDABLE_DIRS if k in paths},
         )
             
+
+def shell_paths(cfg: ProjectConfig) -> dict:
+    """Directories the shell scripts need, as AVA_<NAME> -> absolute path.
+
+    The scripts used to rebuild these from $PROJECT_DIR/outputs/<slope>/...,
+    which is wrong as soon as a TOML relocates a directory. They eval
+    `config.py --toml X --print-paths` instead, so the TOML stays the one
+    source of truth for where things live.
+    """
+    return {
+        "AVA_SLOPE_NAME":    cfg.slope_name,
+        "AVA_SLOPE_DIR":     cfg.slope_dir,
+        "AVA_OUTPUT_DIR":    cfg.output_dir,
+        "AVA_SURVEY_DIR":    cfg.survey_dir,
+        "AVA_SURVEY_MARKERS": int(cfg.survey_markers),
+        "AVA_ANALYSIS_DIR":  cfg.analysis_dir,
+        "AVA_PLOTS_DIR":     cfg.plots_dir,
+        "AVA_SCENARIOS_DIR": cfg.scenarios_dir,
+        "AVA_LOGS_DIR":      cfg.logs_dir,
+        "AVA_WEATHER_CACHE_DIR": cfg.weather_cache_dir,
+        "AVA_PRO_DIR":       cfg.pro_dir,
+        "AVA_ZARR_PATH":     cfg.zarr_path,
+    }
+
+
+if __name__ == "__main__":
+    import argparse
+    import shlex
+
+    ap = argparse.ArgumentParser(description="Inspect a slope configuration.")
+    ap.add_argument("--toml", required=True, help="slope_config.toml")
+    ap.add_argument("--print-paths", action="store_true",
+                    help="print AVA_*=<path> lines for `eval` in a shell script")
+    args = ap.parse_args()
+    if args.print_paths:
+        for k, v in shell_paths(ProjectConfig.from_toml(args.toml)).items():
+            print(f"{k}={shlex.quote(str(Path(v).resolve() if isinstance(v, Path) else v))}")

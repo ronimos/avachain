@@ -163,7 +163,7 @@ def archive_tick(cfg: ProjectConfig, tick: dict, rec: dict, out: Path) -> None:
     for name in (f"all_start_zone_features_{d}.csv", f"meloche_features_all_{d}.csv"):
         if (cfg.analysis_dir / name).exists():
             shutil.copy2(cfg.analysis_dir / name, out / name)
-    scen = cfg.output_dir / "scenarios" / d
+    scen = cfg.scenarios_dir / d
     for name in ("summary.csv", "trigger_locations.geojson", "metadata.json"):
         if (scen / name).exists():
             shutil.copy2(scen / name, out / name)
