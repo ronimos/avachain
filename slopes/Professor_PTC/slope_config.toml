@@ -98,4 +98,9 @@ wrf_smet_file = "/ssd/snowpack/fcst/2025/zone055/077963/0779632_res.smet"
 wrf_dist_km   = 0.714
 
 [cron]
-hour_utc = 3
+# With [surveys] markers on, hour_utc is unused: run_Professor_PTC.sh is
+# polled every poll_minutes (a tick with nothing READY exits silently) and
+# run_daily_Professor_PTC.sh fires at daily_hour_utc (13 UTC = 06:00 MST).
+hour_utc       = 3
+poll_minutes   = 10
+daily_hour_utc = 13

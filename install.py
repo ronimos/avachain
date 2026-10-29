@@ -764,8 +764,8 @@ _RUN_DAILY_TEMPLATE = """\
 #   ./run_daily_{slope_name}.sh --no-scenarios
 #   ./run_daily_{slope_name}.sh --dry-run        # report SMET appends only
 #
-# Cron:
-#   0 8 * * *  <project_dir>/run_daily_{slope_name}.sh >> <log> 2>&1
+# Cron: the lines install.py prints ([cron] daily_hour_utc, under the same
+# flock as the survey poll so the two never overlap).
 
 set -euo pipefail
 
@@ -1135,6 +1135,35 @@ def _cron_line(hour_utc, script, log_path) -> str:
     return f"0 {hour_utc} * * * umask 002; {script} >> {log_path} 2>&1"
 
 
+def _cron_lines(cfg: dict, project_dir: Path) -> list[str]:
+    """Every crontab line for the slope.
+
+    Without survey markers there is no cheap "anything new?" test, so the
+    survey script runs once a day at [cron] hour_utc, as before.
+
+    With markers (Ron, 2026-10-29) the survey script is polled every
+    [cron] poll_minutes: a tick with nothing READY exits before its log opens,
+    so polling costs nothing, and a survey starts within minutes of its marker
+    instead of waiting for the evening slot. The daily script runs once at
+    [cron] daily_hour_utc. Both share one flock: they write the same SMETs and
+    restart files, so they must never overlap. A poll that finds the lock taken
+    skips the tick (-n) and its READY survey waits for the next one; the daily
+    run waits for the lock instead, because skipping it would lose the day."""
+    name     = cfg["slope"]["name"]
+    cron_cfg = cfg.get("cron", {})
+    log_path = _cron_log_path(cfg)
+    survey   = project_dir / f"run_{name}.sh"
+    if not cfg.get("surveys", {}).get("markers", False):
+        return [_cron_line(cron_cfg.get("hour_utc", 20), survey, log_path)]
+    poll  = int(cron_cfg.get("poll_minutes", 10))
+    daily = cron_cfg.get("daily_hour_utc", 13)
+    lock  = log_path.parent / f".cron_{name}.lock"
+    return [
+        f"*/{poll} * * * * umask 002; flock -n {lock} {survey} >> {log_path} 2>&1",
+        f"0 {daily} * * * umask 002; flock {lock} {project_dir / f'run_daily_{name}.sh'} >> {log_path} 2>&1",
+    ]
+
+
 def _cron_log_path(cfg: dict) -> Path:
     project_dir = Path(cfg["paths"]["project_dir"])
     logs = cfg["paths"].get("logs_dir", "outputs/logs")
@@ -1344,8 +1373,6 @@ def _render_admin_doc(
     name         = slope["name"]
     display_name = slope.get("display_name", name)
     hour_utc     = cron_cfg.get("hour_utc", 20)
-    log_path     = _cron_log_path(cfg)
-
     lines: list[str] = []
 
     def h1(t: str) -> None: lines.append(f"# {t}")
@@ -1432,10 +1459,16 @@ def _render_admin_doc(
 
     # --- Cron ---
     h2("Cron Schedule")
-    lines.append(f"\nDaily run fires at **{hour_utc:02d}:00 UTC**.\n")
-    lines.append("Add this line with `crontab -e`:\n")
+    if cfg.get("surveys", {}).get("markers", False):
+        lines.append(f"\nThe survey script polls for READY surveys every "
+                     f"**{cron_cfg.get('poll_minutes', 10)} min**; the daily run fires at "
+                     f"**{cron_cfg.get('daily_hour_utc', 13):02d}:00 UTC**. "
+                     "Both share one lock, so they never overlap.\n")
+    else:
+        lines.append(f"\nDaily run fires at **{hour_utc:02d}:00 UTC**.\n")
+    lines.append("Add these lines with `crontab -e`:\n")
     lines.append(f"```")
-    lines.append(_cron_line(hour_utc, operational_script, log_path))
+    lines.extend(_cron_lines(cfg, project_dir))
     lines.append("```")
 
     # --- Generated files ---
@@ -1670,10 +1703,6 @@ Examples:
     print(f"Writing {daily_script.name} ...")
     _write_script(daily_script, _render_run_daily(cfg))
 
-    # --- Cron ---
-    hour_utc  = cfg.get("cron", {}).get("hour_utc", 20)
-    log_path  = _cron_log_path(cfg)
-
     print()
     print("=" * 60)
     print("Installation complete.")
@@ -1699,10 +1728,11 @@ Examples:
             print(f"    # outputs/weather stays in place (shared across slopes)")
             print()
     print()
-    print("To schedule the daily run, add this line to your crontab")
+    print("To schedule the runs, add these lines to your crontab")
     print("(run: crontab -e):")
     print()
-    print(f"  {_cron_line(hour_utc, operational_script, log_path)}")
+    for line in _cron_lines(cfg, project_dir):
+        print(f"  {line}")
     print()
     # --- Admin summary doc ---
     admin_doc_path = project_dir / "slopes" / slope_name / "ADMIN.md"

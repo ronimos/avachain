@@ -16,7 +16,11 @@ per-cluster terrain wiring is present in the template rather than only in a
 file someone hand-edited.
 """
 import importlib.util
+import os
+import signal
+import shutil
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -289,3 +293,56 @@ def test_install_shows_paths_outside_the_repo(install, tmp_path):
 def test_cron_line_sets_a_group_umask(install):
     line = install._cron_line(3, "/x/run_P.sh", "/x/cron.log")
     assert line == "0 3 * * * umask 002; /x/run_P.sh >> /x/cron.log 2>&1"
+
+
+def _cron_cfg(tmp_path, markers):
+    return {"slope": {"name": "P"},
+            "paths": {"project_dir": str(tmp_path), "logs_dir": str(tmp_path / "logs")},
+            "surveys": {"markers": markers},
+            "cron": {"hour_utc": 3, "poll_minutes": 10, "daily_hour_utc": 13}}
+
+
+def test_cron_without_markers_is_one_daily_survey_run(install, tmp_path):
+    """No markers means no cheap 'anything new?' test, so polling would rebuild
+    every tick: keep the single evening line."""
+    assert install._cron_lines(_cron_cfg(tmp_path, False), tmp_path) == [
+        f"0 3 * * * umask 002; {tmp_path}/run_P.sh >> {tmp_path}/logs/cron_P.log 2>&1"]
+
+
+def test_cron_with_markers_polls_survey_and_runs_daily_under_one_lock(install, tmp_path):
+    poll, daily = install._cron_lines(_cron_cfg(tmp_path, True), tmp_path)
+    lock = f"{tmp_path}/logs/.cron_P.lock"
+    assert poll == (f"*/10 * * * * umask 002; flock -n {lock} {tmp_path}/run_P.sh "
+                    f">> {tmp_path}/logs/cron_P.log 2>&1")
+    assert daily == (f"0 13 * * * umask 002; flock {lock} {tmp_path}/run_daily_P.sh "
+                     f">> {tmp_path}/logs/cron_P.log 2>&1")
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock")
+def test_cron_poll_skips_while_a_run_holds_the_lock(install, tmp_path):
+    """Run the generated command parts in a real shell: with the lock held
+    (a survey or daily run in progress) the poll must not start the script,
+    and once the lock is free it must."""
+    import subprocess
+    (tmp_path / "logs").mkdir()
+    for name in ("run_P.sh", "run_daily_P.sh"):
+        script = tmp_path / name
+        script.write_text(f"#!/bin/bash\necho {name} >> {tmp_path}/ran\n")
+        script.chmod(0o755)
+    poll, _ = install._cron_lines(_cron_cfg(tmp_path, True), tmp_path)
+    command = poll.split(" ", 5)[5]           # drop the five schedule fields
+    lock = tmp_path / "logs" / ".cron_P.lock"
+    # Own session: flock forks sleep, which inherits the lock, so killing
+    # flock alone would leave the lock held.
+    holder = subprocess.Popen(["flock", str(lock), "sleep", "30"], start_new_session=True)
+    try:
+        for _ in range(50):                   # wait until the holder has the lock
+            if subprocess.run(["flock", "-n", str(lock), "true"]).returncode != 0:
+                break
+            time.sleep(0.05)
+        subprocess.run(["bash", "-c", command], check=False)
+        assert not (tmp_path / "ran").exists()
+    finally:
+        os.killpg(holder.pid, signal.SIGKILL); holder.wait()
+    subprocess.run(["bash", "-c", command], check=True)
+    assert (tmp_path / "ran").read_text() == "run_P.sh\n"

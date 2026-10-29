@@ -225,6 +225,15 @@ The SNOWPACK state carries over between runs as restart files in
 - `<cid>_survey.sno`: the state at the last survey;
 - `<cid>_anchor.sno`: the observed state for the daily runs.
 
+**Cron** (Ron, 2026-10-29). `run_Professor_PTC.sh` is polled every
+`[cron] poll_minutes` (10). A tick with nothing `READY` exits before its log
+opens, so polling costs nothing, and a survey starts within minutes of its
+marker. `run_daily_Professor_PTC.sh` fires once at `[cron] daily_hour_utc`
+(13 UTC = 06:00 MST). Both run under one `flock` on
+`logs/<path>/.cron_<path>.lock`, because they write the same SMETs and restart
+files. A poll that finds the lock taken skips that tick, and its survey stays
+`READY` for the next one. The daily run waits for the lock instead.
+
 A survey run restarts from the previous survey's state. A daily run restarts
 from the daily anchor, never from a forecast state.
 
@@ -262,7 +271,7 @@ for cron's own output. The marker body of a failed survey points to its log.
 5. Initialise the survey and daily anchors (`snowpack_cycle.py init-anchors`).
 6. Pass acceptance: the Jan 18 feature CSVs and scores must be byte-identical
    to the dev tree's, followed by a February replay with `$AVACHAIN_AS_OF`.
-7. Install cron last, using the line `install.py` prints, which starts with
+7. Install cron last, using the lines `install.py` prints. Each starts with
    `umask 002;`.
 
 **Per survey, from the producer:** the TIF, then its `READY` marker, named as
@@ -282,9 +291,5 @@ in §2.1. Nothing else is needed.
   daily path cannot run unattended on live data.
 - **No runout consumer yet.** Nothing reads `handoff/<path>/release/` yet. The
   com1DFA runner (Ron, since 2026-10-28) must follow §2.5–2.6.
-- **Cron cadence is undecided.** `install.py` currently schedules the survey
-  script once a day at `[cron] hour_utc`. With markers, the proposal is to poll
-  `run_<path>.sh` every 10–15 min (a tick with nothing `READY` exits silently)
-  and run `run_daily_<path>.sh` once each morning.
 - **Path name.** The dev tree keeps `little_prof` until the deployment passes
   acceptance, then gets one mechanical rename to `Professor_PTC`.

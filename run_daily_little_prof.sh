@@ -22,8 +22,8 @@
 #   ./run_daily_little_prof.sh --no-scenarios
 #   ./run_daily_little_prof.sh --dry-run        # report SMET appends only
 #
-# Cron:
-#   0 8 * * *  <project_dir>/run_daily_little_prof.sh >> <log> 2>&1
+# Cron: the lines install.py prints ([cron] daily_hour_utc, under the same
+# flock as the survey poll so the two never overlap).
 
 set -euo pipefail
 
