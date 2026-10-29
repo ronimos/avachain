@@ -988,7 +988,12 @@ def _find_best_wrf(cfg: dict) -> dict | None:
     if not fcst_base.exists():
         return None
 
-    season_name = wrf_cfg.get("season", "")
+    # The season SNOWPACK runs (config.wrf_season: [wrf] season, else the
+    # year of season_start), not the latest year directory, which moves every
+    # slope to next season as soon as that directory appears.
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "src" / "avachain"))
+    from config import wrf_season
+    season_name = wrf_season(wrf_cfg, cfg.get("snowpack", {}).get("season_start"))
     if season_name:
         season_dir = fcst_base / season_name
     else:

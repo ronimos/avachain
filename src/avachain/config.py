@@ -25,6 +25,41 @@ OVERRIDABLE_DIRS = (
     "models_dir", "logs_dir", "event_masks_dir", "weather_cache_dir",
 )
 
+def wrf_season(wrf: dict, season_start: Optional[str]) -> Optional[str]:
+    """The WRF forecast season directory name for a slope.
+
+    [wrf] season wins when set. Otherwise it is the year of [snowpack]
+    season_start: the forecast archive is <fcst_base_dir>/<YYYY>/ per season
+    (2025 holds 2025-09-23 .. 2026-06), so the season SNOWPACK runs is the
+    season the WRF forcing comes from. "Latest year directory" was the old
+    rule and is wrong as soon as next season's directory exists (2026/ did
+    by 2026-10), which would move every 2025-26 slope and replay to it.
+    """
+    if wrf.get("season"):
+        return str(wrf["season"])
+    try:
+        return str(_dt.date.fromisoformat(str(season_start)).year)
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_wrf_smet(wrf: dict, season_start: Optional[str]) -> Optional[Path]:
+    """The WRF-forced SMET for this slope's season.
+
+    Built as <fcst_base_dir>/<season>/<wrf_zone>/<wrf_grid_id>/<file name>,
+    keeping only the file name (the aspect variant install.py chose) from the
+    stamped wrf_smet_file, so its season directory cannot go stale. Falls
+    back to wrf_smet_file as written when the parts are missing. The file
+    may not exist; callers that need it say so (forcing_pipeline.step_smet).
+    """
+    stamped = wrf.get("wrf_smet_file")
+    season = wrf_season(wrf, season_start)
+    parts = (wrf.get("fcst_base_dir"), season, wrf.get("wrf_zone"), wrf.get("wrf_grid_id"))
+    if stamped and all(parts):
+        return Path(*parts) / Path(stamped).name
+    return Path(stamped) if stamped else None
+
+
 # Environment variable holding the simulated "now" for operational replay.
 AS_OF_ENV = "AVACHAIN_AS_OF"
 
@@ -356,6 +391,8 @@ class ProjectConfig:
         processing = data.get("processing", {})
         surveys   = data.get("surveys", {})
         wrf       = data.get("wrf", {})
+        snowpack  = data.get("snowpack", {})
+        wrf_smet  = resolve_wrf_smet(wrf, snowpack.get("season_start"))
         stations  = {s["role"]: s for s in data.get("stations", [])}
         summit    = stations.get("summit", {})
         base      = stations.get("base", {})
@@ -396,8 +433,8 @@ class ProjectConfig:
             depth_percentiles=list(scenarios.get("depth_percentiles", [10, 50, 90])),
             stauchwall_deg=float(scenarios.get("stauchwall_deg", 29.0)),
             stations=data.get("stations", []),
-            wrf_smet_file=Path(wrf["wrf_smet_file"]) if wrf.get("wrf_smet_file") else None,
-            wrf_smet_dir= Path(wrf["wrf_smet_dir"])  if wrf.get("wrf_smet_dir")  else None,
+            wrf_smet_file=wrf_smet,
+            wrf_smet_dir=wrf_smet.parent if wrf_smet else None,
             dir_overrides={k: paths[k] for k in OVERRIDABLE_DIRS if k in paths},
         )
             

@@ -1077,9 +1077,49 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
 # Step 8: Write SMET files
 # =====================================================================
 
+# A refill sample is 6-hourly; this much slack at either end of the SMET
+# period is the interpolation reach, not missing coverage.
+REFILL_SLACK = pd.Timedelta(hours=6)
+
+
+class RefillError(RuntimeError):
+    """The NWP refill cannot supply the SMET period."""
+
+
+def refill_source(cfg: ProjectConfig) -> Path:
+    """The NWP refill SMET: the slope's WRF-forced SMET for its season.
+
+    It is the same file nwp_ingest reads (config.resolve_wrf_smet), so a
+    change in the forecast archive breaks both at once with one thing to fix.
+    It used to be data/weather/refill.smet, a hand copy of this file taken
+    once (first 805 rows byte-identical; the last 13 were frozen forecast),
+    which a new season would silently outrun.
+    """
+    path = cfg.wrf_smet_file
+    if path is None:
+        raise RefillError("no [wrf] wrf_smet_file in the slope TOML: the SMET step needs "
+                          "the WRF-forced SMET to add the NWP-only fields (run install.py)")
+    if not Path(path).exists():
+        raise RefillError(f"WRF refill SMET not found: {path}. Check [wrf] fcst_base_dir / "
+                          f"wrf_zone / wrf_grid_id and the season (from [snowpack] season_start, "
+                          f"or [wrf] season)")
+    return Path(path)
+
+
+def check_refill_covers(refill_df: pd.DataFrame, start, end, path) -> None:
+    """Refuse a refill that does not span [start, end]: outside its range the
+    augmentation writes nodata and gap filling does nothing, and SNOWPACK runs
+    on it without complaint."""
+    have = (refill_df.index.min(), refill_df.index.max())
+    if have[0] > start + REFILL_SLACK or have[1] < end - REFILL_SLACK:
+        raise RefillError(f"WRF refill {path} covers {have[0]} .. {have[1]}, "
+                          f"but the SMETs run {start} .. {end}")
+
+
 def step_smet(cfg: ProjectConfig):
     """Generate per-cluster SMET forcing files from hourly grids + saved clusters."""
     cfg.ensure_dirs()
+    refill_path = refill_source(cfg)    # fail before the SMETs are written, not after
 
     from clustering import compute_cluster_representatives
 
@@ -1187,45 +1227,43 @@ def step_smet(cfg: ProjectConfig):
     print(f"  Cluster sizes: min={min(sizes)}, median={np.median(sizes):.0f}, "
           f"max={max(sizes)}")
 
-    # --- Augment with NWP refill ---
-    # Beside the station CSV, not under project_dir: in a deployment the repo
-    # holds no data, and a missing refill is skipped silently.
-    refill_path = cfg.weather_csv.parent / "refill.smet"
-    if refill_path.exists():
-        from smet_writer import read_smet, augment_smet_with_refill, fill_smet_gaps_from_refill
-        print(f"\nAugmenting SMET files from {refill_path.name}...")
-        refill_header, refill_df = read_smet(str(refill_path))
-        added_fields = None
-        n_augmented = 0
-        for cid in representatives:
-            smet_file = smet_dir / f"cluster_{cid:04d}.smet"
-            if smet_file.exists():
-                added = augment_smet_with_refill(
-                    str(smet_file), refill_header, refill_df)
-                if added_fields is None and added:
-                    added_fields = added
-                n_augmented += 1
-        if added_fields:
-            print(f"  {n_augmented} files augmented, "
-                  f"{len(added_fields)} fields added: {', '.join(added_fields)}")
-        else:
-            print("  No new fields to add (all refill fields already present).")
-
-        # --- Fill temporal gaps from refill (e.g. Dec 18 station outage) ---
-        print(f"\nFilling SMET gaps from {refill_path.name} (max 48h)...")
-        total_inserted = total_filled = 0
-        for cid in representatives:
-            smet_file = smet_dir / f"cluster_{cid:04d}.smet"
-            if smet_file.exists():
-                result = fill_smet_gaps_from_refill(
-                    str(smet_file), refill_header, refill_df,
-                    max_gap_hours=48)
-                total_inserted += result['n_rows_inserted']
-                total_filled += result['n_rows_filled']
-        print(f"  Rows inserted: {total_inserted}, "
-              f"cells filled: {total_filled}")
+    # --- Augment with NWP refill (refill_source; it is required) ---
+    from smet_writer import read_smet, augment_smet_with_refill, fill_smet_gaps_from_refill
+    print(f"\nAugmenting SMET files from {refill_path} ...")
+    refill_header, refill_df = read_smet(str(refill_path))
+    first = next(smet_dir / f"cluster_{cid:04d}.smet" for cid in representatives
+                 if (smet_dir / f"cluster_{cid:04d}.smet").exists())
+    _, first_df = read_smet(str(first))
+    check_refill_covers(refill_df, first_df.index.min(), first_df.index.max(), refill_path)
+    added_fields = None
+    n_augmented = 0
+    for cid in representatives:
+        smet_file = smet_dir / f"cluster_{cid:04d}.smet"
+        if smet_file.exists():
+            added = augment_smet_with_refill(
+                str(smet_file), refill_header, refill_df)
+            if added_fields is None and added:
+                added_fields = added
+            n_augmented += 1
+    if added_fields:
+        print(f"  {n_augmented} files augmented, "
+              f"{len(added_fields)} fields added: {', '.join(added_fields)}")
     else:
-        print(f"\nNo NWP refill SMET at {refill_path}, skipping augmentation.")
+        print("  No new fields to add (all refill fields already present).")
+
+    # --- Fill temporal gaps from refill (e.g. Dec 18 station outage) ---
+    print(f"\nFilling SMET gaps from {refill_path.name} (max 48h)...")
+    total_inserted = total_filled = 0
+    for cid in representatives:
+        smet_file = smet_dir / f"cluster_{cid:04d}.smet"
+        if smet_file.exists():
+            result = fill_smet_gaps_from_refill(
+                str(smet_file), refill_header, refill_df,
+                max_gap_hours=48)
+            total_inserted += result['n_rows_inserted']
+            total_filled += result['n_rows_filled']
+    print(f"  Rows inserted: {total_inserted}, "
+          f"cells filled: {total_filled}")
 
 
 # =====================================================================
