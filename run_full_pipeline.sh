@@ -124,15 +124,15 @@ fi
 
 # --- Phase 1: Data preparation ---
 echo ">>> Phase 1: Data preparation pipeline"
-echo "    resample → transport → features → train → avalanche → cluster → gap_fill → smet"
+echo "    resample → transport → avalanche → cluster → gap_fill → smet"
 echo ""
 
 phase1_start=$SECONDS
 
 $PIPELINE resample
 $PIPELINE transport
-$PIPELINE features
-$PIPELINE train
+# features/train (WindNinja + RF transport) are not run: tried, performed
+# poorly, unused; gap_fill uses observed transport. See forcing_pipeline.py.
 $PIPELINE avalanche
 if [[ $KEEP_CLUSTER_MAP -eq 1 ]]; then
     echo "    --keep-cluster-map: skipping cluster (using $AVA_ANALYSIS_DIR/cluster_map.npy)"

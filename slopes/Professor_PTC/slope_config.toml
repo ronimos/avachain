@@ -32,7 +32,6 @@ start_zone_kml        = "/home/avachain/data/static/Professor_PTC/Litte_prof_sta
 # boundary_kml's folder is also where mapped crowns (avalanche_release_area_<YYYYMMDD>.geojson) are read
 release_geojson       = "/home/avachain/data/static/Professor_PTC/avalanche_release_area.geojson"
 validation_dir        = "/home/avachain/data/static/Professor_PTC/validation"
-windninja_library_dir = "/home/avachain/data/static/Professor_PTC/windninja_library"
 # --- snowpack part (work/) ---
 slope_dir             = "/home/avachain/work/snowpack/Professor_PTC"
 grids_dir             = "/home/avachain/work/snowpack/Professor_PTC/hourly_grids"

@@ -5,8 +5,8 @@ Distributed SNOWPACK forcing generation pipeline.
 Workflow:
   1. resample   - Resample all survey GeoTIFFs to 1m reference grid
   2. transport  - Compute transport fields for all consecutive survey pairs
-  3. features   - Compute terrain features and WindNinja wind fields
-  4. train      - Fit Random Forest transport model with leave-one-out CV
+  3. features   - EXPERIMENTAL, not run: terrain features + WindNinja wind fields
+  4. train      - EXPERIMENTAL, not run: Random Forest transport model (LOO-CV)
   5. avalanche  - Detect and correct avalanche events in transport fields
   6. cluster    - Build domain mask and cluster cells by HS evolution
   7. gap_fill   - Generate hourly HS grids between all surveys
@@ -21,7 +21,13 @@ Usage:
   python forcing_pipeline.py cluster
   python forcing_pipeline.py gap_fill
   python forcing_pipeline.py smet
-  python forcing_pipeline.py all          # run everything in order
+  python forcing_pipeline.py all          # run the operational steps in order
+
+features / train / validate and gap_fill --use-model are the WindNinja + RF
+transport path. It was tried for between-survey gap fill, performed poorly,
+and is not used (Ron, 2026-10-29): 'all' and every run script skip it, and
+gap fill uses the smoothed observed transport. Kept for a future revisit
+(docs/TODO.md, "Wind loading/scouring in operational HS fill").
   python forcing_pipeline.py validate     # LOO-CV report only (after features, no model saved)
 
 Each step saves intermediate results to outputs/, so you can
@@ -1382,8 +1388,11 @@ STEPS = {
 # Canonical execution order for 'all'.
 # 'reinit' and 'cluster_update' are NOT in ALL_STEPS — both are event/survey-
 # driven and are invoked explicitly, not as part of a routine full run.
-ALL_STEPS = ['resample', 'transport', 'features', 'train', 'avalanche',
-             'cluster', 'gap_fill', 'smet']
+# 'features' and 'train' (WindNinja + RF transport) are experimental and
+# unused; see the module docstring. A fresh deployment has no wind library,
+# so including them would also crash the first full run.
+ALL_STEPS = ['resample', 'transport', 'avalanche', 'cluster', 'gap_fill', 'smet']
+EXPERIMENTAL_STEPS = ('features', 'train', 'validate')
 
 
 def main():
@@ -1398,7 +1407,8 @@ def main():
     parser.add_argument('--project-dir', type=str, default='.',
                         help="Project root directory (default: current dir)")
     parser.add_argument('--use-model', action='store_true',
-                        help="Gap-fill using RF model for transport (default: observed transport)")
+                        help="EXPERIMENTAL, unused: gap-fill with the WindNinja/RF transport "
+                             "model (default: smoothed observed transport)")
     parser.add_argument('--station-only', action='store_true',
                         help="Gap-fill using station dHS only — no spatial transport")
 
@@ -1447,6 +1457,10 @@ def main():
         cfg = ProjectConfig.from_toml(args.toml)
     else:
         cfg = ProjectConfig(project_dir=Path(args.project_dir))
+
+    if args.step in EXPERIMENTAL_STEPS or args.use_model:
+        print("NOTE: WindNinja/RF transport is experimental and not used "
+              "operationally (see forcing_pipeline.py docstring).")
 
     if args.step == 'all':
         for step_name in ALL_STEPS:
