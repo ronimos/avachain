@@ -263,7 +263,11 @@ for cron's own output. The marker body of a failed survey points to its log.
    `master_config.ini`/`template.sno`, creates the directories, and prints the
    crontab line.
 2. Put the static inputs in `data/static/<path>/`, the station CSV in
-   `data/weather/`, and the events file in `work/snowpack/<path>/`.
+   `data/weather/`, and the events file in `work/snowpack/<path>/`. Then seed
+   the station cache from the CSV:
+   `python src/avachain/aws_ingest.py --toml <TOML> --from-csv`.
+   The full rebuild does not need the cache, but every daily run and replay
+   does. Without it, `smet_append` stops with an error naming this command.
 3. Put existing surveys in `data/surveys/snow_height/<path>/` with `.DONE`
    markers, so they count as history rather than new work.
 4. Run `run_full_pipeline.sh --reinit …` to build the cluster map, SMET files,

@@ -196,9 +196,12 @@ def _load_met_for_period(since: pd.Timestamp,
     sid = station_id or PRIMARY_STATION
     cache = WEATHER_CACHE_DIR / f"{sid}.parquet"
     if not cache.exists():
-        print(f"    WARNING: weather cache not found at {cache} — "
-              f"run aws_ingest.py first")
-        return pd.DataFrame()
+        # Not a no-op: an empty frame here used to die further on, on a
+        # TypeError that named nothing about the cause.
+        raise FileNotFoundError(
+            f"weather cache not found at {cache}. Seed it once with "
+            f"`aws_ingest.py --toml <slope_config.toml> --from-csv`; the "
+            f"daily aws_ingest only appends to it")
 
     df = pd.read_parquet(cache)
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
@@ -375,5 +378,12 @@ def main() -> None:
                    station_id=active_station_id)
 
 
+def _main() -> None:
+    try:
+        main()
+    except FileNotFoundError as exc:
+        raise SystemExit(f"ERROR: {exc}")
+
+
 if __name__ == "__main__":
-    main()
+    _main()

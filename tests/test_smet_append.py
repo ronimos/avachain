@@ -448,3 +448,19 @@ class TestAppendClusterSmetHs:
         n = append_cluster_smet(smet_p,
                                 until=pd.Timestamp("2026-01-10T01:00", tz="UTC"))
         assert n == 0
+
+
+# ---------------------------------------------------------------------------
+# Missing weather cache
+# ---------------------------------------------------------------------------
+
+def test_missing_weather_cache_is_a_clear_error(tmp_path, monkeypatch):
+    """A tree whose station cache was never seeded must stop with the fix in
+    the message. It used to print a WARNING, return an empty frame, and die
+    on a pandas TypeError comparing that frame's RangeIndex with a Timestamp
+    (rehearsal replay, 2026-10-30). The daily run had no cache because the
+    seed skipped `aws_ingest.py --from-csv`."""
+    monkeypatch.setattr(_sa_mod, "WEATHER_CACHE_DIR", tmp_path / "no_weather")
+    smet_p = _make_smet(tmp_path, ["2026-01-10T00:00\t268.15\t0.85\t3.0\t0.80"])
+    with pytest.raises(FileNotFoundError, match="aws_ingest.py --toml .* --from-csv"):
+        append_cluster_smet(smet_p, until=pd.Timestamp("2026-01-10T03:00", tz="UTC"))
