@@ -9,13 +9,22 @@ clock ($AVACHAIN_AS_OF) and runs exactly what operations would run that day:
   other days   AS_OF = D T14:00 (the 08:00 local morning run),
                run_daily_<slope>.sh
 
+With --markers ([surveys] markers = true), a survey tick goes through the
+same door as an operational survey. The driver writes the .READY marker the
+way the producer does, and runs run_<slope>.sh with no --snapshot, so the
+script claims it (READY -> RUNNING -> DONE). Daily ticks also run without
+--snapshot and take the date from the clock, as cron does. `setup --markers`
+strips the markers of every survey after T_start, so a survey is invisible
+until its tick delivers it.
+
 After each tick the driver asserts the Tier 3 invariants and stops at the
 first failure. The tick's state is left in place for inspection.
   - every daily anchor is at the same time A, A <= the clock, and A moved
     forward (or a survey tick put the survey anchor at D T18:00);
   - the main Zarr ends exactly at A: no forecast step, nothing stale;
   - the forecast Zarr, when NWP ran, starts after A;
-  - the tick wrote features for its snapshot date.
+  - the tick wrote features for its snapshot date;
+  - with --markers: the survey ended DONE, and nothing is left RUNNING.
 
 It archives what a later survey re-run will overwrite, because the
 pre-correction state is the Tier 2 measurement: HS for every cluster at A,
@@ -45,6 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import ProjectConfig                                  # noqa: E402
 import snowpack_cycle as sc                                       # noqa: E402
 from pipeline_io import discover_surveys                          # noqa: E402
+import survey_markers as sm                                       # noqa: E402
 
 SURVEY_HOUR = 20      # tick clock on a survey day (flight at 18:00 UTC)
 DAILY_HOUR = 14       # tick clock otherwise (08:00 MDT)
@@ -79,7 +89,62 @@ def plan(survey_dates: list[date], start: date, end: date, anchor_survey: date,
 # Setup
 # ---------------------------------------------------------------------------
 
-def setup(cfg: ProjectConfig, live: ProjectConfig, t_start: date) -> None:
+def hide_future_surveys(cfg: ProjectConfig, t_start: date) -> list:
+    """Remove the marker of every survey after t_start: not delivered yet.
+
+    A bare TIF is invisible to the pipeline (it may still be copying), which
+    is exactly the state of a survey that has not been flown.
+    """
+    hidden = []
+    for d, tif in sm.survey_tifs(cfg):
+        state = sm.state_of(tif)
+        if d > t_start and state is not None:
+            sm.marker_path(tif, state).unlink()
+            hidden.append(tif.name)
+    return hidden
+
+
+def deliver_survey(cfg: ProjectConfig, survey_date: date, as_of: str) -> Path:
+    """Write the survey's .READY marker as the producer would.
+
+    A FAILED marker is a retry: the operator's rename back to READY, so the
+    claim keeps the failed run under "history". Anything else already there
+    means the tick would not be a first arrival, which is an error.
+    """
+    tif = next((f for d, f in sm.survey_tifs(cfg) if d == survey_date), None)
+    if tif is None:
+        raise Tier3Failure(f"no survey TIF for {survey_date} in {cfg.survey_dir}")
+    state = sm.state_of(tif)
+    if state == "FAILED":
+        os.rename(sm.marker_path(tif, "FAILED"), sm.marker_path(tif, "READY"))
+        print(f"  {tif.name}: FAILED -> READY (retry)")
+    elif state is None:
+        sm.marker_path(tif, "READY").write_text(
+            json.dumps({"delivered_by": "replay_run", "as_of": as_of}) + "\n")
+    else:
+        raise Tier3Failure(f"{tif.name} is already {state} before its tick "
+                           f"(run `setup --markers` on a fresh seed)")
+    return tif
+
+
+def check_markers(cfg: ProjectConfig, tick: dict) -> dict:
+    """After a tick: the survey it delivered is DONE, and nothing is RUNNING."""
+    states = {d.isoformat(): sm.state_of(t) for d, t in sm.survey_tifs(cfg)}
+    running = [d for d, s in states.items() if s == "RUNNING"]
+    if running:
+        raise Tier3Failure(f"survey markers left RUNNING: {running}")
+    rec = {}
+    if tick["kind"] == "survey":
+        if states.get(tick["date"]) != "DONE":
+            raise Tier3Failure(f"survey {tick['date']} marker is "
+                               f"{states.get(tick['date'])}, not DONE")
+        tif = next(f for d, f in sm.survey_tifs(cfg) if d.isoformat() == tick["date"])
+        rec["marker"] = sm._read(sm.marker_path(tif, "DONE"))
+    return rec
+
+
+def setup(cfg: ProjectConfig, live: ProjectConfig, t_start: date,
+          markers: bool = False) -> None:
     cfg.analysis_dir.mkdir(parents=True, exist_ok=True)
     for name in FROZEN_ANALYSIS:
         src, dst = live.analysis_dir / name, cfg.analysis_dir / name
@@ -107,6 +172,9 @@ def setup(cfg: ProjectConfig, live: ProjectConfig, t_start: date) -> None:
     n = sc._require_coherent(cfg, "survey", s)
     sc._require_coherent(cfg, "anchor", s, n)
     print(f"  anchors: {n} clusters at {s:%Y-%m-%dT%H:%M}")
+    if markers:
+        hidden = hide_future_surveys(cfg, t_start)
+        print(f"  markers: {len(hidden)} surveys after {t_start} undelivered")
 
 
 # ---------------------------------------------------------------------------
@@ -181,10 +249,16 @@ def archive_tick(cfg: ProjectConfig, tick: dict, rec: dict, out: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def run(cfg: ProjectConfig, start: date, end: date, scenarios_on: set,
-        archive: Path, nwp: bool, dry_run: bool) -> None:
+        archive: Path, nwp: bool, dry_run: bool, markers: bool = False) -> None:
     repo = cfg.project_dir
     slope = cfg.slope_name
-    surveys = [d for d, _ in discover_surveys(cfg, as_of=f"{end.isoformat()}T23:59")]
+    if markers:
+        if not cfg.survey_markers:
+            raise Tier3Failure("--markers needs [surveys] markers = true in the TOML")
+        # Undelivered surveys have no marker, so discover_surveys cannot see them.
+        surveys = [d for d, _ in sm.survey_tifs(cfg) if d <= end]
+    else:
+        surveys = [d for d, _ in discover_surveys(cfg, as_of=f"{end.isoformat()}T23:59")]
     anchor_survey = sc.read_survey_anchor(cfg).date()
     ticks = plan(surveys, start, end, anchor_survey, scenarios_on)
     progress = archive / "progress.json"
@@ -203,7 +277,11 @@ def run(cfg: ProjectConfig, start: date, end: date, scenarios_on: set,
             continue
         prev = sc._profile_date(next(iter(sc._sno_files(cfg, "anchor").values())))
         script = repo / (f"run_{slope}.sh" if t["kind"] == "survey" else f"run_daily_{slope}.sh")
-        args = ["--snapshot", t["date"]]
+        # With markers the scripts run as cron runs them: the survey script
+        # claims the delivered survey, the daily script dates itself by the clock.
+        args = [] if markers else ["--snapshot", t["date"]]
+        if markers and t["kind"] == "survey":
+            deliver_survey(cfg, date.fromisoformat(t["date"]), t["as_of"])
         if t["kind"] == "survey":
             args.append("--no-cluster-update")
         if not t["scenarios"]:
@@ -223,6 +301,8 @@ def run(cfg: ProjectConfig, start: date, end: date, scenarios_on: set,
             raise Tier3Failure(f"{script.name} exited {r.returncode} on {t['date']}; "
                                f"see {out / 'tick.log'}")
         rec = check_tick(cfg, t, prev, t0, nwp)
+        if markers:
+            rec.update(check_markers(cfg, t))
         archive_tick(cfg, t, rec, out)
         done.append(t["date"])
         progress.write_text(json.dumps(done, indent=2) + "\n")
@@ -239,6 +319,8 @@ def main() -> None:
     s = sub.add_parser("setup")
     s.add_argument("--live-toml", required=True)
     s.add_argument("--t-start", required=True)
+    s.add_argument("--markers", action="store_true",
+                   help="strip the markers of surveys after T_start (undelivered)")
     r = sub.add_parser("run")
     r.add_argument("--start", required=True)
     r.add_argument("--end", required=True)
@@ -246,17 +328,20 @@ def main() -> None:
     r.add_argument("--archive", default=None)
     r.add_argument("--no-nwp", action="store_true")
     r.add_argument("--dry-run", action="store_true")
+    r.add_argument("--markers", action="store_true",
+                   help="deliver each survey as a .READY marker and run the scripts "
+                        "without --snapshot, as cron does")
     a = ap.parse_args()
     cfg = ProjectConfig.from_toml(Path(a.toml))
     try:
         if a.cmd == "setup":
             setup(cfg, ProjectConfig.from_toml(Path(a.live_toml)),
-                  date.fromisoformat(a.t_start))
+                  date.fromisoformat(a.t_start), markers=a.markers)
         else:
             run(cfg, date.fromisoformat(a.start), date.fromisoformat(a.end),
                 set(a.scenarios_on.split(",")),
                 Path(a.archive) if a.archive else cfg.output_dir / "ticks",
-                nwp=not a.no_nwp, dry_run=a.dry_run)
+                nwp=not a.no_nwp, dry_run=a.dry_run, markers=a.markers)
     except (Tier3Failure, sc.CycleError) as exc:
         print(f"\nREPLAY STOPPED: {exc}", file=sys.stderr)
         sys.exit(2)
