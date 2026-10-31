@@ -189,6 +189,20 @@ def _zarr_times(path: Path):
         return z["time"].values
 
 
+def tick_baseline(cfg: ProjectConfig) -> pd.Timestamp:
+    """The daily anchor a tick must advance past.
+
+    Normally the anchor before the tick runs. If a reboot cut the previous
+    attempt short after it moved the anchors, the tick only finishes that
+    cycle (snowpack_cycle's journal) and the anchor does not move again, so
+    the baseline is where the interrupted cycle started.
+    """
+    j = sc.read_journal(cfg)
+    if j is not None:
+        return sc._ts(j["since"])
+    return sc._profile_date(next(iter(sc._sno_files(cfg, "anchor").values())))
+
+
 def check_tick(cfg: ProjectConfig, tick: dict, prev_anchor: pd.Timestamp,
                t0: float, nwp: bool) -> dict:
     as_of = pd.Timestamp(tick["as_of"])
@@ -275,7 +289,7 @@ def run(cfg: ProjectConfig, start: date, end: date, scenarios_on: set,
     for t in ticks:
         if t["date"] in done:
             continue
-        prev = sc._profile_date(next(iter(sc._sno_files(cfg, "anchor").values())))
+        prev = tick_baseline(cfg)
         script = repo / (f"run_{slope}.sh" if t["kind"] == "survey" else f"run_daily_{slope}.sh")
         # With markers the scripts run as cron runs them: the survey script
         # claims the delivered survey, the daily script dates itself by the clock.

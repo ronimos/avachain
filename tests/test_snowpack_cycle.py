@@ -458,3 +458,18 @@ def test_save_as_leaves_no_temp_files(cfg):
     assert sc._save_as(cfg, "anchor") == len(CIDS)
     assert not list(cfg.pro_dir.glob("*.tmp"))
     assert _pd(cfg, "cluster_0002_anchor.sno") == S1
+
+
+def test_replay_tick_resuming_a_cycle_is_measured_from_where_it_started(cfg):
+    # The soak's 02-11 tick: the crashed attempt had already moved the anchor
+    # to 02-11T12, so the resumed tick could not move it again and the replay
+    # stopped on "daily anchor did not advance".
+    import replay_run as rr
+    a, obs = pd.Timestamp("2026-02-10T18:00"), pd.Timestamp("2026-02-11T12:00")
+    _set(cfg, "anchor", a)
+    assert rr.tick_baseline(cfg) == a
+    with pytest.raises(Boom):
+        sc.daily_cycle(cfg, obs, zarr_fn=_crashing_zarr(Rec()), forecast_fn=Rec().forecast)
+    assert rr.tick_baseline(cfg) == a                    # not the moved anchor
+    sc.daily_cycle(cfg, obs, zarr_fn=Rec().zarr, forecast_fn=Rec().forecast)
+    assert rr.tick_baseline(cfg) == obs
