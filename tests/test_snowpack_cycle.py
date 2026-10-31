@@ -14,6 +14,9 @@ What is pinned:
 - The daily cycle restarts from the daily anchor, never from the +48 h
   forecast state left in <cid>_<cid>.sno.
 - Every segment ends with every cluster at the same time, or the cycle stops.
+- A cycle killed after it starts overwriting restart points (a reboot) is
+  finished by whichever cycle runs next, from the journal, so the main Zarr
+  never stays behind the anchors.
 """
 import json
 import os
@@ -186,9 +189,9 @@ def test_a_cluster_that_fails_stops_the_cycle(cfg, monkeypatch):
     assert sc.read_survey_anchor(cfg) == S0                        # anchor not moved
 
 
-def test_new_survey_must_be_after_the_anchor(cfg):
+def test_new_survey_must_not_be_before_the_anchor(cfg):
     with pytest.raises(sc.CycleError, match="not after"):
-        sc.survey_cycle(cfg, S0, pd.Timestamp("2026-02-11T00:00"),
+        sc.survey_cycle(cfg, S0 - pd.Timedelta(days=1), pd.Timestamp("2026-02-11T00:00"),
                         zarr_fn=Rec().zarr)
 
 
@@ -334,3 +337,124 @@ def test_anchor_deficit_is_reported_not_failed(cfg):
     # SNOWPACK deposits a deficit only in snowfall weather, possibly later
     _anchor_fixture(cfg, 40.0)
     assert sc.check_anchor_held(cfg, S1)["below"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Crash recovery: the cycle journal
+#
+# The 2026-10-30 reboot hit a daily tick inside the Zarr update, after the
+# anchors had moved. A rerun saw "no new observations since the anchor" and
+# skipped the Zarr, so the store stayed 18 h behind with nothing to say so.
+# ---------------------------------------------------------------------------
+
+class Boom(RuntimeError):
+    pass
+
+
+def _crashing_zarr(rec):
+    def zarr(cfg, since):
+        rec.calls.append(("zarr_crash", since))
+        raise Boom("reboot")
+    return zarr
+
+
+def _set(cfg, kind, ts):
+    for cid in CIDS:
+        name = f"{cid}_{cid}.sno" if kind == "res" else f"{cid}_{kind}.sno"
+        (cfg.pro_dir / name).write_text(f"ProfileDate      = {ts:%Y-%m-%dT%H:%M:%S}\n")
+
+
+def test_daily_killed_in_the_zarr_update_is_finished_by_the_next_run(cfg):
+    a, obs = pd.Timestamp("2026-02-10T18:00"), pd.Timestamp("2026-02-11T12:00")
+    _set(cfg, "anchor", a)
+    rec = Rec()
+    with pytest.raises(Boom):
+        sc.daily_cycle(cfg, obs, zarr_fn=_crashing_zarr(rec), forecast_fn=rec.forecast)
+    assert _pd(cfg, "cluster_0001_anchor.sno") == obs                 # anchors moved
+    assert sc.read_journal(cfg)["since"] == "2026-02-10T18:00"
+    with pytest.raises(sc.CycleError, match="may be stale"):
+        sc.require_no_pending_cycle(cfg)
+
+    rec2 = Rec()
+    sc.daily_cycle(cfg, obs, zarr_fn=rec2.zarr, forecast_fn=rec2.forecast)
+    # Without the journal this list is empty: the rerun skips the Zarr.
+    assert rec2.calls == [("zarr", a)]
+    assert sc.read_journal(cfg) is None
+    sc.require_no_pending_cycle(cfg)
+    assert len(_hist(cfg, "cluster_0001")) == 1                       # SNOWPACK not re-run
+
+
+def test_daily_killed_halfway_through_saving_anchors_is_finished(cfg, monkeypatch):
+    a, obs = pd.Timestamp("2026-02-10T18:00"), pd.Timestamp("2026-02-11T12:00")
+    _set(cfg, "anchor", a)
+    real_replace, n = os.replace, []
+
+    def replace(src, dst):
+        if str(dst).endswith("_anchor.sno"):
+            if n:
+                raise Boom("reboot")
+            n.append(dst)
+        real_replace(src, dst)
+    monkeypatch.setattr(sc.os, "replace", replace)
+    with pytest.raises(Boom):
+        sc.daily_cycle(cfg, obs, zarr_fn=Rec().zarr, forecast_fn=Rec().forecast)
+    monkeypatch.setattr(sc.os, "replace", real_replace)
+    dates = {_pd(cfg, f"{c}_anchor.sno") for c in CIDS}
+    assert dates == {a, obs}                                          # mixed anchors
+
+    rec = Rec()
+    sc.daily_cycle(cfg, obs, zarr_fn=rec.zarr, forecast_fn=rec.forecast)
+    assert rec.calls == [("zarr", a)]
+    assert {_pd(cfg, f"{c}_anchor.sno") for c in CIDS} == {obs}
+
+
+def test_survey_killed_in_the_zarr_update_is_finished_by_its_redelivery(cfg):
+    obs = pd.Timestamp("2026-02-11T00:00")
+    rec = Rec()
+    with pytest.raises(Boom):
+        sc.survey_cycle(cfg, S1, obs, zarr_fn=_crashing_zarr(rec),
+                        anchor_fn=rec.anchor, anchor_check_fn=rec.anchor_check)
+    assert sc.read_survey_anchor(cfg) == S1             # a plain rerun stopped here
+
+    rec2 = Rec()
+    out = _survey(cfg, rec2, obs, pd.Timestamp("2026-02-13T00:00"))
+    assert rec2.calls == [("zarr", S0), ("forecast", obs)]
+    assert out["anchor_prev"] == obs                    # continued as a daily cycle
+    assert sc.read_journal(cfg) is None
+    for cid in CIDS:
+        assert _pd(cfg, f"{cid}_anchor.sno") == obs
+        assert len(_hist(cfg, cid)) == 3                # S0->S1, S1->obs, forecast
+
+
+def test_survey_killed_after_the_survey_anchor_reruns_only_what_is_left(cfg):
+    obs = pd.Timestamp("2026-02-11T00:00")
+    rec, calls = Rec(), []
+
+    def snowpack(cfg, end, restart):
+        calls.append((restart, end))
+        if restart == "survey" and end == obs and len(calls) == 2:
+            # SNOWPACK erases its output .sno when it starts
+            for cid in CIDS:
+                (cfg.pro_dir / f"{cid}_{cid}.sno").unlink()
+            raise Boom("reboot")
+        sc.run_snowpack(cfg, end, restart)
+    with pytest.raises(Boom):
+        sc.survey_cycle(cfg, S1, obs, snowpack=snowpack, zarr_fn=rec.zarr,
+                        anchor_fn=rec.anchor, anchor_check_fn=rec.anchor_check)
+    assert sc.read_journal(cfg)["phase"] == "to_obs"
+
+    rec2 = Rec()
+    sc.daily_cycle(cfg, obs, snowpack=snowpack, zarr_fn=rec2.zarr,
+                   forecast_fn=rec2.forecast, anchor_check_fn=rec2.anchor_check)
+    assert calls[2] == ("survey", obs)                  # from the saved survey, not res
+    assert rec2.calls == [("anchor_check", S1), ("zarr", S0)]
+    h = _hist(cfg, "cluster_0001")
+    assert h[-1][:3] == ["2026-02-10T18:00", "2026-02-11T00:00", "2026-02-10T18:00"]
+    assert _pd(cfg, "cluster_0001_anchor.sno") == obs
+
+
+def test_save_as_leaves_no_temp_files(cfg):
+    _set(cfg, "res", S1)
+    assert sc._save_as(cfg, "anchor") == len(CIDS)
+    assert not list(cfg.pro_dir.glob("*.tmp"))
+    assert _pd(cfg, "cluster_0002_anchor.sno") == S1

@@ -303,11 +303,18 @@ def step_analyze(cfg, args):
     """
     import subprocess
 
+    zarr_path = Path(args.zarr_path)
+    if zarr_path.resolve() == Path(cfg.zarr_path).resolve():
+        import snowpack_cycle
+        try:
+            snowpack_cycle.require_no_pending_cycle(cfg)
+        except snowpack_cycle.CycleError as exc:
+            sys.exit(f"ERROR: {exc}")
+
     # Skip if both output CSVs exist and are newer than the Zarr store.
     # Pass --force to bypass this check.
     feat_csv = cfg.analysis_dir / f"all_start_zone_features_{args.snapshot_date}.csv"
     mel_csv  = cfg.analysis_dir / f"meloche_features_all_{args.snapshot_date}.csv"
-    zarr_path = Path(args.zarr_path)
     if not getattr(args, 'force', False) and feat_csv.exists() and mel_csv.exists():
         zarr_mtime = zarr_path.stat().st_mtime if zarr_path.exists() else 0
         if feat_csv.stat().st_mtime > zarr_mtime and mel_csv.stat().st_mtime > zarr_mtime:

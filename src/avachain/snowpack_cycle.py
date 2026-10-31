@@ -59,6 +59,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import ProjectConfig                                  # noqa: E402
 
 SURVEY_ANCHOR_META = "survey_anchor.json"
+CYCLE_JOURNAL = "cycle_state.json"
 TS_FMT = "%Y-%m-%dT%H:%M"
 # SNOWPACK writes a profile every PROF_DAYS_BETWEEN = 0.25 d (master_config.ini).
 # Restart points must sit on that grid, or the store, which only has those
@@ -135,12 +136,40 @@ def _require_coherent(cfg: ProjectConfig, kind: str, expect: pd.Timestamp,
 
 
 def _save_as(cfg: ProjectConfig, kind: str) -> int:
-    """Copy every <cid>_<cid>.sno to <cid>_<kind>.sno."""
-    n = 0
-    for cid, p in _sno_files(cfg, "res").items():
-        shutil.copy2(p, cfg.pro_dir / f"{cid}_{kind}.sno")
-        n += 1
-    return n
+    """Copy every <cid>_<cid>.sno to <cid>_<kind>.sno.
+
+    Each copy lands under a temp name and is renamed into place only after one
+    sync, so a power cut leaves every <cid>_<kind>.sno either old or new, never
+    truncated. The set as a whole can still be part old, part new; the cycle
+    journal is what makes that recoverable.
+    """
+    pairs = [(p, cfg.pro_dir / f"{cid}_{kind}.sno")
+             for cid, p in _sno_files(cfg, "res").items()]
+    for src, dst in pairs:
+        shutil.copy2(src, dst.with_name(dst.name + ".tmp"))
+    os.sync()
+    for _, dst in pairs:
+        os.replace(dst.with_name(dst.name + ".tmp"), dst)
+    _fsync_dir(cfg.pro_dir)
+    return len(pairs)
+
+
+def _fsync_dir(d: Path) -> None:
+    fd = os.open(d, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_durable(p: Path, text: str) -> None:
+    tmp = p.with_name(p.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)
+    _fsync_dir(p.parent)
 
 
 def read_survey_anchor(cfg: ProjectConfig) -> pd.Timestamp:
@@ -153,8 +182,100 @@ def read_survey_anchor(cfg: ProjectConfig) -> pd.Timestamp:
 
 
 def _write_survey_anchor(cfg: ProjectConfig, ts: pd.Timestamp) -> None:
-    (cfg.pro_dir / SURVEY_ANCHOR_META).write_text(json.dumps(
+    _write_durable(cfg.pro_dir / SURVEY_ANCHOR_META, json.dumps(
         {"survey_ts": ts.strftime(TS_FMT)}, indent=2) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Cycle journal
+#
+# A cycle is safe to kill and simply re-run until it first overwrites a restart
+# point: before that, the survey/daily anchors it restarts from are untouched.
+# From that copy until the main Zarr has been replaced, a re-run cannot start
+# over. The anchors have moved, so a daily re-run saw "no new observations" and
+# skipped the Zarr (the 2026-10-30 reboot left the soak's store 18 h behind its
+# anchors that way, with nothing to say so); a survey re-run found its survey
+# already anchored and stopped. The journal, written before that first copy
+# and removed after the Zarr, records the phase and the times needed to finish
+# from there, and every cycle completes a pending one before doing anything.
+# ---------------------------------------------------------------------------
+
+def _journal_path(cfg: ProjectConfig) -> Path:
+    return cfg.pro_dir / CYCLE_JOURNAL
+
+
+def read_journal(cfg: ProjectConfig) -> Optional[dict]:
+    p = _journal_path(cfg)
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+def _write_journal(cfg: ProjectConfig, j: dict) -> None:
+    os.sync()                     # the res state the journal vouches for is on disk
+    _write_durable(_journal_path(cfg), json.dumps(j, indent=2) + "\n")
+
+
+def _advance(cfg: ProjectConfig, j: dict, phase: str) -> str:
+    j["phase"] = phase
+    _write_journal(cfg, j)
+    return phase
+
+
+def _complete(cfg: ProjectConfig, j: dict, *, snowpack: Callable,
+              zarr_fn: Callable, anchor_check_fn: Callable) -> None:
+    """Run a journalled cycle from its recorded phase to the replaced Zarr.
+
+    Phases, in order: save_survey (survey cycle only) -> to_obs (survey only)
+    -> save_anchor. Each one is idempotent given the state the previous one
+    left, so a crash anywhere inside repeats at most that phase.
+    """
+    since, obs_end, n = _ts(j["since"]), _ts(j["obs_end"]), j["clusters"]
+    phase = j["phase"]
+    if phase == "save_survey":
+        s_new = _ts(j["survey_new"])
+        _require_coherent(cfg, "res", s_new, n)
+        _save_as(cfg, "survey")
+        _write_survey_anchor(cfg, s_new)
+        phase = _advance(cfg, j, "to_obs")
+    if phase == "to_obs":
+        s_new = _ts(j["survey_new"])
+        if obs_end > s_new:
+            # From the survey anchor, not res: SNOWPACK erases its output .sno
+            # on start, so a crash inside this segment loses res. They hold
+            # the same bytes when this runs straight after save_survey.
+            snowpack(cfg, obs_end, "survey")
+            _require_coherent(cfg, "res", obs_end, n)
+            anchor_check_fn(cfg, s_new)
+        phase = _advance(cfg, j, "save_anchor")
+    if phase != "save_anchor":
+        raise CycleError(f"{_journal_path(cfg)}: unknown phase {phase!r}")
+    _require_coherent(cfg, "res", obs_end, n)
+    _save_as(cfg, "anchor")
+    zarr_fn(cfg, since)
+    _journal_path(cfg).unlink()
+
+
+def resume_pending(cfg: ProjectConfig, *, snowpack: Callable,
+                   zarr_fn: Callable, anchor_check_fn: Callable) -> bool:
+    """Finish a cycle a crash or reboot cut short. True if there was one."""
+    j = read_journal(cfg)
+    if j is None:
+        return False
+    print(f"  RESUMING interrupted {j['cycle']} cycle at phase {j['phase']} "
+          f"(Zarr since {j['since']}, obs end {j['obs_end']})", flush=True)
+    _complete(cfg, j, snowpack=snowpack, zarr_fn=zarr_fn,
+              anchor_check_fn=anchor_check_fn)
+    print("  Interrupted cycle completed", flush=True)
+    return True
+
+
+def require_no_pending_cycle(cfg: ProjectConfig) -> None:
+    """For readers of the main Zarr: a pending journal means it may be stale."""
+    p = _journal_path(cfg)
+    if p.exists():
+        raise CycleError(f"{p} exists: a SNOWPACK cycle was interrupted after "
+                         f"moving its anchors, so the main Zarr may be stale or "
+                         f"half-written. Re-run the daily or survey script "
+                         f"(it resumes the cycle) before analyzing.")
 
 
 def on_output_grid(t: pd.Timestamp) -> pd.Timestamp:
@@ -391,8 +512,21 @@ def survey_cycle(cfg: ProjectConfig, new_survey: pd.Timestamp,
                  anchor_check_fn: Callable = None) -> dict:
     anchor_fn = anchor_fn or anchor_to_survey
     anchor_check_fn = anchor_check_fn or check_anchor_held
+    resume_pending(cfg, snowpack=snowpack, zarr_fn=zarr_fn,
+                   anchor_check_fn=anchor_check_fn)
     s_prev = read_survey_anchor(cfg)
-    if new_survey <= s_prev:
+    if new_survey == s_prev:
+        # An earlier run completed this survey's cycle (or the resume above
+        # just did): its marker was redelivered after a later step failed.
+        # Re-running from the survey before would need the anchor before it,
+        # which is gone. What is left to do is a daily cycle.
+        print(f"  Survey {new_survey:{TS_FMT}} is already the survey anchor; "
+              f"its cycle completed earlier. Continuing as a daily cycle.",
+              flush=True)
+        return daily_cycle(cfg, obs_end, nwp_edate, snowpack=snowpack,
+                           zarr_fn=zarr_fn, forecast_fn=forecast_fn,
+                           anchor_check_fn=anchor_check_fn)
+    if new_survey < s_prev:
         raise CycleError(f"new survey {new_survey:{TS_FMT}} is not after the "
                          f"survey anchor {s_prev:{TS_FMT}}")
     n = _require_coherent(cfg, "survey", s_prev)
@@ -425,15 +559,14 @@ def survey_cycle(cfg: ProjectConfig, new_survey: pd.Timestamp,
     # The new survey is the anchor: set the state to it before saving.
     anchor_fn(cfg, new_survey, _scoured_cids(cfg, events))
     _require_coherent(cfg, "res", new_survey, n)
-    _save_as(cfg, "survey")
-    _write_survey_anchor(cfg, new_survey)
-
-    if obs_end > new_survey:
-        snowpack(cfg, obs_end, "res")
-        _require_coherent(cfg, "res", obs_end, n)
-        anchor_check_fn(cfg, new_survey)
-    _save_as(cfg, "anchor")
-    zarr_fn(cfg, s_prev)                     # observation-driven only
+    # Last point a crash re-runs from scratch: the journal takes over from here.
+    j = {"cycle": "survey", "phase": "save_survey", "clusters": n,
+         "since": s_prev.strftime(TS_FMT), "survey_new": new_survey.strftime(TS_FMT),
+         "obs_end": obs_end.strftime(TS_FMT)}
+    _write_journal(cfg, j)
+    # Zarr replaced after s_prev, observation-driven only.
+    _complete(cfg, j, snowpack=snowpack, zarr_fn=zarr_fn,
+              anchor_check_fn=anchor_check_fn)
 
     if nwp_edate is not None:
         snowpack(cfg, nwp_edate, "anchor")
@@ -446,7 +579,11 @@ def survey_cycle(cfg: ProjectConfig, new_survey: pd.Timestamp,
 def daily_cycle(cfg: ProjectConfig, obs_end: Optional[pd.Timestamp] = None,
                 nwp_edate: Optional[pd.Timestamp] = None,
                 *, snowpack: Callable = run_snowpack, zarr_fn: Callable = update_zarr,
-                forecast_fn: Callable = build_forecast) -> dict:
+                forecast_fn: Callable = build_forecast,
+                anchor_check_fn: Callable = None) -> dict:
+    # A pending survey journal is finished here too, hence anchor_check_fn.
+    resume_pending(cfg, snowpack=snowpack, zarr_fn=zarr_fn,
+                   anchor_check_fn=anchor_check_fn or check_anchor_held)
     files = _sno_files(cfg, "anchor")
     if not files:
         raise CycleError(f"no daily anchors in {cfg.pro_dir}")
@@ -457,8 +594,11 @@ def daily_cycle(cfg: ProjectConfig, obs_end: Optional[pd.Timestamp] = None,
     if obs_end > a:
         snowpack(cfg, obs_end, "anchor")
         _require_coherent(cfg, "res", obs_end, n)
-        _save_as(cfg, "anchor")
-        zarr_fn(cfg, a)
+        j = {"cycle": "daily", "phase": "save_anchor", "clusters": n,
+             "since": a.strftime(TS_FMT), "obs_end": obs_end.strftime(TS_FMT)}
+        _write_journal(cfg, j)
+        _complete(cfg, j, snowpack=snowpack, zarr_fn=zarr_fn,
+                  anchor_check_fn=None)          # unused in save_anchor
     else:
         print("    No new observations since the anchor; state unchanged")
     if nwp_edate is not None:
