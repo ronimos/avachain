@@ -258,8 +258,12 @@ for cron's own output. The marker body of a failed survey points to its log.
   account that writes here, including in `~/.bashrc`.
 
 **Setup, once per path:**
-1. Clone the repo to `code/avachain`, `uv sync`, then
-   `python install.py --slope Professor_PTC`. This generates the scripts and
+1. Clone the repo to `code/avachain`, then build the venv with a Python that
+   lives inside the tree:
+   `UV_PYTHON_INSTALL_DIR=/home/avachain/code/python uv sync --frozen --python 3.12.11`.
+   uv's default Python sits under the installer's `~/.local` (mode 700), which
+   other accounts and their cron jobs cannot reach. Then run
+   `.venv/bin/python install.py --slope Professor_PTC`. This generates the scripts and
    `master_config.ini`/`template.sno`, creates the directories, and prints the
    crontab line.
 2. Put the static inputs in `data/static/<path>/`, the station CSV in
