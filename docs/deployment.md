@@ -287,12 +287,14 @@ in §2.1. Nothing else is needed.
 
 ---
 
-## 5. Status and open items (2026-10-29)
+## 5. Status and open items (2026-11-01)
 
-- **Not installed yet.** `code/` is empty. The acceptance rehearsal is running
-  in `scratch/ron/rehearsal/`, a full copy of this layout. The old clone at
-  `/home/avachain/avachain` and Val's `intermediate/` skeleton are from before
-  this layout and will be removed when the install lands.
+- **Installed 2026-11-01** from `main` into `code/avachain`. The rehearsal
+  (`scratch/ron/rehearsal/`) and the Feb soak (`scratch/ron/rehearsal_soak/`)
+  both passed. The install acceptance rebuild runs from
+  `scratch/ron/install/acceptance.sh`; cron is added only after it compares
+  byte-identical. The old `/home/avachain/avachain` clone and Val's empty
+  `intermediate/` skeleton were removed on 2026-11-01.
 - **Live station fetch is a stub.** `aws_ingest._fetch_station` returns nothing
   until the CAIC API or CDOT RWIS endpoint and token are confirmed. Until then,
   the daily run's station forcing comes only from the seeded CSV cache, so the
