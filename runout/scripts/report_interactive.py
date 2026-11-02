@@ -316,6 +316,35 @@ def scenario_fields(hz, shape, pressures_kpa, depths_m):
             'impacts': [(lab, a / wsum if wsum > 0 else a) for lab, a in zip(labels, acc)]}
 
 
+def crossing_distances(hz, crossing, grid):
+    # Each scenario's closest approach to the path's road crossing: the
+    # smallest distance from any of its reach cells to the crossing point
+    # @param hz: horizon dict (manifest work_dir, df)
+    # @param crossing: [x, y]
+    # @param grid: payload grid dict
+    # @returns: dict scenario_id -> metres (None when it reaches nothing),
+    #          or None when the scenario folders are not on disk
+    work = hz['manifest'].get('work_dir')
+    if not work or not Path(work).is_dir() or hz['df'].empty:
+        return None
+    xs = grid['left'] + (np.arange(grid['w']) + 0.5) * grid['res']
+    ys = grid['top'] - (np.arange(grid['h']) + 0.5) * grid['res']
+    dist = np.hypot(xs[None, :] - crossing[0], ys[:, None] - crossing[1])
+    out = {}
+    for sid in hz['df']['scenario_id']:
+        try:
+            reach, _ = h.read_raster(Path(work) / sid / 'outputs' / 'reach_mask.tif')
+        except Exception as e:
+            logging.warning(f"[{hz['label']}] {sid}: no reach mask ({e}); "
+                            f"distances to the crossing left out")
+            return None
+        if reach.shape != dist.shape:
+            return None
+        m = reach > 0
+        out[sid] = float(dist[m].min()) if m.any() else None
+    return out
+
+
 # --------- Payload ---------
 
 def _horizon_number(label):
@@ -428,7 +457,31 @@ def build_payload(horizons, cycle_date):
     except Exception as e:
         logging.warning(f"avalanche path not traced: {e}", exc_info=True)
         path = None
-    return {'grid': grid, 'extent': [round(v, 2) for v in ext], 'p_scale': P_SCALE,
+
+    # Scenario distances (histogram, nearest miss, approach curve) are to
+    # the path's road crossing, like the cursor readout (Ron, 2026-11-02).
+    # A scenario that reaches the road anywhere stays at 0. Without a
+    # crossing they fall back to the closest approach to any road point.
+    dist_ref = 'road'
+    if path and path.get('crossing'):
+        maps = {}
+        for slot in slots:
+            if slot.get('missing'):
+                continue
+            hz = by_n[slot['n']]
+            dm = crossing_distances(hz, path['crossing'], grid)
+            if dm is None:
+                maps = None
+                break
+            maps[slot['n']] = dm
+        if maps is not None:
+            dist_ref = 'crossing'
+            for slot in slots:
+                for q in slot.get('scenarios', []):
+                    q['d_road'] = q['d']
+                    dc = maps[slot['n']].get(q['id'])
+                    q['d'] = 0.0 if q['reached'] else (round(dc, 1) if dc is not None else None)
+    return {'dist_ref': dist_ref,'grid': grid, 'extent': [round(v, 2) for v in ext], 'p_scale': P_SCALE,
             'hist_bin_m': HIST_BIN_M, 'shades': shades, 'roads': roads,
             'slots': slots, 'path': path,
             'impact_labels': [f"P(pressure &ge; {t:g} kPa)" for t in pressures] +
@@ -493,9 +546,9 @@ click to pin the readout (the address bar then links to that spot).</span></div>
 
 HIST_HTML = """
 <div class="ihist" id="ihist"><svg id="ihist-svg"></svg><div class="ihist-tip" id="ihist-tip"></div></div>
-<p class="imap-help">Each scenario counted once, at its flow's closest approach to the road
-({{BIN}} m bins). The first bar is scenarios that reach the road. The tooltip gives the
-weighted share as well.</p>
+<p class="imap-help">Each scenario is counted once, at its flow's closest approach to where the
+avalanche path crosses the road ({{BIN}} m bins). The first bar is scenarios that reach the road
+anywhere. The tooltip gives the weighted share as well.</p>
 """
 
 JS = r"""
@@ -755,7 +808,9 @@ JS = r"""
   }
   out += '<line x1="' + (ML + slotW) + '" x2="' + (ML + slotW) + '" y1="' + MT + '" y2="' + (MT + ph) + '" stroke="#E87722" stroke-width="1.5"/>';
   out += '<line x1="' + ML + '" x2="' + (VW-MR) + '" y1="' + (MT+ph) + '" y2="' + (MT+ph) + '" stroke="#000"/>';
-  out += '<text x="' + (ML + pw/2) + '" y="' + (VH - 6) + '" font-size="12" text-anchor="middle">Closest approach to the road (m), bin upper edge</text>';
+  const xlab = D.dist_ref === 'crossing' ? "Closest approach to where the avalanche path crosses the road (m), bin upper edge"
+                                         : 'Closest approach to the road (m), bin upper edge';
+  out += '<text x="' + (ML + pw/2) + '" y="' + (VH - 6) + '" font-size="12" text-anchor="middle">' + xlab + '</text>';
   out += '<text transform="translate(13,' + (MT + ph/2) + ') rotate(-90)" font-size="12" text-anchor="middle"># scenarios</text>';
   // legend
   counts.forEach((o, j) => { const lx = ML + 8 + j * 170, ly = 4;
@@ -765,7 +820,8 @@ JS = r"""
   svg.querySelectorAll('rect.hit').forEach(r => {
     r.addEventListener('mousemove', ev => {
       const i = +r.dataset.i;
-      const rng = i === 0 ? 'reached the road' : ((i-1)*B) + '-' + (i*B) + ' m short of the road';
+      const rng = i === 0 ? 'reached the road' : ((i-1)*B) + '-' + (i*B) + ' m short of ' +
+        (D.dist_ref === 'crossing' ? 'the road crossing' : 'the road');
       tip.innerHTML = '<b>' + rng + '</b><br>' + counts.map(o =>
         o.s.name + ': ' + o.c[i] + ' scenario' + (o.c[i] === 1 ? '' : 's') +
         ', weight ' + o.w[i].toFixed(3) + (o.c[i] && o.c[i] <= 4 ? ' (' + o.ids[i].join(', ') + ')' : '')).join('<br>');

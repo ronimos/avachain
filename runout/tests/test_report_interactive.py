@@ -159,6 +159,23 @@ class ScenarioFields(unittest.TestCase):
         self.assertAlmostEqual(vals['P(pressure &ge; 30 kPa)'], 0.75)
         self.assertAlmostEqual(vals['P(depth &ge; 1 m)'], 0.75)
 
+    def test_crossing_distances(self):
+        tmp = Path(tempfile.mkdtemp())
+        for sid, cells in [('s1', [(2, 2)]), ('s2', [])]:
+            out = tmp / sid / 'outputs'
+            out.mkdir(parents=True)
+            reach = np.zeros((6, 5))
+            for r, c in cells:
+                reach[r, c] = 1
+            _tif(out / 'reach_mask.tif', reach, 0.0)
+        hz = {'label': 'T_0', 'manifest': {'work_dir': str(tmp)},
+              'df': pd.DataFrame({'scenario_id': ['s1', 's2']})}
+        grid = {'left': 1000.0, 'top': 2000.0, 'res': 1.0, 'w': 5, 'h': 6}
+        # cell (2, 2) centre = (1002.5, 1997.5); crossing 3-4-5 away
+        d = ri.crossing_distances(hz, [1005.5, 1993.5], grid)
+        self.assertAlmostEqual(d['s1'], 5.0)
+        self.assertIsNone(d['s2'])
+
     def test_no_work_dir(self):
         hz = {'label': 'T_0', 'manifest': {}, 'df': pd.DataFrame({'scenario_id': ['s1']})}
         self.assertIsNone(ri.scenario_fields(hz, (2, 2), (5.0,), (1.0,)))

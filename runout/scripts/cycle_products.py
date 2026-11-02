@@ -108,11 +108,20 @@ def load_cycle(cycle_dir):
     return manifest, horizons
 
 
-def nearest_miss_with_rank(hz):
+def nearest_miss_with_rank(hz, dist=None):
     # Nearest miss plus its weight and ensemble rank (1 = highest weight)
     # @param hz: horizon dict from load_cycle
+    # @param dist: optional {scenario_id: metres} to measure the miss by
+    #              (the report passes distances to the path's road crossing);
+    #              default is the stack's closest approach to any road point
     # @returns: dict or None
     nm = hz['road'].get('nearest_miss')
+    if dist is not None and not hz['df'].empty:
+        reached = dict(zip(hz['df']['scenario_id'], hz['df'].get(
+            'reached_road', [False] * len(hz['df']))))
+        cand = [(d, sid) for sid, d in dist.items()
+                if d is not None and not bool(reached.get(sid))]
+        nm = {'scenario': min(cand)[1], 'distance_short_m': min(cand)[0]} if cand else None
     if not nm or hz['df'].empty:
         return nm
     df = hz['df']
@@ -245,15 +254,20 @@ def plot_small_multiples(horizons, dpi=120):
     return fig_to_b64(fig, dpi)
 
 
-def road_approach_curve(df):
+def road_approach_curve(df, dist=None):
     # Weighted P(closest approach <= d) as a step curve
     # @param df: scenarios table (distance_to_road_m, reached_road,
     #            scenario_probability)
+    # @param dist: optional {scenario_id: metres} replacing
+    #              distance_to_road_m (distances to the path's road crossing)
     # @returns: (xs, ys) for a 'post' step plot, xs[0] = 0 with ys[0] =
     #          P(reach road); or None when the table has no distances
     if df.empty or 'distance_to_road_m' not in df.columns:
         return None
-    d = df['distance_to_road_m'].to_numpy(dtype=float)
+    if dist is not None:
+        d = df['scenario_id'].map(lambda k: dist.get(k)).astype(float).to_numpy()
+    else:
+        d = df['distance_to_road_m'].to_numpy(dtype=float)
     if 'reached_road' in df.columns:
         d = np.where(df['reached_road'].astype(bool).to_numpy(), 0.0, d)
     w = df['scenario_probability'].to_numpy(dtype=float) \
@@ -270,7 +284,7 @@ def road_approach_curve(df):
     return np.concatenate([[0.0], d]), np.concatenate([[p0], cum])
 
 
-def plot_road_approach(horizons, dpi=120):
+def plot_road_approach(horizons, dpi=120, dists=None):
     # Weighted P(flow comes within d of the road), one line per horizon.
     # Replaces the runout exceedance in the report (2026-11-02): that plot
     # set each scenario's runout (farthest reach cell from ITS OWN release
@@ -281,11 +295,12 @@ def plot_road_approach(horizons, dpi=120):
     # table uses, so d = 0 here is P(reach road).
     # @param horizons: list of horizon dicts
     # @param dpi: int
+    # @param dists: optional {label: {scenario_id: metres to the crossing}}
     # @returns: str base64 PNG or None
     fig, ax = plt.subplots(figsize=(8, 4.2))
     drew, xmax = False, 0.0
     for i, hz in enumerate(horizons):
-        curve = road_approach_curve(hz['df'])
+        curve = road_approach_curve(hz['df'], (dists or {}).get(hz['label']))
         if curve is None:
             continue
         xs, ys = curve
@@ -301,7 +316,9 @@ def plot_road_approach(horizons, dpi=120):
     ax.text(0, 1.02, 'road', ha='center', va='bottom', fontsize=8, color=COLORS['road'])
     ax.set_xlim(-xmax * 0.01, xmax * 1.05)
     ax.set_ylim(0, 1.0)
-    ax.set_xlabel("Distance short of the road (m), the flow's closest approach", fontsize=9)
+    ax.set_xlabel("Distance short of where the avalanche path crosses the road (m), "
+                  "the flow's closest approach" if dists else
+                  "Distance short of the road (m), the flow's closest approach", fontsize=9)
     ax.set_ylabel('P(flow comes at least this close)', fontsize=9)
     ax.tick_params(labelsize=8)
     ax.legend(fontsize=8, frameon=False, loc='lower right')
@@ -515,7 +532,7 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
   <th class="l">Horizon</th><th>Valid</th><th>Scenarios</th>
   <th>Reached road</th><th>P(reach road)<br>weighted</th>
   <th>P(reach road)<br>unweighted, 95% CI</th>
-  <th>Nearest miss</th><th>Max runout (m)</th>
+  <th>Nearest miss{% if nm_ref %}<br>(to where the path<br>crosses the road){% endif %}</th><th>Max runout (m)</th>
 </tr></thead>
 <tbody>
 {% for hz in horizons %}
@@ -727,6 +744,20 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
     # @param horizons: list of horizon dicts (completed ones)
     # @param dpi: int
     # @returns: Path to report.html
+    try:
+        payload = ri.build_payload(horizons, manifest['cycle_date'])
+        imap = ri.render_parts(payload)
+    except Exception as e:
+        # the static maps still render; the interactive part is a bonus
+        logging.warning(f"interactive map skipped: {e}", exc_info=True)
+        payload, imap = None, ri.render_parts(None)
+    # Distances to the path's road crossing, the same reference as the
+    # cursor readout and the histogram (Ron, 2026-11-02)
+    dists = None
+    if payload and payload.get('dist_ref') == 'crossing':
+        dists = {sl['label']: {q['id']: q['d'] for q in sl.get('scenarios', [])}
+                 for sl in payload['slots'] if not sl.get('missing')}
+
     rows = []
     for hz in horizons:
         road = hz['road']
@@ -738,7 +769,7 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
             'p_w': _fmt(pw if pw is not None else road.get('fraction_reached')),
             'p_u': _fmt(road.get('fraction_reached')),
             'ci_lo': _fmt(ci[0]), 'ci_hi': _fmt(ci[1]),
-            'nm': nearest_miss_with_rank(hz),
+            'nm': nearest_miss_with_rank(hz, (dists or {}).get(hz['label'])),
             'max_runout': _fmt(hz['df']['runout_max_m'].max(), 0)
             if not hz['df'].empty else '-',
         })
@@ -769,12 +800,6 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
     fr = cfg.get('friction') or {}
     fparams = ', '.join(f"{k}={fr[k]}" for k in ('mu', 'xi', 'tau0')
                         if fr.get(k) is not None)
-    try:
-        imap = ri.render_parts(ri.build_payload(horizons, manifest['cycle_date']))
-    except Exception as e:
-        # the static maps still render; the interactive part is a bonus
-        logging.warning(f"interactive map skipped: {e}", exc_info=True)
-        imap = ri.render_parts(None)
     box = inputs_and_caveats(manifest, horizons)
     html = Template(REPORT_TEMPLATE).render(
         css=CSS, **imap, inputs=box['rows'], caveats=box['caveats'],
@@ -786,7 +811,8 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
         survey_date=(manifest.get('survey') or {}).get('date'),
         horizons=rows, failed=', '.join(failed),
         maps_b64=plot_small_multiples(horizons, dpi),
-        exceed_b64=plot_road_approach(horizons, dpi),
+        exceed_b64=plot_road_approach(horizons, dpi, dists),
+        nm_ref=' to the road crossing' if dists else '',
         chainage_b64=plot_chainage(horizons, dpi),
         refpoint_rows=ref_rows,
         physics_name=manifest['physics']['name'],
