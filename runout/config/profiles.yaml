@@ -33,7 +33,15 @@ forecast:
   paths: [little_professor]
   horizons: all
   entrainment:
-    mode: raster               # snow height raster from --snow-height
+    mode: raster               # raster from --snow-height
+    # The raster is the release side's scour_depth.tif
+    # (handoff/<path>/release/<date>/<set>/), entrained as is. Ron chose this
+    # on 2026-11-02 over Val's rule (survey snow height capped at the
+    # scenario's scour_depth_m, raster_cap: true). On Jan 18 the two give the
+    # same weighted P(reach) and near-road probabilities. B has no ad hoc
+    # 0.3 m fallback, and its depth comes from the same SNOWPACK state as the
+    # release. A survey raster (--snow-height latest) is refused here.
+    raster_cap: false
   execution:
     parallel: true
     max_workers: 4
@@ -58,6 +66,8 @@ legacy:
   description: Little Professor on the archived RunoutProbabilityEnvelope tree, T+0 to T+2
   paths: [little_professor_legacy]
   horizons: [T_0, T_1, T_2]
+  entrainment:
+    raster_cap: true           # Val's rule: the raster is survey snow height
 
 legacy_nosurvey:
   extends: legacy

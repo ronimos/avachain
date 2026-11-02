@@ -267,6 +267,15 @@ def run_forecast(args, profile, sections, physics, local, config_dir):
         logging.info(f"snow height raster: {snow_height} (survey {survey_date})")
 
     ent_mode = (sections.get('entrainment') or {}).get('mode', 'auto')
+    raster_cap = bool((sections.get('entrainment') or {}).get('raster_cap', True))
+    if ent_mode == 'raster' and not raster_cap and args.snow_height == 'latest':
+        # 'latest' is a survey snow height. Entrained uncapped it would let
+        # the flow pick up the whole snowpack along the corridor.
+        logging.error("entrainment.raster_cap is false, so --snow-height must be "
+                      "the release side's scour_depth.tif, not 'latest' (a survey "
+                      "snow height). Pass the file, or use --set "
+                      "entrainment.raster_cap=true for Val's capped rule.")
+        return 1
     overall = []
 
     for slug in paths:

@@ -68,6 +68,30 @@ PARAMS_MU_XI_MODELS = ('voellmy', 'voellmyminshear', 'coulomb',
                        'coulombminshear', 'wetsnow')
 
 
+def entrainment_label(ent_info, raster_cap, cap_m, cap_source, raster_name):
+    # The entrainment depth and its source, for the scenario summary
+    # (entrainment_depth_used_m / entrainment_depth_source in
+    # scenarios_summary.csv) and the log.
+    # @param ent_info: dict from the entrainment builder (depth_mode, and
+    #                  depth_mean_m when a raster was used)
+    # @param raster_cap: entrainment.raster_cap
+    # @param cap_m: the scalar scour cap (params scour_depth_m or the fallback)
+    # @param cap_source: where cap_m came from
+    # @param raster_name: file name of the raster used, or None
+    # @returns: (depth_m, source) - depth_m is the cap when one applies,
+    #           else the corridor mean of the raster as entrained
+    # Until 2026-11-02 this always reported the cap. Under raster_cap: false
+    # (the forecast default) no cap is applied, so the CSV said "0.3 m,
+    # config defaults" for a raster entrained at up to 2.6 m.
+    if ent_info.get('depth_mode') == 'dsm_capped':
+        if not raster_cap:
+            return (float(ent_info.get('depth_mean_m', 0.0)),
+                    f"raster as is, no cap: {raster_name} (corridor mean)")
+        return (float(cap_m),
+                f"raster {raster_name} capped at {cap_source}")
+    return float(cap_m), cap_source
+
+
 def materialize_ava_dir(scenario, shared_paths, config, preserve_outputs=False):
     # Build the AvaFrame Inputs/ folder for one scenario
     # @param scenario: dict with scenario_id, scenario_dir, release_geojson,
@@ -221,11 +245,6 @@ def materialize_ava_dir(scenario, shared_paths, config, preserve_outputs=False):
             entrainment_depth = float(defaults_cfg['scour_depth_fallback_m'])
             ent_source = 'config defaults (fallback - scour=0 in params)'
         
-        logging.info(
-            f"  [{scenario['scenario_id']}] entrainment depth (scour cap) = "
-            f"{entrainment_depth:.2f} m from {ent_source}"
-        )
-        
         # Entrainment mode (set by the profile):
         #   auto     corridor along the flowline at the scour cap
         #   raster   corridor with per-cell min(HS, scour cap) from the
@@ -237,6 +256,7 @@ def materialize_ava_dir(scenario, shared_paths, config, preserve_outputs=False):
             'raster' if ent_cfg_top.get('use_snow_height_dsm') else 'auto'
         )
         min_slope = float(ent_cfg_top.get('min_slope_deg', 0.0))
+        snow_height_path = None
 
         if ent_mode == 'polygon':
             ent_info = h.build_polygon_entrainment(
@@ -251,7 +271,6 @@ def materialize_ava_dir(scenario, shared_paths, config, preserve_outputs=False):
                 flowline_out=flowpath_out,
             )
         else:
-            snow_height_path = None
             if ent_mode == 'raster':
                 sh_path = ent_cfg_top.get('snow_height_raster')
                 if sh_path and Path(sh_path).exists():
@@ -285,8 +304,16 @@ def materialize_ava_dir(scenario, shared_paths, config, preserve_outputs=False):
             )
         # Annotate ent_info with source so the report can reference it
         ent_info['mode'] = ent_mode
-        ent_info['depth_source'] = ent_source
+        ent_info['depth_m'], ent_info['depth_source'] = entrainment_label(
+            ent_info, raster_cap=bool(ent_cfg_top.get('raster_cap', True)),
+            cap_m=entrainment_depth, cap_source=ent_source,
+            raster_name=snow_height_path.name if snow_height_path else None,
+        )
         ent_info['scour_depth_from_params'] = scour_from_params
+        logging.info(
+            f"  [{scenario['scenario_id']}] entrainment depth "
+            f"{ent_info['depth_m']:.2f} m from {ent_info['depth_source']}"
+        )
     else:
         # No entrainment - still trace and save the flowline for the viewer
         flowline = h.steepest_descent_flowline(

@@ -44,7 +44,8 @@ entrainment:
   # raster mode only. true: per cell min(raster, scour cap) - the raster
   # is snow height and the scenario's scour_depth_m caps it (Val's rule).
   # false: the raster already is the entrainable depth (the release
-  # side's scour_depth.tif) and is used as is.
+  # side's scour_depth.tif) and is used as is. The forecast profile sets
+  # false (2026-11-02); this default keeps every other profile on Val's rule.
   raster_cap: true
   ent_ero_energy_jkg: 5000
   auto_detect:
