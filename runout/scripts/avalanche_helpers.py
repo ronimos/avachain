@@ -182,14 +182,25 @@ def resample_to_reference_grid(src_path, ref_path, dst_path,
             dst_transform=target_transform,
             dst_crs=target_crs,
             resampling=methods[resampling_method],
-            dst_nodata=fill_value
+            dst_nodata=fill_value,
+            # Keep the fill_value the array was pre-filled with. With the
+            # default (True), rasterio 1.4.4 / GDAL 3.10 initialise the
+            # destination to the SOURCE nodata (-9999 in the release
+            # side's depth.asc) even with dst_nodata=0, so every cell the
+            # source does not cover came out as -9999 data. AvaFrame 2.1
+            # rejects a release raster with negative values.
+            init_dest_nodata=False,
         )
     
     # Write with reference grid's profile (driver determined by dst extension)
     dst_path = Path(dst_path)
     driver = 'AAIGrid' if dst_path.suffix.lower() == '.asc' else 'GTiff'
     target_profile.update(
-        driver=driver, count=1, dtype='float32', nodata=fill_value
+        # The nodata tag must not be the fill value when the fill is real
+        # data: tagging 0 as nodata made AvaFrame 2.1 read every
+        # no-release cell of the release raster as NaN and refuse it.
+        driver=driver, count=1, dtype='float32',
+        nodata=fill_value if not np.isfinite(fill_value) or fill_value < 0 else -9999.0
     )
     
     return write_raster(

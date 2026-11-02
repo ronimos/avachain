@@ -98,8 +98,17 @@ def materialize_ava_dir(scenario, shared_paths, config, preserve_outputs=False):
         else:
             shutil.rmtree(ava_dir)
     inputs_dir = ava_dir / 'Inputs'
-    for sub in ('REL', 'RELTH', 'RES'):
+    # AvaFrame 2.1 reads release thickness from Inputs/REL/ only (a .shp
+    # with a thickness attribute, or a .asc/.tif raster, never both) and
+    # entrainment thickness from Inputs/ENT/ only. The RELTH/ and ENTH/
+    # folders of older AvaFrame are not read: a raster put there is
+    # silently ignored and the shapefile's single thickness is used.
+    for sub in ('REL', 'RES'):
         (inputs_dir / sub).mkdir(parents=True)
+    # Shapefiles kept for the record and the viewer, outside Inputs/ so
+    # com1DFA does not see them
+    shapes_dir = ava_dir / 'shapes'
+    shapes_dir.mkdir(parents=True, exist_ok=True)
     
     # Per-scenario outputs dir (created early so flowpath has somewhere to go)
     scenario_outputs = work_dir / 'outputs'
@@ -130,7 +139,7 @@ def materialize_ava_dir(scenario, shared_paths, config, preserve_outputs=False):
     
     h.geojson_to_shapefile(
         scenario['release_geojson'],
-        inputs_dir / 'REL' / 'release_01.shp',
+        shapes_dir / 'release_01.shp',
         attributes={'thickness': float(rel_thickness)},
         fill_holes=True
     )
@@ -157,12 +166,13 @@ def materialize_ava_dir(scenario, shared_paths, config, preserve_outputs=False):
     )
     
     # ---- Release thickness raster ----
-    # DEM and RELTH must share an identical grid. Resample the upstream
-    # depth raster onto the DEM grid; cells outside the source get 0.
+    # The raster is the release: com1DFA releases where it is > 0, with
+    # that thickness. It must share the DEM grid, so the upstream depth
+    # raster is resampled onto it; cells outside the source get 0.
     h.resample_to_reference_grid(
         src_path=scenario['depth_raster'],
         ref_path=inputs_dir / 'DEM.tif',
-        dst_path=inputs_dir / 'RELTH' / 'release_01.asc',
+        dst_path=inputs_dir / 'REL' / 'release_01.asc',
         resampling_method='bilinear',
         fill_value=0.0
     )
@@ -192,7 +202,6 @@ def materialize_ava_dir(scenario, shared_paths, config, preserve_outputs=False):
     
     if 'ent' in config['com1dfa']['sim_type']:
         (inputs_dir / 'ENT').mkdir()
-        (inputs_dir / 'ENTH').mkdir()
         
         ab_cfg = config['entrainment']['auto_detect']['alpha_beta']
         fa_cfg = config['entrainment']['auto_detect']['flow_accumulation']
@@ -234,8 +243,8 @@ def materialize_ava_dir(scenario, shared_paths, config, preserve_outputs=False):
                 polygon_path=ent_cfg_top['polygon'],
                 release_polygon=release_polygon,
                 dem_path=inputs_dir / 'DEM.tif',
-                polygon_out=inputs_dir / 'ENT' / 'entrainment.shp',
-                thickness_out=inputs_dir / 'ENTH' / 'entrainment.asc',
+                polygon_out=shapes_dir / 'entrainment.shp',
+                thickness_out=inputs_dir / 'ENT' / 'entrainment.asc',
                 crs=h.get_crs_of(shared_paths['dem']),
                 depth_m=entrainment_depth,
                 min_slope_deg=min_slope,
@@ -261,8 +270,8 @@ def materialize_ava_dir(scenario, shared_paths, config, preserve_outputs=False):
             ent_info = h.auto_detect_entrainment(
                 release_polygon=release_polygon,
                 dem_path=inputs_dir / 'DEM.tif',
-                polygon_out=inputs_dir / 'ENT' / 'entrainment.shp',
-                thickness_out=inputs_dir / 'ENTH' / 'entrainment.asc',
+                polygon_out=shapes_dir / 'entrainment.shp',
+                thickness_out=inputs_dir / 'ENT' / 'entrainment.asc',
                 crs=h.get_crs_of(shared_paths['dem']),
                 depth_m=entrainment_depth,
                 alpha_min=ab_cfg['min_alpha_deg'],
@@ -310,15 +319,6 @@ def write_com1dfa_config(scenario, config, out_path):
         'mean_kgm3', scenario['params'].get('rho_kgm3', 300.0)
     )
 
-    # Entrainment thickness scalar. com1DFA requires 'entTh' to parse as a
-    # float even when the raster route (entThFromFile) supplies the real
-    # per-cell values.
-    scour_from_params = scenario['params'].get('scour_depth_m', 0.0)
-    if scour_from_params and scour_from_params > 0:
-        ent_thickness_placeholder = float(scour_from_params)
-    else:
-        ent_thickness_placeholder = float(defaults_cfg['scour_depth_fallback_m'])
-
     # AvaFrame reads case-sensitive camelCase keys. Python's ConfigParser
     # lowercases option names on write, which makes AvaFrame silently fall
     # back to defaults. Subclass to preserve case.
@@ -336,11 +336,10 @@ def write_com1dfa_config(scenario, config, out_path):
         # paths - flow truncates with the tail still moving.
         'tEnd': str(cfg_cfg.get('t_end_s', 1200)),
         'resType': '|'.join(cfg_cfg['result_types']),
-        # Release thickness comes from the Inputs/RELTH raster.
-        # relTh must stay unset when relThFromFile is True, and
-        # relThFromShp must be False (com1DFA defaults it to True).
+        # Release thickness comes from the Inputs/REL raster. relTh must
+        # stay empty when relThFromFile is True (AvaFrame 2.1 refuses it).
         'relThFromFile': 'True',
-        'relThFromShp': 'False',
+        'relTh': '',
         # No secondary release areas in this workflow.
         'secRelArea': 'False',
         # Wipe stale remeshed rasters from any previous run.
@@ -431,26 +430,14 @@ def write_com1dfa_config(scenario, config, out_path):
 
     # ---- Entrainment keys (only if sim_type includes entrainment) ----
     if 'ent' in cfg_cfg['sim_type']:
-        # Raster route (entThFromFile=True): per-cell thickness from the
-        # ENTH raster, used when the snow-height DSM is enabled.
-        # Shapefile route (entThFromFile=False): single 'entTh' value.
-        ent_mode = ent_cfg.get('mode') or (
-            'raster' if ent_cfg.get('use_snow_height_dsm') else 'auto'
-        )
-        use_dsm = ent_mode == 'raster' and bool(
-            ent_cfg.get('snow_height_raster') and
-            Path(ent_cfg['snow_height_raster']).exists()
-        )
-        cp['GENERAL']['entThFromFile'] = 'True' if use_dsm else 'False'
-        # Thickness never comes from the shapefile attribute. It comes from
-        # the ENTH raster (entThFromFile=True) or the entTh scalar. com1DFA
-        # defaults entThFromShp to True, which forbids setting entTh at all,
-        # so it must be flipped off explicitly.
-        cp['GENERAL']['entThFromShp'] = 'False'
-        # entTh must be float-parseable in both routes; the raster
-        # overrides per-cell when entThFromFile is True.
-        cp['GENERAL']['entTh'] = str(ent_thickness_placeholder)
-        # Fallback when the shapefile is missing the thickness attribute.
+        # Every entrainment mode (auto, polygon, raster) writes its
+        # per-cell thickness to Inputs/ENT/entrainment.asc, the only file
+        # there, and com1DFA entrains where it is > 0. Constant modes are a
+        # raster of one value. AvaFrame 2.1: entThFromFile=True with a
+        # raster in ENT/, and entTh must stay empty or it refuses the run.
+        cp['GENERAL']['entThFromFile'] = 'True'
+        cp['GENERAL']['entTh'] = ''
+        # Only read for a shapefile missing the attribute; kept harmless
         cp['GENERAL']['entThIfMissingInShp'] = str(
             defaults_cfg['scour_depth_fallback_m']
         )
@@ -514,7 +501,7 @@ def _stub_com1dfa(ava_dir, local_cfg_path):
     with rasterio.open(ava_dir / 'Inputs' / 'DEM.tif') as d:
         prof = d.profile.copy()
         nrow, ncol = d.height, d.width
-    with rasterio.open(ava_dir / 'Inputs' / 'RELTH' / 'release_01.asc') as r:
+    with rasterio.open(ava_dir / 'Inputs' / 'REL' / 'release_01.asc') as r:
         relth = r.read(1)
     depth = float(relth[relth > 0].mean()) if (relth > 0).any() else 0.5
     rows, cols = np.where(relth > 0)
