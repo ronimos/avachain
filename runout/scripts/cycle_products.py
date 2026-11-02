@@ -38,6 +38,7 @@ from jinja2 import Template
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import avalanche_helpers as h
 import build_viewer
+import report_interactive as ri
 
 from .manifest import PIPELINE_VERSION
 
@@ -429,7 +430,7 @@ CSS = """
 REPORT_TEMPLATE = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <title>{{ project }} runout forecast {{ cycle_date }}</title>
-<style>{{ css }}</style></head>
+<style>{{ css }}{{ imap_css }}</style></head>
 <body>
 <h1>AVALANCHE RUNOUT FORECAST: {{ project|upper }}</h1>
 <div class="hdr"><table>
@@ -467,11 +468,18 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 </tbody></table>
 
 <h2>Probability of reach</h2>
-<img src="data:image/png;base64,{{ maps_b64 }}" alt="Probability maps">
+{% if imap_html %}{{ imap_html }}
+<div class="imap-print" style="display:none"><img src="data:image/png;base64,{{ maps_b64 }}" alt="Probability maps"></div>
+{% else %}<img src="data:image/png;base64,{{ maps_b64 }}" alt="Probability maps">{% endif %}
 
 {% if exceed_b64 %}
 <h2>Runout exceedance</h2>
 <img src="data:image/png;base64,{{ exceed_b64 }}" alt="Exceedance curve">
+{% endif %}
+
+{% if ihist_html %}
+<h2>How close each scenario comes to the road</h2>
+{{ ihist_html }}
 {% endif %}
 
 {% if refpoint_rows %}
@@ -499,6 +507,8 @@ depths {{ depth_convention }}. Pipeline v{{ version }}{% if git %} ({{ git }}){%
 Probabilities are the weighted fraction of snowpack scenarios whose flow reaches a location, conditional on release.
 <a href="details.html">Details</a>, <a href="viewer.html">Viewer</a>, <a href="scenarios.xlsx">Scenario table</a>.
 </div>
+{% if imap_data %}<script type="application/json" id="imap-data">{{ imap_data }}</script>
+<script>{{ imap_js }}</script>{% endif %}
 </body></html>
 """
 
@@ -616,8 +626,14 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
     fr = cfg.get('friction') or {}
     fparams = ', '.join(f"{k}={fr[k]}" for k in ('mu', 'xi', 'tau0')
                         if fr.get(k) is not None)
+    try:
+        imap = ri.render_parts(ri.build_payload(horizons, manifest['cycle_date']))
+    except Exception as e:
+        # the static maps still render; the interactive part is a bonus
+        logging.warning(f"interactive map skipped: {e}", exc_info=True)
+        imap = ri.render_parts(None)
     html = Template(REPORT_TEMPLATE).render(
-        css=CSS,
+        css=CSS, **imap,
         project=manifest.get('display', {}).get('project_name', manifest['path']),
         subtitle=manifest.get('display', {}).get('subtitle', ''),
         cycle_date=f"{manifest['cycle_date'][:4]}-{manifest['cycle_date'][4:6]}-{manifest['cycle_date'][6:]}",
