@@ -245,6 +245,70 @@ def plot_small_multiples(horizons, dpi=120):
     return fig_to_b64(fig, dpi)
 
 
+def road_approach_curve(df):
+    # Weighted P(closest approach <= d) as a step curve
+    # @param df: scenarios table (distance_to_road_m, reached_road,
+    #            scenario_probability)
+    # @returns: (xs, ys) for a 'post' step plot, xs[0] = 0 with ys[0] =
+    #          P(reach road); or None when the table has no distances
+    if df.empty or 'distance_to_road_m' not in df.columns:
+        return None
+    d = df['distance_to_road_m'].to_numpy(dtype=float)
+    if 'reached_road' in df.columns:
+        d = np.where(df['reached_road'].astype(bool).to_numpy(), 0.0, d)
+    w = df['scenario_probability'].to_numpy(dtype=float) \
+        if 'scenario_probability' in df.columns else np.ones_like(d)
+    w = np.where(np.isfinite(w) & (w > 0), w, 1.0)
+    ok = np.isfinite(d)
+    d, w = d[ok], w[ok]
+    if not len(d):
+        return None
+    order = np.argsort(d)
+    d, w = d[order], w[order]
+    cum = np.cumsum(w) / w.sum()
+    p0 = float(w[d <= 0].sum() / w.sum())
+    return np.concatenate([[0.0], d]), np.concatenate([[p0], cum])
+
+
+def plot_road_approach(horizons, dpi=120):
+    # Weighted P(flow comes within d of the road), one line per horizon.
+    # Replaces the runout exceedance in the report (2026-11-02): that plot
+    # set each scenario's runout (farthest reach cell from ITS OWN release
+    # centroid, in any direction) against one road line (scenario 001's
+    # centroid to the nearest road point). Releases differ, so on Jan 18
+    # runouts passed the road line while no scenario reached the road.
+    # distance_to_road_m and reached_road are the same measure the reach
+    # table uses, so d = 0 here is P(reach road).
+    # @param horizons: list of horizon dicts
+    # @param dpi: int
+    # @returns: str base64 PNG or None
+    fig, ax = plt.subplots(figsize=(8, 4.2))
+    drew, xmax = False, 0.0
+    for i, hz in enumerate(horizons):
+        curve = road_approach_curve(hz['df'])
+        if curve is None:
+            continue
+        xs, ys = curve
+        ax.step(xs, ys, where='post', color='black',
+                linestyle=HORIZON_STYLES[i % len(HORIZON_STYLES)], linewidth=1.4,
+                label=f"{hz['name']}  ({len(xs) - 1} scenarios)")
+        xmax = max(xmax, float(xs.max()))
+        drew = True
+    if not drew:
+        plt.close(fig)
+        return None
+    ax.axvline(0, color=COLORS['road'], linewidth=2)
+    ax.text(0, 1.02, 'road', ha='center', va='bottom', fontsize=8, color=COLORS['road'])
+    ax.set_xlim(-xmax * 0.01, xmax * 1.05)
+    ax.set_ylim(0, 1.0)
+    ax.set_xlabel("Distance short of the road (m), the flow's closest approach", fontsize=9)
+    ax.set_ylabel('P(flow comes at least this close)', fontsize=9)
+    ax.tick_params(labelsize=8)
+    ax.legend(fontsize=8, frameon=False, loc='lower right')
+    ax.grid(axis='y', linewidth=0.4, color='#DDDDDD')
+    return fig_to_b64(fig, dpi)
+
+
 def plot_exceedance(horizons, dpi=120):
     # Weighted P(runout >= x), one line per horizon, with road and
     # reference points as vertical marks
@@ -481,12 +545,12 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 {% else %}<img src="data:image/png;base64,{{ maps_b64 }}" alt="Probability maps">{% endif %}
 
 {% if exceed_b64 %}
-<h2>Runout exceedance</h2>
-<img src="data:image/png;base64,{{ exceed_b64 }}" alt="Exceedance curve">
+<h2>How close the flow comes to the road</h2>
+<img src="data:image/png;base64,{{ exceed_b64 }}" alt="Probability of coming within a distance of the road">
 {% endif %}
 
 {% if ihist_html %}
-<h2>How close each scenario comes to the road</h2>
+<h2>Scenarios by closest approach to the road</h2>
 {{ ihist_html }}
 {% endif %}
 
@@ -722,7 +786,7 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
         survey_date=(manifest.get('survey') or {}).get('date'),
         horizons=rows, failed=', '.join(failed),
         maps_b64=plot_small_multiples(horizons, dpi),
-        exceed_b64=plot_exceedance(horizons, dpi),
+        exceed_b64=plot_road_approach(horizons, dpi),
         chainage_b64=plot_chainage(horizons, dpi),
         refpoint_rows=ref_rows,
         physics_name=manifest['physics']['name'],

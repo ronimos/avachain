@@ -453,8 +453,9 @@ CSS = """
   .imap-title { font-size: 12px; text-align: center; margin-bottom: 3px; }
   .imap-title b { font-size: 13px; }
   .imap-box { position: relative; border: 1px solid #000; background: #fff; box-sizing: border-box;
+              overflow: hidden;
               cursor: crosshair; touch-action: none; }
-  .imap-box canvas { display: block; width: 100%; height: 100%; }
+  .imap-box canvas { position: absolute; left: 0; top: 0; display: block; width: 100%; height: 100%; }
   .imap-tag { position: absolute; left: 6px; top: 6px; background: rgba(255,255,255,0.88);
               border: 1px solid #000; padding: 1px 6px; font-size: 12px; pointer-events: none;
               font-variant-numeric: tabular-nums; }
@@ -564,7 +565,10 @@ JS = r"""
   function draw(m) {
     const cv = m.cv, dpr = window.devicePixelRatio || 1;
     const W = cv.clientWidth, H = cv.clientHeight;
-    if (cv.width !== Math.round(W*dpr)) { cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr); }
+    // resize the backing store whenever EITHER side changes: checking the
+    // width alone left a later height change to stretch the drawing
+    if (cv.width !== Math.round(W*dpr) || cv.height !== Math.round(H*dpr)) {
+      cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr); }
     const g = cv.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, W, H);
