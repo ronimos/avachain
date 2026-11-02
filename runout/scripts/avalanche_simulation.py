@@ -271,7 +271,8 @@ def materialize_ava_dir(scenario, shared_paths, config, preserve_outputs=False):
                 fallback_buffer_m=fa_cfg['buffer_m'],
                 flowline_out=flowpath_out,
                 snow_height_raster=snow_height_path,
-                min_slope_deg=min_slope
+                min_slope_deg=min_slope,
+                raster_cap=bool(ent_cfg_top.get('raster_cap', True)),
             )
         # Annotate ent_info with source so the report can reference it
         ent_info['mode'] = ent_mode

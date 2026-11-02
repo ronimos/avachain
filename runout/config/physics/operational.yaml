@@ -41,6 +41,11 @@ entrainment:
   # mode is set per profile (auto | polygon | raster); these are the
   # parameters each mode reads.
   min_slope_deg: 15
+  # raster mode only. true: per cell min(raster, scour cap) - the raster
+  # is snow height and the scenario's scour_depth_m caps it (Val's rule).
+  # false: the raster already is the entrainable depth (the release
+  # side's scour_depth.tif) and is used as is.
+  raster_cap: true
   ent_ero_energy_jkg: 5000
   auto_detect:
     primary_method: alpha_beta

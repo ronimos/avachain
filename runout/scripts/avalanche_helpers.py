@@ -915,7 +915,7 @@ def auto_detect_entrainment(release_polygon, dem_path, polygon_out, thickness_ou
                             crs, depth_m, alpha_min=15.0, alpha_max=45.0,
                             alpha_buffer_m=15.0, fallback_buffer_m=50.0,
                             flowline_out=None, snow_height_raster=None,
-                            min_slope_deg=0.0):
+                            min_slope_deg=0.0, raster_cap=True):
     # Auto-detect entrainment area for one scenario, write polygon + thickness raster
     # @param release_polygon: shapely Polygon of release area
     # @param dem_path: Path to DEM raster (also defines output grid)
@@ -1056,7 +1056,9 @@ def auto_detect_entrainment(release_polygon, dem_path, polygon_out, thickness_ou
         result_meta = _build_dsm_capped_entrainment_raster(
             snow_height_path=snow_height_raster,
             corridor_polygon=polygon,
-            scour_cap_m=depth_m,
+            # raster_cap=False: the raster already is the entrainable depth
+            # (the release side's scour_depth.tif), so it is not capped again
+            scour_cap_m=depth_m if raster_cap else float('inf'),
             dem_path=dem_path,
             out_path=thickness_out,
             min_slope_deg=min_slope_deg
