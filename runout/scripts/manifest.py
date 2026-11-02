@@ -45,6 +45,13 @@ def avaframe_version():
     # Installed AvaFrame version, or None when it is not importable
     # @param: None
     # @returns: str or None
+    # avaframe has no __version__ (2.1 read 'unknown'); the installed
+    # distribution's metadata has it
+    try:
+        from importlib.metadata import version
+        return version('avaframe')
+    except Exception:
+        pass
     try:
         import avaframe
         return getattr(avaframe, '__version__', 'unknown')

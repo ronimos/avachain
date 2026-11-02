@@ -92,5 +92,77 @@ class Payload(unittest.TestCase):
         self.assertEqual(ri.render_parts(None)['imap_html'], '')
 
 
+class AvalanchePath(unittest.TestCase):
+    """The path to the road on a synthetic slope: a south-facing plane
+    (grid north-up, 1 m cells), road east-west across the bottom."""
+
+    def _run(self, ditch):
+        tmp = Path(tempfile.mkdtemp())
+        H, W = 200, 120
+        yy, xx = np.mgrid[0:H, 0:W]
+        dem = 2000.0 - yy * 0.6 + np.abs(xx - 60) * 0.05
+        if ditch:
+            # road cut: a trench 5-9 m above the road (y = 1825) that drains
+            # east - the trap the raw steepest descent fell into at Little
+            # Professor
+            dem[166:170, :] -= 3.0 + np.linspace(0.0, 4.0, W)[None, :]
+        _tif(tmp / 'dem.tif', dem, -10000.0)
+        pmax = np.zeros((H, W)); pmax[10:60, 50:70] = 0.9
+        road = [[[950.0, 1825.0], [1170.0, 1825.0]]]
+        return ri.avalanche_path(tmp / 'dem.tif', pmax, road)
+
+    def test_crosses_straight_below_the_start(self):
+        # start = highest cell of the P >= 0.5 core: row 10, col 50
+        r = self._run(ditch=False)
+        self.assertEqual(r['how'], 'track direction projected to the road')
+        self.assertAlmostEqual(r['crossing'][1], 1825.0, delta=0.01)
+        self.assertAlmostEqual(r['crossing'][0], 1050.5, delta=1.0)
+
+    def test_road_cut_ditch_does_not_drag_the_crossing(self):
+        r = self._run(ditch=True)
+        self.assertAlmostEqual(r['crossing'][0], 1050.5, delta=1.0)
+
+    def test_the_ditch_is_a_real_trap(self):
+        # without the APPROACH_M stop the trace follows the ditch east
+        old = ri.APPROACH_M
+        ri.APPROACH_M = 0.0
+        try:
+            r = self._run(ditch=True)
+        finally:
+            ri.APPROACH_M = old
+        self.assertGreater(abs(r['crossing'][0] - 1050.5), 20.0)
+
+
+class ScenarioFields(unittest.TestCase):
+
+    def test_count_and_weighted_damage(self):
+        tmp = Path(tempfile.mkdtemp())
+        shape = (6, 5)
+        rows = []
+        for sid, w, p, d in [('s1', 0.75, 40.0, 1.5), ('s2', 0.25, 6.0, 0.3)]:
+            out = tmp / sid / 'outputs'
+            out.mkdir(parents=True)
+            reach = np.zeros(shape); reach[2, 2] = 1
+            ppr = np.full(shape, np.nan); ppr[2, 2] = p
+            pft = np.full(shape, np.nan); pft[2, 2] = d
+            _tif(out / 'reach_mask.tif', reach, 0.0)
+            _tif(out / 'peak_pressure.tif', ppr, None)
+            _tif(out / 'peak_flow_depth.tif', pft, None)
+            rows.append({'scenario_id': sid, 'scenario_probability': w})
+        hz = {'label': 'T_0', 'manifest': {'work_dir': str(tmp)}, 'df': pd.DataFrame(rows)}
+        f = ri.scenario_fields(hz, shape, (5.0, 30.0), (1.0,))
+        self.assertEqual(f['n'], 2)
+        self.assertEqual(int(f['count'][2, 2]), 2)
+        self.assertEqual(int(f['count'][0, 0]), 0)
+        vals = {lab: float(a[2, 2]) for lab, a in f['impacts']}
+        self.assertAlmostEqual(vals['P(pressure &ge; 5 kPa)'], 1.0)
+        self.assertAlmostEqual(vals['P(pressure &ge; 30 kPa)'], 0.75)
+        self.assertAlmostEqual(vals['P(depth &ge; 1 m)'], 0.75)
+
+    def test_no_work_dir(self):
+        hz = {'label': 'T_0', 'manifest': {}, 'df': pd.DataFrame({'scenario_id': ['s1']})}
+        self.assertIsNone(ri.scenario_fields(hz, (2, 2), (5.0,), (1.0,)))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -14,8 +14,21 @@ Description:
       - the same field as a viridis PNG for drawing.
     The hillshade PNG and the road geometry are shared, once per DEM.
 
-    Distances to the road are straight-line, horizontal, in map metres
-    (EPSG:6342), from the cursor to the nearest point of the road line.
+    At the cursor, for every day: P(reach), how many scenarios reach the
+    spot (of how many), and the weighted probability of damaging flow,
+    i.e. peak pressure and flow depth at or above set thresholds. These
+    come from each scenario's own rasters (reach_mask, peak_pressure,
+    peak_flow_depth in <work_dir>/scenario_###/outputs/).
+
+    Distance to the road is measured to where the avalanche path crosses
+    US-6 (Ron, 2026-11-02), not to whichever bit of road is nearest the
+    cursor. The path is the steepest descent on the pit-filled DEM from the
+    top of the P >= 0.5 core. Within APPROACH_M of the road it stops
+    following the terrain: there it would turn along the road-cut ditch, as
+    water does and an avalanche does not. From there it continues in the
+    track's own direction over the previous LOOKBACK_M until it meets the
+    road. The distance is straight-line and horizontal, in map metres
+    (EPSG:6342).
 """
 
 # --------- Load Libraries --------
@@ -45,6 +58,19 @@ P_SCALE = 10000          # P stored as uint16 P * P_SCALE
 ROAD_MARGIN_M = 150.0    # road drawn this far beyond the raster
 HIST_BIN_M = 25.0
 
+# Damaging-flow thresholds for the cursor readout; output.impact_pressure_kpa
+# and output.impact_depth_m override them. 30 kPa is the Swiss red-zone
+# pressure (destroys wood-frame buildings); 5 kPa is far below that and
+# still enough to damage or push a vehicle.
+IMPACT_PRESSURE_KPA = (5.0, 30.0)
+IMPACT_DEPTH_M = (1.0,)
+
+# Avalanche path to the road (see the module docstring)
+PATH_START_P = 0.5       # start at the highest cell of the P >= this core
+APPROACH_M = 40.0        # stop following the terrain this close to the road
+LOOKBACK_M = 100.0       # track direction taken over this much path above
+EXTEND_M = 300.0         # how far that direction may be projected
+
 
 # --------- Encoding ---------
 
@@ -56,10 +82,11 @@ def _png_b64(arr):
     return base64.b64encode(buf.getvalue()).decode('ascii')
 
 
-def _gz_b64(arr):
-    # @param arr: numpy array (little-endian)
+def _gz_b64(arr, dtype='<u2'):
+    # @param arr: numpy array
+    # @param dtype: stored type, uint16 (P x P_SCALE) or uint8 (counts)
     # @returns: str base64 of the gzipped raw bytes
-    return base64.b64encode(gzip.compress(arr.astype('<u2').tobytes(), 6)).decode('ascii')
+    return base64.b64encode(gzip.compress(arr.astype(dtype).tobytes(), 6)).decode('ascii')
 
 
 def hillshade_rgba(dem_path, shape):
@@ -120,6 +147,175 @@ def road_lines(road_path, crs, bounds, margin=2000.0):
     return lines
 
 
+# --------- Avalanche path to the road ---------
+
+def filled_dem(dem, bad):
+    # Pit-filled DEM where every cell has a strictly downhill path to the
+    # grid edge or the nodata boundary (priority-flood + epsilon, Barnes et
+    # al. 2014). ~2 s on the 1020 x 765 Little Professor DEM.
+    # @param dem: float array
+    # @param bad: bool array, True where the DEM has no data
+    # @returns: float64 array (-inf on bad cells)
+    import heapq
+    H, W = dem.shape
+    z = np.where(bad, -np.inf, dem).astype('float64')
+    done = bad.copy()
+    pad = np.pad(bad, 1, constant_values=True)
+    near_bad = np.zeros_like(bad)
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            near_bad |= pad[1 + dr:H + 1 + dr, 1 + dc:W + 1 + dc]
+    seeds = np.argwhere(near_bad & ~bad)
+    pq = [(z[r, c], int(r), int(c)) for r, c in seeds]
+    heapq.heapify(pq)
+    done[near_bad & ~bad] = True
+    while pq:
+        zz, r, c = heapq.heappop(pq)
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                rr, cc = r + dr, c + dc
+                if (dr or dc) and 0 <= rr < H and 0 <= cc < W and not done[rr, cc]:
+                    done[rr, cc] = True
+                    if z[rr, cc] <= zz:
+                        z[rr, cc] = zz + 1e-6
+                    heapq.heappush(pq, (z[rr, cc], rr, cc))
+    return z
+
+
+def _steepest_descent(z, bad, r, c, transform, stop):
+    # Cell-centre path down the filled DEM until stop(x, y) or no way down
+    # @returns: list of (x, y)
+    H, W = z.shape
+    pts, seen = [], set()
+    while True:
+        x, y = transform * (c + 0.5, r + 0.5)
+        pts.append((x, y))
+        seen.add((r, c))
+        if stop(x, y):
+            break
+        best = None
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                rr, cc = r + dr, c + dc
+                if (dr or dc) and 0 <= rr < H and 0 <= cc < W and not bad[rr, cc]:
+                    s = (z[r, c] - z[rr, cc]) / np.hypot(dr, dc)
+                    if s > 0 and (best is None or s > best[0]):
+                        best = (s, rr, cc)
+        if best is None or (best[1], best[2]) in seen:
+            break
+        r, c = best[1], best[2]
+    return pts
+
+
+def avalanche_path(dem_path, pmax, road_lines_xy):
+    # The avalanche path and where it crosses the road
+    # @param dem_path: DEM on the probability grid
+    # @param pmax: float array, max P(reach) over the days shown
+    # @param road_lines_xy: list of lists of [x, y]
+    # @returns: dict {line: [[x, y], ...], crossing: [x, y] or None,
+    #          how: str} or None when there is nothing to trace
+    from shapely.geometry import LineString, MultiLineString, Point
+    from shapely.ops import nearest_points
+    dem, meta = h.read_raster(dem_path)
+    if dem.shape != pmax.shape or not road_lines_xy:
+        return None
+    bad = ~np.isfinite(dem)
+    if meta['nodata'] is not None:
+        bad |= (dem == meta['nodata'])
+    core = (pmax >= PATH_START_P) & ~bad
+    if not core.any():
+        core = (pmax > 0) & ~bad
+    if not core.any():
+        return None
+    rs, cs = np.nonzero(core)
+    i = int(np.argmax(dem[rs, cs]))
+    road = MultiLineString([LineString(ln) for ln in road_lines_xy])
+    z = filled_dem(dem, bad)
+    pts = _steepest_descent(z, bad, rs[i], cs[i], meta['transform'],
+                            stop=lambda x, y: road.distance(Point(x, y)) <= APPROACH_M)
+    end = Point(pts[-1])
+    # direction of the track over the LOOKBACK_M above the end
+    acc, j = 0.0, len(pts) - 1
+    while j > 0 and acc < LOOKBACK_M:
+        acc += np.hypot(pts[j][0] - pts[j - 1][0], pts[j][1] - pts[j - 1][1])
+        j -= 1
+    dx, dy = pts[-1][0] - pts[j][0], pts[-1][1] - pts[j][1]
+    n = np.hypot(dx, dy)
+    crossing, how = None, ''
+    if n > 0:
+        ray = LineString([pts[-1], (pts[-1][0] + dx / n * EXTEND_M,
+                                    pts[-1][1] + dy / n * EXTEND_M)])
+        hit = ray.intersection(road)
+        if not hit.is_empty:
+            cands = [hit] if hit.geom_type == 'Point' else \
+                [g for g in getattr(hit, 'geoms', []) if g.geom_type == 'Point']
+            if not cands and hit.geom_type != 'Point':
+                cands = [Point(c) for c in getattr(hit, 'coords', [])]
+            if cands:
+                first = min(cands, key=lambda q: q.distance(end))
+                crossing = [first.x, first.y]
+                how = 'track direction projected to the road'
+    if crossing is None:
+        q = nearest_points(end, road)[1]
+        crossing = [q.x, q.y]
+        how = 'road point nearest the end of the path (projection missed the road)'
+    line = [[round(x, 2), round(y, 2)] for x, y in pts] + \
+        [[round(crossing[0], 2), round(crossing[1], 2)]]
+    return {'line': line, 'crossing': [round(crossing[0], 2), round(crossing[1], 2)],
+            'how': how}
+
+
+# --------- Per-scenario fields ---------
+
+def scenario_fields(hz, shape, pressures_kpa, depths_m):
+    # Per-cell scenario count and weighted P(damaging flow), from every
+    # scenario's own rasters
+    # @param hz: horizon dict (manifest work_dir, df with scenario weights)
+    # @param shape: (H, W) of the probability grid
+    # @param pressures_kpa / depths_m: thresholds
+    # @returns: dict {count: uint8 array, n: int, impacts: [(label, P array)]}
+    #          or None when the scenario folders are not on disk
+    work = hz['manifest'].get('work_dir')
+    if not work or not Path(work).is_dir():
+        return None
+    df = hz['df']
+    weights = dict(zip(df['scenario_id'], df['scenario_probability'])) \
+        if 'scenario_probability' in df.columns else {}
+    count = np.zeros(shape, dtype=np.int32)
+    acc = [np.zeros(shape) for _ in list(pressures_kpa) + list(depths_m)]
+    wsum, n = 0.0, 0
+    for sid in df['scenario_id']:
+        out = Path(work) / sid / 'outputs'
+        try:
+            reach, _ = h.read_raster(out / 'reach_mask.tif')
+            ppr, _ = h.read_raster(out / 'peak_pressure.tif')
+            pft, _ = h.read_raster(out / 'peak_flow_depth.tif')
+        except Exception as e:
+            logging.warning(f"[{hz['label']}] {sid}: scenario rasters unreadable ({e}); "
+                            f"counts and impact P left out")
+            return None
+        if reach.shape != tuple(shape):
+            logging.warning(f"[{hz['label']}] {sid}: off-grid rasters; impact P left out")
+            return None
+        w = float(weights.get(sid, 1.0))
+        count += (reach > 0)
+        ppr = np.nan_to_num(ppr, nan=0.0)
+        pft = np.nan_to_num(pft, nan=0.0)
+        k = 0
+        for t in pressures_kpa:
+            acc[k] += w * (ppr >= t)
+            k += 1
+        for t in depths_m:
+            acc[k] += w * (pft >= t)
+            k += 1
+        wsum += w
+        n += 1
+    labels = [f"P(pressure &ge; {t:g} kPa)" for t in pressures_kpa] + \
+             [f"P(depth &ge; {t:g} m)" for t in depths_m]
+    return {'count': np.minimum(count, 255).astype(np.uint8), 'n': n,
+            'impacts': [(lab, a / wsum if wsum > 0 else a) for lab, a in zip(labels, acc)]}
+
+
 # --------- Payload ---------
 
 def _horizon_number(label):
@@ -137,10 +333,16 @@ def build_payload(horizons, cycle_date):
     by_n = {_horizon_number(hz['label']): hz for hz in horizons}
     n_max = max(MIN_HORIZONS - 1, max(by_n))
 
+    out_cfg = (horizons[0]['config'].get('output') or {})
+    pressures = tuple(out_cfg.get('impact_pressure_kpa') or IMPACT_PRESSURE_KPA)
+    depths = tuple(out_cfg.get('impact_depth_m') or IMPACT_DEPTH_M)
+
     grid = None
     shades = {}
     roads = {}
     slots = []
+    pmax = None
+    first_dem = None
     for n in range(n_max + 1):
         valid = (base + datetime.timedelta(days=n)).isoformat()
         slot = {'n': n, 'label': f'T_{n}', 'name': f'T+{n}',
@@ -165,6 +367,15 @@ def build_payload(horizons, cycle_date):
             # one shared crosshair needs one grid; a mismatch is a pipeline bug
             raise ValueError(f"[{hz['label']}] probability grid differs from "
                              f"{slots[0]['label']}: {this_grid} vs {grid}")
+
+        pmax = prob if pmax is None else np.maximum(pmax, prob)
+        first_dem = first_dem or hz['dem']
+        fields = scenario_fields(hz, prob.shape, pressures, depths)
+        if fields is not None:
+            slot['count_gz'] = _gz_b64(fields['count'], 'u1')
+            slot['count_n'] = fields['n']
+            slot['damage'] = [{'label': lab, 'gz': _gz_b64(np.round(a * P_SCALE))}
+                               for lab, a in fields['impacts']]
 
         dem_key = str(hz['dem'])
         if dem_key not in shades:
@@ -211,9 +422,17 @@ def build_payload(horizons, cycle_date):
         m = ROAD_MARGIN_M
         ext = [max(min(ext[0], min(xs)), bounds[0] - m), max(min(ext[1], min(ys)), bounds[1] - m),
                min(max(ext[2], max(xs)), bounds[2] + m), min(max(ext[3], max(ys)), bounds[3] + m)]
+    try:
+        path = avalanche_path(first_dem, pmax,
+                              [ln for lines in roads.values() for ln in lines])
+    except Exception as e:
+        logging.warning(f"avalanche path not traced: {e}", exc_info=True)
+        path = None
     return {'grid': grid, 'extent': [round(v, 2) for v in ext], 'p_scale': P_SCALE,
             'hist_bin_m': HIST_BIN_M, 'shades': shades, 'roads': roads,
-            'slots': slots}
+            'slots': slots, 'path': path,
+            'impact_labels': [f"P(pressure &ge; {t:g} kPa)" for t in pressures] +
+                             [f"P(depth &ge; {t:g} m)" for t in depths]}
 
 
 def payload_json(payload):
@@ -227,6 +446,8 @@ CSS = """
   .imap-read { border: 1px solid #000; padding: 0.35em 0.7em; margin: 0.4em 0 0.6em;
                font-size: 13px; min-height: 1.4em; font-variant-numeric: tabular-nums; }
   .imap-read b { font-weight: bold; }
+  .imap-tab { width: auto; font-size: 12px; }
+  .imap-tab th, .imap-tab td { padding: 0.15em 0.6em; }
   .imap-row { display: flex; gap: 10px; flex-wrap: wrap; }
   .imap-cell { flex: 1 1 300px; min-width: 260px; }
   .imap-title { font-size: 12px; text-align: center; margin-bottom: 3px; }
@@ -256,12 +477,14 @@ CSS = """
 
 HTML = """
 <div class="imap-screen">
-<div class="imap-read" id="imap-read">Move over a map for the probability of reach at that spot
-on each day and its distance from the road.</div>
+<div class="imap-read" id="imap-read">Move over a map: for each day, the probability that flow
+reaches that spot, how many scenarios reach it, and the probability of damaging pressure or depth
+there, with its distance from where the avalanche path crosses the road.</div>
 <div class="imap-row" id="imap-row"></div>
 <div class="imap-legend"><span>P(reach)</span><span>0</span><span class="imap-ramp"></span><span>1</span>
 <span style="margin-left:14px"><span class="imap-swatch"></span> road</span>
 <span style="margin-left:14px">&#9679; road impact</span>
+<span style="margin-left:14px">- - - avalanche path, &#9711; where it crosses the road</span>
 <span class="imap-help" style="margin-left:14px">Scroll to zoom, drag to pan, double-click to reset,
 click to pin the readout (the address bar then links to that spot).</span></div>
 </div>
@@ -283,11 +506,11 @@ JS = r"""
   const ROAD = '#E87722', REACH = '#A6192E';
 
   // ---- data ----
-  async function gunzipU16(b64) {
+  async function gunzip(b64, T) {
     const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
     const ds = new DecompressionStream('gzip');
     const buf = await new Response(new Blob([bin]).stream().pipeThrough(ds)).arrayBuffer();
-    return new Uint16Array(buf);
+    return new T(buf);
   }
   function img(b64) { const i = new Image(); i.src = 'data:image/png;base64,' + b64; return i; }
   const shades = {}; for (const k in D.shades) if (D.shades[k]) shades[k] = img(D.shades[k]);
@@ -303,6 +526,12 @@ JS = r"""
       if (d < best.d) best = {d, x: px, y: py};
     }
     return best;
+  }
+  // the road reference: where the avalanche path crosses the road
+  function refPoint(lines, x, y) {
+    if (D.path && D.path.crossing) { const c = D.path.crossing;
+      return {d: Math.hypot(x - c[0], y - c[1]), x: c[0], y: c[1]}; }
+    return nearestRoad(lines, x, y);
   }
 
   // ---- shared view ----
@@ -323,11 +552,13 @@ JS = r"""
     const k = view.k || fit(m);
     return [(sx - m.cv.clientWidth/2) / k + view.cx, view.cy - (sy - m.cv.clientHeight/2) / k];
   }
+  function cellAt(x, y) {
+    const c = Math.floor((x - G.left) / G.res), r = Math.floor((G.top - y) / G.res);
+    return (c < 0 || r < 0 || c >= G.w || r >= G.h) ? -1 : r * G.w + c;
+  }
   function pAt(m, x, y) {
     if (!m.p) return null;
-    const c = Math.floor((x - G.left) / G.res), r = Math.floor((G.top - y) / G.res);
-    if (c < 0 || r < 0 || c >= G.w || r >= G.h) return 0;
-    return m.p[r * G.w + c] / D.p_scale;
+    const i = cellAt(x, y); return i < 0 ? 0 : m.p[i] / D.p_scale;
   }
 
   function draw(m) {
@@ -348,6 +579,19 @@ JS = r"""
     for (const ln of m.road) { g.beginPath();
       ln.forEach((p, i) => { const [sx, sy] = toScreen(m, p[0], p[1]); i ? g.lineTo(sx, sy) : g.moveTo(sx, sy); });
       g.stroke(); }
+    // avalanche path and its road crossing
+    if (D.path) {
+      for (const [col, lw, dash] of [['#fff', 3, []], ['#000', 1.2, [5, 4]]]) {
+        g.strokeStyle = col; g.lineWidth = lw; g.setLineDash(dash); g.beginPath();
+        D.path.line.forEach((p, i) => { const [sx, sy] = toScreen(m, p[0], p[1]); i ? g.lineTo(sx, sy) : g.moveTo(sx, sy); });
+        g.stroke(); }
+      g.setLineDash([]);
+      const [cx, cy] = toScreen(m, D.path.crossing[0], D.path.crossing[1]);
+      g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 2;
+      g.beginPath(); g.arc(cx, cy, 6, 0, 2*Math.PI); g.fill(); g.stroke();
+      g.strokeStyle = ROAD; g.lineWidth = 2.5; g.beginPath();
+      g.moveTo(cx-3.5, cy-3.5); g.lineTo(cx+3.5, cy+3.5); g.moveTo(cx+3.5, cy-3.5); g.lineTo(cx-3.5, cy+3.5); g.stroke();
+    }
     // impacts
     g.fillStyle = REACH;
     for (const p of m.slot.impacts || []) { const [sx, sy] = toScreen(m, p[0], p[1]);
@@ -355,7 +599,7 @@ JS = r"""
     // cursor: crosshair and the line to the nearest road point
     if (cursor) {
       const [sx, sy] = toScreen(m, cursor.x, cursor.y);
-      const nr = nearestRoad(m.road, cursor.x, cursor.y);
+      const nr = refPoint(m.road, cursor.x, cursor.y);
       const [rx, ry] = toScreen(m, nr.x, nr.y);
       // white under black so both read over hillshade and viridis
       for (const [col, lw] of [['#fff', 4], ['#000', 1.6]]) {
@@ -381,18 +625,30 @@ JS = r"""
   function drawAll() { maps.forEach(draw); readout(); }
 
   function readout() {
-    if (!cursor) { return; }
-    const m0 = maps[0];
-    const nr = nearestRoad(m0.road, cursor.x, cursor.y);
-    const parts = D.slots.map(s => {
+    if (!cursor || !maps.length) { return; }
+    const nr = refPoint(maps[0].road, cursor.x, cursor.y);
+    const i = cellAt(cursor.x, cursor.y);
+    const IL = D.impact_labels || [];
+    let h = '<table class="imap-tab"><thead><tr><th class="l">' + (pinned ? 'Pinned spot' : 'At the cursor') +
+      '</th><th>P(reach)</th><th>Scenarios reaching</th>' + IL.map(l => '<th>' + l + '</th>').join('') +
+      '</tr></thead><tbody>';
+    for (const s of D.slots) {
       const m = maps.find(q => q.slot === s);
-      const p = m ? pAt(m, cursor.x, cursor.y) : null;
-      return '<b>' + s.name + '</b> ' + (p === null ? 'no forecast' : p.toFixed(2));
-    });
-    read.innerHTML = (pinned ? '[pinned] ' : '') +
-      'P(reach) ' + parts.join(' &nbsp; ') +
-      ' &nbsp;|&nbsp; <b>' + Math.round(nr.d) + ' m</b> from the road' +
-      ' &nbsp;|&nbsp; E ' + Math.round(cursor.x) + ', N ' + Math.round(cursor.y);
+      h += '<tr><td class="l"><b>' + s.day + '</b> (' + s.name + ')</td>';
+      if (!m) { h += '<td colspan="' + (2 + IL.length) + '" class="c">no forecast</td></tr>'; continue; }
+      const p = pAt(m, cursor.x, cursor.y);
+      const cnt = (m.count && i >= 0) ? m.count[i] : (m.count ? 0 : null);
+      h += '<td>' + (p === null ? '-' : p.toFixed(2)) + '</td>';
+      h += '<td>' + (cnt === null ? '-' : cnt + ' of ' + s.count_n) + '</td>';
+      IL.forEach((_, k) => { const a = m.imp && m.imp[k];
+        h += '<td>' + (a ? (i >= 0 ? (a[i] / D.p_scale).toFixed(2) : '0.00') : '-') + '</td>'; });
+      h += '</tr>';
+    }
+    h += '</tbody></table>';
+    const what = (D.path && D.path.crossing) ? 'from where the avalanche path crosses the road' : 'from the nearest road point';
+    h += '<div style="margin-top:3px"><b>' + Math.round(nr.d) + ' m</b> ' + what +
+      ' &nbsp;|&nbsp; E ' + Math.round(cursor.x) + ', N ' + Math.round(cursor.y) + '</div>';
+    read.innerHTML = h;
   }
 
   // ---- build ----
@@ -419,7 +675,11 @@ JS = r"""
     maps.push(m);
     m.pimg.onload = () => draw(m); if (m.shade) m.shade.addEventListener('load', () => draw(m));
     new ResizeObserver(() => { bx.style.height = boxHeight(bx) + 'px'; draw(m); }).observe(bx);
-    try { m.p = await gunzipU16(s.prob_gz); } catch (e) { m.p = null; console.warn(e); }
+    try { m.p = await gunzip(s.prob_gz, Uint16Array);
+      if (s.count_gz) m.count = await gunzip(s.count_gz, Uint8Array);
+      if (s.damage) m.imp = await Promise.all(s.damage.map(o => gunzip(o.gz, Uint16Array)));
+    } catch (e) { m.p = m.p || null; console.warn(e); }
+    drawAll();
 
     // interaction (shared across maps)
     let drag = null;

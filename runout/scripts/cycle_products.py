@@ -425,6 +425,8 @@ CSS = """
   .warn { border: 1px solid #000; padding: 0.4em 0.8em; margin: 0.6em 0;
           font-weight: bold; }
   a { color: #000; }
+  ul.caveats { margin: 0.5em 0 0 1.2em; padding: 0; }
+  ul.caveats li { margin: 0.15em 0; }
 """
 
 REPORT_TEMPLATE = """<!DOCTYPE html>
@@ -437,7 +439,7 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 <tr><td>Path</td><td>{{ project }}{% if subtitle %}, {{ subtitle }}{% endif %}</td></tr>
 <tr><td>Issued</td><td>{{ issued }}</td></tr>
 <tr><td>Forecast date</td><td>{{ cycle_date }}</td></tr>
-<tr><td>Last snow height survey</td><td>{{ survey_date or 'none' }}</td></tr>
+<tr><td>{{ snow_line[0] }}</td><td>{{ snow_line[1] }}</td></tr>
 {% for hz in horizons %}<tr><td>{{ hz.name }}</td><td>valid {{ hz.valid }}</td></tr>{% endfor %}
 </table></div>
 
@@ -466,6 +468,12 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 </tr>
 {% endfor %}
 </tbody></table>
+
+<h2>Inputs and caveats</h2>
+<table style="width:auto">
+{% for k, v in inputs %}<tr><td class="l">{{ k }}</td><td class="l">{{ v }}</td></tr>{% endfor %}
+</table>
+{% if caveats %}<ul class="caveats">{% for c in caveats %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
 
 <h2>Probability of reach</h2>
 {% if imap_html %}{{ imap_html }}
@@ -577,6 +585,77 @@ def _fmt(v, nd=2):
         return str(v)
 
 
+def release_set_info(raster_path):
+    # The release handoff set an entrainment raster came from, when it is
+    # one (handoff/<path>/release/<date>/<set>/scour_depth.tif with a
+    # release manifest.json beside it)
+    # @param raster_path: str or None
+    # @returns: dict (set, snapshot_date, created_utc, commit) or None
+    if not raster_path:
+        return None
+    m = Path(raster_path).parent / 'manifest.json'
+    try:
+        man = json.loads(m.read_text())
+    except Exception:
+        return None
+    if man.get('producer') != 'release':
+        return None
+    return {'set': man.get('horizon') or Path(raster_path).parent.name,
+            'snapshot_date': man.get('snapshot_date'),
+            'created_utc': man.get('created_utc'),
+            'commit': (man.get('commit') or '')[:7]}
+
+
+def entrainment_rule(ent):
+    # One line saying which entrainment rule the run used
+    # @param ent: run_config entrainment section
+    # @returns: str
+    mode = ent.get('mode', 'auto')
+    raster = Path(ent['snow_height_raster']).name if ent.get('snow_height_raster') else None
+    if mode == 'raster' and raster:
+        if ent.get('raster_cap', True):
+            return f"{raster}, capped at each scenario's scour depth"
+        return f"{raster} as is, no cap"
+    if mode == 'polygon':
+        return "constant scour depth inside the path's entrainment polygon"
+    return "constant scour depth along the auto-detected corridor"
+
+
+def inputs_and_caveats(manifest, horizons):
+    # Rows for the report's inputs box, the caveats under it, and the
+    # header line for the snowpack input
+    # @param manifest: cycle manifest
+    # @param horizons: completed horizon dicts
+    # @returns: dict {rows: [(label, value)], caveats: [str], snow_line: (label, value)}
+    cfg = horizons[0]['config']
+    ent = cfg.get('entrainment') or {}
+    rel = release_set_info(ent.get('snow_height_raster'))
+    rows = []
+    if rel:
+        snow_line = ('Snowpack', f"{rel['snapshot_date']} (release set {rel['set']})")
+        rows.append(('Release scenarios', f"set {rel['set']}, snowpack {rel['snapshot_date']}, "
+                     f"built {(rel['created_utc'] or '').replace('T', ' ').replace('Z', ' UTC')}"
+                     f"{', commit ' + rel['commit'] if rel['commit'] else ''}"))
+    else:
+        snow_line = ('Last snow height survey', (manifest.get('survey') or {}).get('date') or 'none')
+    rows.append(('Scenarios', ', '.join(f"{hz['name']} {len(hz['df'])}" for hz in horizons)))
+    rows.append(('Entrainment', entrainment_rule(ent)))
+    fr = cfg.get('friction') or {}
+    fparams = ', '.join(f"{k} = {fr[k]}" for k in ('mu', 'xi', 'tau0') if fr.get(k) is not None)
+    rows.append(('Friction', f"{cfg['com1dfa']['friction_model']}" + (f" ({fparams})" if fparams else '')))
+    rows.append(('Runout DEM', Path(cfg['paths']['dem']).name))
+    rows.append(('Reach', f"flow depth &ge; {cfg['reach']['flow_depth_threshold_m']} m"))
+    rows.append(('Software', f"pipeline v{manifest.get('pipeline_version', PIPELINE_VERSION)}"
+                 f"{' (' + manifest['git_commit'] + ')' if manifest.get('git_commit') else ''}"
+                 f", AvaFrame {manifest.get('avaframe_version') or 'unknown'}"))
+    caveats = list((manifest.get('display') or {}).get('caveats') or [])
+    missing = [f"T+{n}" for n in range(3) if f"T_{n}" not in {hz['label'] for hz in horizons}]
+    if missing:
+        caveats.insert(0, f"No forecast for {', '.join(missing)}: no release scenarios were "
+                          f"delivered for those days.")
+    return {'rows': rows, 'caveats': caveats, 'snow_line': snow_line}
+
+
 def build_report(cycle_dir, manifest, horizons, dpi=120):
     # Render report.html for the cycle
     # @param cycle_dir: Path to the cycle folder
@@ -632,8 +711,10 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
         # the static maps still render; the interactive part is a bonus
         logging.warning(f"interactive map skipped: {e}", exc_info=True)
         imap = ri.render_parts(None)
+    box = inputs_and_caveats(manifest, horizons)
     html = Template(REPORT_TEMPLATE).render(
-        css=CSS, **imap,
+        css=CSS, **imap, inputs=box['rows'], caveats=box['caveats'],
+        snow_line=box['snow_line'],
         project=manifest.get('display', {}).get('project_name', manifest['path']),
         subtitle=manifest.get('display', {}).get('subtitle', ''),
         cycle_date=f"{manifest['cycle_date'][:4]}-{manifest['cycle_date'][4:6]}-{manifest['cycle_date'][6:]}",
