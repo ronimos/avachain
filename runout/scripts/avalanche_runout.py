@@ -68,6 +68,7 @@ import avalanche_simulation as sim
 import avalanche_stack as stack
 import build_report
 import build_viewer
+import workers
 try:
     import build_3d_viewer
     HAS_3D = True
@@ -557,7 +558,7 @@ def main():
                 shared_paths=shared_paths,
                 config=config,
                 skip_sim=args.post_only,
-                max_workers=config['execution'].get('max_workers')
+                max_workers=workers.capped_workers(config['execution'])
             )
         else:
             logging.info(f"Running {len(scenarios)} scenarios sequentially")

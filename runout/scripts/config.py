@@ -209,6 +209,7 @@ def assemble(sections, path_profile, scenarios_dir, outputs_dir,
         cfg['com1dfa']['friction_model'] = cfg['friction']['model']
 
     cfg.setdefault('execution', {'parallel': True, 'max_workers': 4,
+                                 'max_workers_cap': 4,
                                  'abort_on_crs_mismatch': True})
     cfg.setdefault('output', {'cog': True, 'probability_colormap': 'viridis',
                               'report_plots_dpi': 120,

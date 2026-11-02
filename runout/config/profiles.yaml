@@ -37,6 +37,10 @@ forecast:
   execution:
     parallel: true
     max_workers: 4
+    # Hard ceiling on concurrent com1DFA sims (scripts/workers.py). A large
+    # release can reach >10 GB; 24 at once ran the shared host out of
+    # memory on 2026-11-02. Raise only with a deliberate --set of this key.
+    max_workers_cap: 4
     abort_on_crs_mismatch: true
   output:
     cog: true
