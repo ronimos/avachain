@@ -1,0 +1,42 @@
+# Friction classes keyed to slab hand hardness.
+#
+# One row per class. tau0 is the samosAT minimum shear stress (Pa) and
+# density the release density (kg/m3) used when a sweep runs that class.
+# hand_hardness is the SNOWPACK index in params.json
+# (-1 F, -2 4F, -3 1F, -4 P, -5 K).
+#
+# The tau0 values are placeholders. They sit inside the dry-snow cohesion
+# range measured by Bartelt et al. (2015, J. Glaciol. 61(229)), roughly 0
+# to 400 Pa, and bracket the 125 Pa fit to the 2026-01-18 Little Professor
+# event (1F slab). Calibration runs refine one row at a time; put the
+# catalog row id in the comment when a value changes.
+#
+# Wet snow is a different regime (around 1000 Pa in the same paper) and is
+# off by default.
+
+classes:
+  - name: soft
+    hand_hardness: -1          # F
+    tau0: 25
+    density: 200
+  - name: soft_medium
+    hand_hardness: -2          # 4F
+    tau0: 60
+    density: 250
+  - name: medium
+    hand_hardness: -3          # 1F
+    tau0: 125                  # 2026-01-18 Little Professor fit
+    density: 300
+  - name: medium_hard
+    hand_hardness: -4          # P
+    tau0: 200
+    density: 350
+  - name: hard
+    hand_hardness: -5          # K
+    tau0: 300
+    density: 400
+  - name: wet
+    hand_hardness: null
+    tau0: 1000
+    density: 450
+    enabled: false

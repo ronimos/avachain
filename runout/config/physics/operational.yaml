@@ -1,0 +1,71 @@
+# Physics: operational
+#
+# The locked parameter set forecasts run with. Edit only after a
+# calibration row says so, and note the catalog row id next to the value.
+# Test values go in a separate file under config/physics/ and are picked
+# with `physics: <name>` in a profile or --set run.physics=<name>.
+#
+# Inputs are assumed slope-normal (release depth, snow height, scour cap).
+# The pipeline does no vertical-to-slope-normal conversion.
+depth_convention: slope_normal
+
+com1dfa:
+  mesh_cell_size_m: 1.0
+  friction_model: samosATSmall   # samosAT, samosATSmall, samosATMedium,
+                                 # samosATAuto, Voellmy, VoellmyMinShear,
+                                 # Coulomb, CoulombMinShear, wetsnow
+  sim_type: 'entres'             # 'null' | 'res' | 'ent' | 'entres'
+  stop_crit: 0.001
+  t_end_s: 1200
+  result_types: [ppr, pft, pfv, pta]
+
+# Friction. A model ignores parameters it has no key for.
+# `sources` says where each parameter comes from:
+#   fixed   value below (null = AvaFrame internal default)
+#   params  per-scenario params.json (mu/xi from the ensemble)
+friction:
+  mu: null
+  xi: null
+  tau0: 125                      # Pa. Fit to 2026-01-18, vertical depths.
+                                 # Refit under slope-normal is the first
+                                 # calibration job of the season.
+  sources:
+    mu: fixed
+    xi: fixed
+    tau0: fixed
+
+defaults:
+  scour_depth_fallback_m: 0.30   # when scour_depth_m in params.json is 0
+
+entrainment:
+  # mode is set per profile (auto | polygon | raster); these are the
+  # parameters each mode reads.
+  min_slope_deg: 15
+  ent_ero_energy_jkg: 5000
+  auto_detect:
+    primary_method: alpha_beta
+    alpha_beta:
+      min_alpha_deg: 15
+      max_alpha_deg: 45
+      buffer_m: 15
+    flow_accumulation:
+      buffer_m: 50
+      min_slope_deg: 15
+
+resistance:
+  cResH: 0.01
+  detrainment: true
+  forestVMin: 6.0
+  forestThMin: 0.6
+  forestVMax: 40.0
+  forestThMax: 10.0
+
+reach:
+  flow_depth_threshold_m: 0.1
+  min_velocity_ms: 0.0
+  pressure_threshold_kpa: 0
+
+probability:
+  contour_levels: [0.05, 0.25, 0.50, 0.75, 1.00]
+  envelope_min_probability: 0.05
+  weight_by_scenario_probability: true

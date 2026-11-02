@@ -21,7 +21,7 @@ nohup.out
 # Local scripts and data
 data/eval
 temp/
-scripts/
+/scripts/
 *.ipynb
 
 # Backups and temporary files

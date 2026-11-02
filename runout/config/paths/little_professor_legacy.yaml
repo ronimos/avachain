@@ -1,0 +1,37 @@
+# Path profile: Little Professor, reading the archived
+# RunoutProbabilityEnvelope data tree in place. Absolute paths, so nothing
+# has to move.
+
+slug: little_professor_legacy
+scenario_slug: .                  # date folders sit directly under scenario_root
+display:
+  project_name: Little Professor
+  subtitle: Loveland Pass, US-6
+  highway: US-6
+
+terrain:
+  dem: /home/val/archive_RunoutProbabilityEnvelope/data/DEM/260605_Professor_Bare_Ground_Full_Path-DSM_1m.tiff
+  dem_feather_cells: 5
+  dem_vertical_correction_m: 0.0
+
+canopy:
+  forest: /home/val/archive_RunoutProbabilityEnvelope/data/canopy/forest.shp
+
+infrastructure:
+  road: /home/val/archive_RunoutProbabilityEnvelope/data/road/cdot_US6_LP_LittleProfessor.shp
+  # No reference point layer yet. Add a point file with a ref_name field
+  # and set it here to get the reference point products.
+  reference_points: null
+
+release:
+  start_zone: null
+
+entrainment:
+  polygon: null                   # raster or auto entrainment only
+
+road:
+  buffer_m: 1.0
+  chainage_origin: far_from_release
+
+reference_points:
+  radius_m: 10.0

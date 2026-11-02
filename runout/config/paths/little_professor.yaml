@@ -1,0 +1,48 @@
+# Path profile: Little Professor (Loveland Pass, US-6)
+#
+# Static inputs for one avalanche path. Relative paths resolve against
+# avachain_root from local.yaml. Nothing in here changes between forecast
+# cycles. Physics lives in config/physics/, run choices in profiles.yaml.
+
+slug: little_professor
+# Folder name under scenario_root when it differs from the slug
+# scenario_slug: little_prof
+display:
+  project_name: Little Professor
+  subtitle: Loveland Pass, US-6
+  highway: US-6
+
+terrain:
+  dem: data/static/little_professor/terrain/260605_Professor_Bare_Ground_Full_Path-DSM_1m.tiff
+  # Optional high-resolution priority DEM mosaicked onto dem. Comment out
+  # to use dem alone.
+  # dem_priority: data/static/little_professor/terrain/site_highres_dsm.tif
+  dem_feather_cells: 5
+  dem_vertical_correction_m: 0.0
+
+canopy:
+  forest: data/static/little_professor/canopy/forest.shp
+
+infrastructure:
+  road: data/static/little_professor/infrastructure/cdot_US6_LP_LittleProfessor.shp
+  # Point layer with a 'ref_name' field (tower, bench, road, ...). Each
+  # scenario is tested against every point.
+  reference_points: data/static/little_professor/infrastructure/reference_points.geojson
+
+release:
+  # Start zone polygon(s) used by the scenario generator (sweep and
+  # calibrate modes). Forecast mode takes release areas from the chain's scenarios.
+  start_zone: data/static/little_professor/release/start_zone.geojson
+
+entrainment:
+  # Used when the profile sets entrainment.mode: polygon. Constant depth
+  # comes from the per-scenario scour cap.
+  polygon: data/static/little_professor/release/entrainment_polygon.geojson
+
+road:
+  buffer_m: 1.0                 # corridor half-width around the centerline
+  chainage_origin: far_from_release
+
+reference_points:
+  radius_m: 10.0                # a point counts as reached when any reach
+                                # cell falls within this distance of it
