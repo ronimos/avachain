@@ -710,13 +710,18 @@ def inputs_and_caveats(manifest, horizons):
     # @returns: dict {rows: [(label, value)], caveats: [str], snow_line: (label, value)}
     cfg = horizons[0]['config']
     ent = cfg.get('entrainment') or {}
-    rel = release_set_info(ent.get('snow_height_raster'))
     rows = []
-    if rel:
-        snow_line = ('Snowpack', f"{rel['snapshot_date']} (release set {rel['set']})")
-        rows.append(('Release scenarios', f"set {rel['set']}, snowpack {rel['snapshot_date']}, "
-                     f"built {(rel['created_utc'] or '').replace('T', ' ').replace('Z', ' UTC')}"
-                     f"{', commit ' + rel['commit'] if rel['commit'] else ''}"))
+    # each horizon has its own release set (and scour raster) under rule B
+    rels = [(hz, release_set_info((hz['config'].get('entrainment') or {})
+                                  .get('snow_height_raster'))) for hz in horizons]
+    if all(r for _, r in rels):
+        snow_line = ('Snowpack', ', '.join(f"{hz['name']} {r['snapshot_date']}" for hz, r in rels)
+                     + f" (release set {rels[0][1]['set']})")
+        for hz, rel in rels:
+            rows.append((f"Release scenarios {hz['name']}",
+                         f"set {rel['set']}, snowpack {rel['snapshot_date']}, "
+                         f"built {(rel['created_utc'] or '').replace('T', ' ').replace('Z', ' UTC')}"
+                         f"{', commit ' + rel['commit'] if rel['commit'] else ''}"))
     else:
         snow_line = ('Last snow height survey', (manifest.get('survey') or {}).get('date') or 'none')
     rows.append(('Scenarios', ', '.join(f"{hz['name']} {len(hz['df'])}" for hz in horizons)))
