@@ -133,6 +133,13 @@ def coerce(raw, like):
     if like is None:
         if raw.lower() in ('none', 'null', ''):
             return None
+        # No value to take the type from (e.g. execution.max_workers, which
+        # only the profile defines): an integer literal stays an int, or
+        # ProcessPoolExecutor(max_workers=12.0) raises
+        try:
+            return int(raw)
+        except ValueError:
+            pass
         try:
             return float(raw)
         except ValueError:
