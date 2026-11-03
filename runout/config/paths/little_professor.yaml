@@ -11,11 +11,12 @@ display:
   project_name: Little Professor
   subtitle: Loveland Pass, US-6
   highway: US-6
-  # Shown in the report's "Inputs and caveats" box (Ron, 2026-11-02)
+  # Shown in the report's "Inputs and caveats" box (Ron, 2026-11-02;
+  # debris and DEM caveats rewritten 2026-11-03 after Val's reply)
   caveats:
     - "τ₀ = 125 Pa was fitted to the 2026-01-18 avalanche, so a forecast for that day is not an independent test of runout."
-    - "No runout or debris was observed for 2026-01-18. The runout distances are model output and have not been checked against an observation."
-    - "The runout DEM (260605) sits a median 1.1 m below the snowpack DEM (251110) where they overlap. Read a near miss of a few tens of metres as a close call, not a safety margin."
+    - "The observed 2026-01-18 debris (data/validation/260118_observed_runout.geojson, 12 700 m²) was drawn by Val from the 2026-01-20 orthophoto, two days after the event, so its toe is approximate. The modelled runouts have not yet been scored against it."
+    - "Last season's surveys had no shared ground control, so the snow-free surfaces differ by about 1 m (the runout DEM, 260605, sits a median 1.1 m below the snowpack DEM, 251110). This does not enter com1DFA: snow height is a thickness laid onto 260605, and τ₀ was fitted with the same pairing. GCP-referenced surfaces replace both this season."
     - "Entrainment depth comes from the release side's scour_depth.tif, which covers only the snowpack model's domain. Below that domain the flow entrains nothing."
 
 terrain:
