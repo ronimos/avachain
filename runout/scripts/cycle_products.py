@@ -304,8 +304,8 @@ def plot_road_approach(horizons, dpi=120, dists=None):
         if curve is None:
             continue
         xs, ys = curve
-        ax.step(xs, ys, where='post', color='black',
-                linestyle=HORIZON_STYLES[i % len(HORIZON_STYLES)], linewidth=1.4,
+        ax.step(xs, ys, where='post', color=ri.horizon_color(hz['label']),
+                linestyle=HORIZON_STYLES[i % len(HORIZON_STYLES)], linewidth=1.8,
                 label=f"{hz['name']}  ({len(xs) - 1} scenarios)")
         xmax = max(xmax, float(xs.max()))
         drew = True
@@ -314,14 +314,16 @@ def plot_road_approach(horizons, dpi=120, dists=None):
         return None
     ax.axvline(0, color=COLORS['road'], linewidth=2)
     ax.text(0, 1.02, 'road', ha='center', va='bottom', fontsize=8, color=COLORS['road'])
-    ax.set_xlim(-xmax * 0.01, xmax * 1.05)
+    # Reversed so the path runs left to right: up the path on the left,
+    # the road on the right (Ron, 2026-11-03)
+    ax.set_xlim(xmax * 1.05, -xmax * 0.01)
     ax.set_ylim(0, 1.0)
-    ax.set_xlabel("Distance short of where the avalanche path crosses the road (m), "
+    ax.set_xlabel("Runout distance from where the avalanche path crosses the road (m), "
                   "the flow's closest approach" if dists else
-                  "Distance short of the road (m), the flow's closest approach", fontsize=9)
+                  "Runout distance from the road (m), the flow's closest approach", fontsize=9)
     ax.set_ylabel('P(flow comes at least this close)', fontsize=9)
     ax.tick_params(labelsize=8)
-    ax.legend(fontsize=8, frameon=False, loc='lower right')
+    ax.legend(fontsize=8, frameon=False, loc='upper right')
     ax.grid(axis='y', linewidth=0.4, color='#DDDDDD')
     return fig_to_b64(fig, dpi)
 
@@ -526,6 +528,11 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 
 {% if failed %}<div class="warn">Horizons not run: {{ failed }}</div>{% endif %}
 
+<h2>Probability of reach</h2>
+{% if imap_html %}{{ imap_html }}
+<div class="imap-print" style="display:none"><img src="data:image/png;base64,{{ maps_b64 }}" alt="Probability maps"></div>
+{% else %}<img src="data:image/png;base64,{{ maps_b64 }}" alt="Probability maps">{% endif %}
+
 <h2>Reach to road</h2>
 <table>
 <thead><tr>
@@ -550,19 +557,8 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 {% endfor %}
 </tbody></table>
 
-<h2>Inputs and caveats</h2>
-<table style="width:auto">
-{% for k, v in inputs %}<tr><td class="l">{{ k }}</td><td class="l">{{ v }}</td></tr>{% endfor %}
-</table>
-{% if caveats %}<ul class="caveats">{% for c in caveats %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
-
-<h2>Probability of reach</h2>
-{% if imap_html %}{{ imap_html }}
-<div class="imap-print" style="display:none"><img src="data:image/png;base64,{{ maps_b64 }}" alt="Probability maps"></div>
-{% else %}<img src="data:image/png;base64,{{ maps_b64 }}" alt="Probability maps">{% endif %}
-
 {% if exceed_b64 %}
-<h2>How close the flow comes to the road</h2>
+<h2>Runout distance from road</h2>
 <img src="data:image/png;base64,{{ exceed_b64 }}" alt="Probability of coming within a distance of the road">
 {% endif %}
 
@@ -588,6 +584,12 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 <h2>Where the road is hit</h2>
 <img src="data:image/png;base64,{{ chainage_b64 }}" alt="Chainage histogram">
 {% endif %}
+
+<h2>Inputs and caveats</h2>
+<table style="width:auto">
+{% for k, v in inputs %}<tr><td class="l">{{ k }}</td><td class="l">{{ v }}</td></tr>{% endfor %}
+</table>
+{% if caveats %}<ul class="caveats">{% for c in caveats %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
 
 <div class="meta">
 Physics {{ physics_name }} [{{ physics_hash }}], {{ friction_model }}{{ friction_params }},

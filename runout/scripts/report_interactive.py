@@ -58,6 +58,19 @@ P_SCALE = 10000          # P stored as uint16 P * P_SCALE
 ROAD_MARGIN_M = 150.0    # road drawn this far beyond the raster
 HIST_BIN_M = 25.0
 
+# One colour per forecast day (T+0, T+1, ...), shared by the approach plot
+# and the histogram (Ron, 2026-11-03: the black lines were hard to tell
+# apart where they ran close). Okabe-Ito blue, reddish purple, bluish green,
+# sky blue, black: colour-blind safe, and none is near the road orange
+# (#E87722). The approach plot keeps its line styles as well.
+HORIZON_COLORS = ['#0072B2', '#CC79A7', '#009E73', '#56B4E9', '#000000']
+
+
+def horizon_color(label):
+    # @param label: 'T_<n>'
+    # @returns: str hex colour for that forecast day
+    return HORIZON_COLORS[_horizon_number(label) % len(HORIZON_COLORS)]
+
 # Damaging-flow thresholds for the cursor readout; output.impact_pressure_kpa
 # and output.impact_depth_m override them. 30 kPa is the Swiss red-zone
 # pressure (destroys wood-frame buildings); 5 kPa is far below that and
@@ -375,6 +388,7 @@ def build_payload(horizons, cycle_date):
     for n in range(n_max + 1):
         valid = (base + datetime.timedelta(days=n)).isoformat()
         slot = {'n': n, 'label': f'T_{n}', 'name': f'T+{n}',
+                'color': HORIZON_COLORS[n % len(HORIZON_COLORS)],
                 'day': DAY_NAMES.get(n, f'Day +{n}'), 'valid': valid}
         hz = by_n.get(n)
         if hz is None:
@@ -547,8 +561,9 @@ click to pin the readout (the address bar then links to that spot).</span></div>
 HIST_HTML = """
 <div class="ihist" id="ihist"><svg id="ihist-svg"></svg><div class="ihist-tip" id="ihist-tip"></div></div>
 <p class="imap-help">Each scenario is counted once, at its flow's closest approach to where the
-avalanche path crosses the road ({{BIN}} m bins). The first bar is scenarios that reach the road
-anywhere. The tooltip gives the weighted share as well.</p>
+avalanche path crosses the road ({{BIN}} m bins). The path runs left to right, so the road is on
+the right; the last bar is scenarios that reach the road anywhere. The tooltip gives the weighted
+share as well.</p>
 """
 
 JS = r"""
@@ -788,7 +803,9 @@ JS = r"""
   const VW = 900, VH = 300, ML = 48, MR = 12, MT = 26, MB = 44;
   const pw = VW - ML - MR, ph = VH - MT - MB, slotW = pw / (nb + 1), gap = 2;
   const barW = Math.max(2, (slotW - gap * 2) / counts.length);
-  const fills = ['#222222', '#7A8893', '#C9CED2', '#555555', '#A0A8AE'];
+  // slot i (0 = reached, i >= 1 = ((i-1)B, iB]) sits at position nb - i: the
+  // path runs left to right and the road is on the right (Ron, 2026-11-03)
+  const sx0 = i => ML + (nb - i) * slotW;
   svg.setAttribute('viewBox', '0 0 ' + VW + ' ' + VH);
   let out = '';
   const yv = v => MT + ph - v / cmax * ph;
@@ -796,25 +813,25 @@ JS = r"""
   for (let v = 0; v <= cmax; v += step) out += '<line x1="' + ML + '" x2="' + (VW-MR) + '" y1="' + yv(v) + '" y2="' + yv(v) +
     '" stroke="#DDD" stroke-width="0.6"/><text x="' + (ML-6) + '" y="' + (yv(v)+4) + '" font-size="11" text-anchor="end">' + v + '</text>';
   counts.forEach((o, j) => o.c.forEach((c, i) => { if (!c) return;
-    const x = ML + i * slotW + gap + j * barW, y = yv(c);
+    const x = sx0(i) + gap + j * barW, y = yv(c);
     out += '<rect data-i="' + i + '" x="' + x + '" y="' + y + '" width="' + (barW - 0.5) + '" height="' + (MT + ph - y) +
-      '" fill="' + (i === 0 ? '#A6192E' : fills[j % fills.length]) + '"/>'; }));
+      '" fill="' + o.s.color + '"/>'; }));
   for (let i = 0; i <= nb; i++) {
-    const x = ML + i * slotW;
+    const x = sx0(i);
     out += '<rect class="hit" data-i="' + i + '" x="' + x + '" y="' + MT + '" width="' + slotW + '" height="' + ph + '" fill="transparent"/>';
     const lab = i === 0 ? 'reached' : String(i * B);
     if (i === 0 || nb <= 24 || i % 2 === 0)
-      out += '<text x="' + (x + (i === 0 ? slotW/2 : slotW)) + '" y="' + (MT + ph + 14) + '" font-size="10.5" text-anchor="middle">' + lab + '</text>';
+      out += '<text x="' + (x + (i === 0 ? slotW/2 : 0)) + '" y="' + (MT + ph + 14) + '" font-size="10.5" text-anchor="middle">' + lab + '</text>';
   }
-  out += '<line x1="' + (ML + slotW) + '" x2="' + (ML + slotW) + '" y1="' + MT + '" y2="' + (MT + ph) + '" stroke="#E87722" stroke-width="1.5"/>';
+  out += '<line x1="' + sx0(0) + '" x2="' + sx0(0) + '" y1="' + MT + '" y2="' + (MT + ph) + '" stroke="#E87722" stroke-width="1.5"/>';
   out += '<line x1="' + ML + '" x2="' + (VW-MR) + '" y1="' + (MT+ph) + '" y2="' + (MT+ph) + '" stroke="#000"/>';
-  const xlab = D.dist_ref === 'crossing' ? "Closest approach to where the avalanche path crosses the road (m), bin upper edge"
-                                         : 'Closest approach to the road (m), bin upper edge';
+  const xlab = D.dist_ref === 'crossing' ? "Closest approach to where the avalanche path crosses the road (m), bin edges"
+                                         : 'Closest approach to the road (m), bin edges';
   out += '<text x="' + (ML + pw/2) + '" y="' + (VH - 6) + '" font-size="12" text-anchor="middle">' + xlab + '</text>';
   out += '<text transform="translate(13,' + (MT + ph/2) + ') rotate(-90)" font-size="12" text-anchor="middle"># scenarios</text>';
   // legend
   counts.forEach((o, j) => { const lx = ML + 8 + j * 170, ly = 4;
-    out += '<rect x="' + lx + '" y="' + ly + '" width="12" height="10" fill="' + fills[j % fills.length] + '"/>' +
+    out += '<rect x="' + lx + '" y="' + ly + '" width="12" height="10" fill="' + o.s.color + '"/>' +
       '<text x="' + (lx + 18) + '" y="' + (ly + 9) + '" font-size="11">' + o.s.day + ' (' + o.s.name + ')</text>'; });
   svg.innerHTML = out;
   svg.querySelectorAll('rect.hit').forEach(r => {
