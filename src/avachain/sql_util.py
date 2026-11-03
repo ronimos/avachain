@@ -1,199 +1,218 @@
-import os
-import logging
-import datetime
+"""
+sql_util.py — read CAIC station observations from the CAIC MySQL database.
+
+The database runs on the same host as the pipeline, so this connects to it
+directly. The SSH-tunnel fallback was removed on 2026-11-03 (Ron): it was for
+running from a laptop, and it hid connection failures behind a second attempt.
+
+Stations come only from the slope TOML's [[stations]] entries (sql_id and
+sql_columns). There is no built-in station list: a slope without stations is
+an error, not a silent fall-back to A-Basin.
+
+The frame returned by fetch_weather() has the layout of the archived
+weather_data.csv: a `time` index (UTC, naive, as stored) and the raw CAIC
+columns (tenths of °F, tenths of mph, ...), each taken from the station that
+lists it. smet_writer.convert_caic_frame() turns it into SMET units.
+
+Credentials (db_user, db_password, db_name, local_host, db_port) are read,
+first file found wins, from:
+  1. $AVACHAIN_DB_ENV
+  2. ~/.config/avachain/db.env
+  3. the repository's .env (the dev checkout's legacy location)
+Variables already set in the environment take precedence over all of them.
+
+CLI (writes the archived-format CSV, e.g. to re-seed a station cache):
+    python sql_util.py --toml slopes/<slope>/slope_config.toml \
+        [--start "2025-10-01 00:00:00"] [--end ...] [--out weather_data.csv]
+"""
+
+from __future__ import annotations
+
 import argparse
+import datetime
+import logging
+import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import pandas as pd
 import sqlalchemy
 from sqlalchemy import create_engine, text
-from sshtunnel import SSHTunnelForwarder
-from dotenv import load_dotenv
 
-# Initialize Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
-# Constants and Configuration
-load_dotenv()
+ROOT_PATH = Path(__file__).resolve().parents[2]
+TABLES = ["obsBattery", "obsHydro", "obsSnow", "obsSolar", "obsWX"]
+ENV_VARS = ("db_user", "db_password", "db_name", "local_host")
 
-WEATHER_STATIONS = {
-    "A-Basin SA-Summit": {
-        "id": "CAABT",
-        "cols": ["swin", "temp", "dewp", "rh", "wspd", "wdir", "gust", "mxtemp24h", "mntemp24h"]
-    },
-    "A-Basin SA-Base": {
-        "id": "CAABM",
-        "cols": ["pcpac", "depth", "snow24h"]
-    },
-}
 
+# --------- Stations ---------
 
 def stations_from_cfg(cfg) -> dict:
-    """Build a WEATHER_STATIONS-format dict from a ProjectConfig.
+    """{sql_id: [columns]} from the slope TOML's [[stations]] entries.
 
-    Each station dict has 'id' (SQL staname) and 'cols' (columns to pull).
-    Column lists come from the [[stations]] entries in slope_config.toml,
-    which are stored in cfg.stations.
+    Raises ValueError when the TOML lists no stations, or a station has no
+    sql_id or no sql_columns.
     """
-    result = {}
-    for s in getattr(cfg, "stations", []):
-        result[s.get("name", s["sql_id"])] = {
-            "id":   s["sql_id"],
-            "cols": s.get("sql_columns", ["*"]),
-        }
-    return result or WEATHER_STATIONS
+    stations = list(getattr(cfg, "stations", None) or [])
+    if not stations:
+        raise ValueError("the slope TOML has no [[stations]] entries; "
+                         "station data cannot be fetched")
+    out = {}
+    for s in stations:
+        sid = s.get("sql_id")
+        cols = s.get("sql_columns")
+        if not sid or not cols:
+            raise ValueError(f"[[stations]] entry {s.get('name') or s.get('role')!r} "
+                             f"needs both sql_id and sql_columns")
+        out[sid] = list(cols)
+    return out
 
-ROOT_PATH = Path(__file__).parents[2]
-DATA_DIR = ROOT_PATH / "data"
 
-def _fetch_table_data(engine: sqlalchemy.engine.Engine, tables: List[str], start_time: str, st_id: str) -> List[pd.DataFrame]:
-    """Internal helper to iterate through tables and fetch data."""
-    data_list = []
+# --------- Connection ---------
+
+def _env_file() -> Optional[Path]:
+    cands = [os.getenv("AVACHAIN_DB_ENV"),
+             Path.home() / ".config" / "avachain" / "db.env",
+             ROOT_PATH / ".env"]
+    for c in cands:
+        if c and Path(c).is_file():
+            return Path(c)
+    return None
+
+
+def get_engine() -> sqlalchemy.engine.Engine:
+    """Engine for the CAIC database; raises with the remedy when unconfigured."""
+    from dotenv import load_dotenv
+    env = _env_file()
+    if env is not None:
+        load_dotenv(env, override=False)
+    missing = [k for k in ENV_VARS if not os.getenv(k)]
+    if missing:
+        raise RuntimeError(
+            f"CAIC database credentials missing ({', '.join(missing)}). Put "
+            f"db_user, db_password, db_name, local_host and db_port in "
+            f"$AVACHAIN_DB_ENV or ~/.config/avachain/db.env (mode 600)"
+            + (f"; read {env}" if env else "; no credentials file found"))
+    url = sqlalchemy.engine.URL.create(
+        "mysql+pymysql", username=os.getenv("db_user"),
+        password=os.getenv("db_password"), host=os.getenv("local_host"),
+        port=int(os.getenv("db_port", 3306)), database=os.getenv("db_name"))
+    return create_engine(url, connect_args={"connect_timeout": 20})
+
+
+# --------- Queries ---------
+
+def _fetch_table_data(engine, tables, start_time, st_id, end_time=None):
+    """One frame per table holding rows for st_id with start < time <= end.
+
+    A table with no rows is skipped. A connection or SQL error raises: it
+    used to be logged and skipped, so a database outage looked like a
+    station with no data.
+    """
+    frames = []
+    q = "SELECT * FROM {t} WHERE time > :start AND staname = :sid"
+    params = {"start": start_time, "sid": st_id}
+    if end_time is not None:
+        q += " AND time <= :end"
+        params["end"] = end_time
     for table in tables:
-        try:
-            query = f"SELECT * FROM {table} WHERE time > '{start_time}' AND staname = '{st_id}'"
-            df = pd.read_sql(query, con=engine)
-            if not df.empty:
-                data_list.append(df.set_index('time'))
-            else:
-                logger.warning(f"No data found in table {table} for station {st_id}")
-        except Exception as e:
-            logger.error(f"Error reading table {table}: {e}")
-    return data_list
+        df = pd.read_sql(text(q.format(t=table)), con=engine, params=params)
+        if df.empty:
+            logger.info(f"no rows in {table} for {st_id}")
+            continue
+        df["time"] = pd.to_datetime(df["time"])
+        frames.append(df.drop(columns=["staname"], errors="ignore").set_index("time"))
+    return frames
 
-def get_weather_from_sql_db(st_id: str = "CAABT",
-                            start_time: Optional[datetime.datetime] = None) -> pd.DataFrame:
+
+def get_weather_from_sql_db(st_id: str,
+                            start_time: Optional[datetime.datetime] = None,
+                            end_time: Optional[datetime.datetime] = None,
+                            engine=None) -> pd.DataFrame:
+    """All observation columns for one station, start < time <= end.
+
+    start defaults to 7 days ago. Times are the database's (UTC, naive).
     """
-    Fetches weather observation data from multiple SQL tables for a specific station.
-
-    Attempts to connect to a local database first. If the local connection fails (e.g., 
-    not on the local network), it attempts to establish an SSH tunnel to the database server.
-
-    Args:
-        st_id (str): The station identifier in the SQL database. Defaults to "CAABT".
-        start_time (Optional[datetime.datetime]): The beginning of the time range. 
-            Defaults to 168 hours (7 days) before the current time.
-
-    Returns:
-        pd.DataFrame: A concatenated DataFrame containing data from all relevant tables, 
-            indexed by time. Returns an empty DataFrame if no data is found.
-    """
-    db_user = os.getenv('db_user')
-    db_password = os.getenv('db_password')
-    db_name = os.getenv('db_name')
-    local_host = os.getenv('local_host')
-    db_port = int(os.getenv('db_port', 3306))
-    
-    tables = ["obsBattery", "obsHydro", "obsSnow", "obsSolar", "obsWX"]
-
     if start_time is None:
-        start_time = datetime.datetime.now() - datetime.timedelta(hours=168)
-        
-    # Format time for SQL query
-    start_time_str = start_time.strftime("%Y-%m-%d %H:00:00")
-    weather_data_frames = []
-
-    con_str = f'mysql+pymysql://{db_user}:{db_password}@{local_host}:{db_port}/{db_name}'
-    engine = create_engine(con_str)
-
-    try:
-        logger.info(f"Attempting local connection for station {st_id}...")
-        weather_data_frames = _fetch_table_data(engine, tables, start_time_str, st_id)
-        
-    except sqlalchemy.exc.OperationalError:
-        logger.info("Local connection failed. Attempting SSH Tunnel...")
-        
-        ssh_host = os.getenv('ssh_server')
-        ssh_key = os.getenv('ssh_pw')
-        ssh_port = int(os.getenv('ssh_port', 22))
-
-        try:
-            with SSHTunnelForwarder(
-                (ssh_host, ssh_port),
-                ssh_username='ron',
-                ssh_password=ssh_key,
-                remote_bind_address=(local_host, int(db_port)) # Usually binds to DB host
-            ) as server:
-                # Update connection string to use the tunnel's local bind port
-                tunnel_con_str = f'mysql+pymysql://{db_user}:{db_password}@127.0.0.1:{server.local_bind_port}/{db_name}'
-                tunnel_engine = create_engine(tunnel_con_str)
-                weather_data_frames = _fetch_table_data(tunnel_engine, tables, start_time_str, st_id)
-        except Exception as e:
-            logger.critical(f"Failed to connect via SSH Tunnel: {e}")
-
-    if not weather_data_frames:
-        logger.warning(f"No data retrieved for station {st_id}")
+        start_time = datetime.datetime.utcnow() - datetime.timedelta(hours=168)
+    engine = engine or get_engine()
+    frames = _fetch_table_data(engine, TABLES, _ts(start_time), st_id,
+                               _ts(end_time) if end_time is not None else None)
+    if not frames:
+        logger.warning(f"no data retrieved for station {st_id}")
         return pd.DataFrame()
+    return pd.concat(frames, axis=1).sort_index()
 
-    # Join dataframes on index (time)
-    return pd.concat(weather_data_frames, axis=1)
+
+def fetch_weather(stations: dict, start_time, end_time=None, engine=None) -> pd.DataFrame:
+    """The archived weather_data.csv layout for a slope's stations.
+
+    @param stations: {sql_id: [columns]} from stations_from_cfg
+    @returns: DataFrame indexed by `time`, one column per requested column,
+             taken from the station that lists it; empty when no rows
+    """
+    engine = engine or get_engine()
+    parts = []
+    for sid, cols in stations.items():
+        df = get_weather_from_sql_db(sid, start_time, end_time, engine=engine)
+        if df.empty:
+            logger.warning(f"station {sid}: no rows between {start_time} and "
+                           f"{end_time or 'now'}")
+            continue
+        keep = df.columns.tolist() if cols == ["*"] else [c for c in cols if c in df.columns]
+        absent = [c for c in cols if c != "*" and c not in df.columns]
+        if absent:
+            logger.warning(f"station {sid}: columns not in the database: {absent}")
+        parts.append(df[keep])
+    if not parts:
+        return pd.DataFrame()
+    out = pd.concat(parts, axis=1).sort_index()
+    out.index.name = "time"
+    return out
+
+
+def season_start(toml_path) -> Optional[str]:
+    """[snowpack] season_start from a slope TOML as 'YYYY-MM-DD 00:00:00', or None."""
+    import tomllib
+    with open(toml_path, "rb") as f:
+        v = tomllib.load(f).get("snowpack", {}).get("season_start")
+    return f"{v} 00:00:00" if v else None
+
+
+def _ts(t) -> str:
+    return pd.Timestamp(t).strftime("%Y-%m-%d %H:%M:%S")
+
+
+# --------- CLI ---------
 
 def parse_args():
-    """Parses command line arguments."""
-    parser = argparse.ArgumentParser(description="Fetch weather data from SQL and save to CSV.")
-    parser.add_argument("-t", "--target", default=str(DATA_DIR),
-                        help="Directory to save output files")
-    parser.add_argument("-s", "--start-time", help="Start time for data retrieval",
-                        default="2025-09-01 00:00:00")
-    parser.add_argument("--project-dir", default=None,
-                        help="Project directory; auto-detects slope_config.toml for station list")
-    parser.add_argument("--slope-name", default=None,
-                        help="Slope name (used with --project-dir)")
-    return parser.parse_args()
+    p = argparse.ArgumentParser(description="Fetch a slope's station data from the "
+                                            "CAIC database into the archived CSV layout.")
+    p.add_argument("--toml", required=True, help="slope_config.toml (stations and paths)")
+    p.add_argument("--start", default=None,
+                   help="start, 'YYYY-MM-DD HH:MM:SS' UTC (default: the TOML's season_start)")
+    p.add_argument("--end", default=None, help="end, inclusive (default: now)")
+    p.add_argument("--out", default=None,
+                   help="output CSV (default: the TOML's weather_csv)")
+    return p.parse_args()
+
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s - %(levelname)s - %(message)s")
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from config import ProjectConfig
     args = parse_args()
-    all_stations_data = []
-    if args.start_time:
-        try:
-            start_time = datetime.datetime.strptime(args.start_time, '%Y-%m-%d %H:%M:%S')
-        except ValueError:
-            logger.error("Invalid start time format. Use 'YYYY-MM-DD HH:MM:SS'.")
-            exit(1)
-    logger.info("Starting weather data extraction process.")
-
-    # Resolve station list from slope_config.toml when project-dir is given
-    active_stations = WEATHER_STATIONS
-    if args.project_dir and args.slope_name:
-        _toml = Path(args.project_dir) / "slopes" / args.slope_name / "slope_config.toml"
-        if _toml.exists():
-            import sys as _sys
-            _sys.path.insert(0, str(Path(args.project_dir) / "src" / "avachain"))
-            from config import ProjectConfig as _PC
-            _cfg = _PC.from_toml(_toml)
-            active_stations = stations_from_cfg(_cfg)
-            logger.info(f"Using stations from {_toml.name}: {list(active_stations.keys())}")
-
-    for name, info in active_stations.items():
-        logger.info(f"Processing station: {name}")
-        df = get_weather_from_sql_db(st_id=info["id"], start_time=start_time)
-        
-        if not df.empty:
-            # Select only requested columns that actually exist in the result
-            if info["cols"] == ["*"]:
-                existing_cols = df.columns.tolist()  # Use all columns if '*' is specified
-            else:
-                existing_cols = [c for c in info["cols"] if c in df.columns]
-            all_stations_data.append(df[existing_cols])
-        else:
-            logger.warning(f"Skipping {name} due to empty dataset.")
-
-    if all_stations_data:
-        try:
-            output_path = Path(args.target) / "weather"
-            output_path.mkdir(parents=True, exist_ok=True)
-            
-            final_df = pd.concat(all_stations_data, axis=1)
-            csv_file = output_path / "weather_data.csv"
-            final_df.to_csv(csv_file)
-            
-            logger.info(f"Successfully saved data to {csv_file}")
-        except Exception as e:
-            logger.error(f"Failed to save CSV: {e}")
-    else:
-        logger.error("No data collected from any stations. CSV not created.")
+    cfg = ProjectConfig.from_toml(Path(args.toml))
+    start = args.start or season_start(args.toml)
+    if start is None:
+        raise SystemExit("no --start and no [snowpack] season_start in the TOML")
+    df = fetch_weather(stations_from_cfg(cfg), start, args.end)
+    if df.empty:
+        raise SystemExit("no data collected from any station; CSV not written")
+    out = Path(args.out) if args.out else Path(cfg.weather_csv)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out)
+    logger.info(f"wrote {len(df)} rows to {out}")

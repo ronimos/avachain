@@ -178,8 +178,25 @@ def load_and_convert(csv_path: str, tz_output: str = "UTC",
     -------
     DataFrame with columns: TA (°C), RH (%), VW (m/s), DW (°), ISWR (W/m²), HS (cm)
     """
-    st = station or SUMMIT_STATION
     df = pd.read_csv(csv_path, parse_dates=["time"], index_col="time")
+    return convert_caic_frame(df, tz_output=tz_output, station=station)
+
+
+def convert_caic_frame(df: pd.DataFrame, tz_output: str = "UTC",
+                       station: Optional[StationConfig] = None) -> pd.DataFrame:
+    """Raw CAIC columns (the weather_data.csv layout, `time` index) to SMET units.
+
+    The one conversion both the archived CSV (load_and_convert) and the live
+    database fetch (aws_ingest, via sql_util.fetch_weather) go through, so the
+    station cache cannot hold two unit conventions.
+    """
+    st = station or SUMMIT_STATION
+    need = ["temp", "rh", "wspd", "wdir", "swin", "depth"]
+    missing = [c for c in need if c not in df.columns]
+    if missing:
+        raise KeyError(f"CAIC columns missing for the SMET conversion: {missing}; "
+                       f"check the slope TOML's [[stations]] sql_columns")
+    df = df.astype({c: float for c in need})
 
     out = pd.DataFrame(index=df.index)
     out["TA"] = tenths_f_to_celsius(df["temp"])

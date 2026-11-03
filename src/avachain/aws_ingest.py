@@ -12,57 +12,49 @@ Only rows whose timestamp is newer than the last cached record are fetched,
 so the fetch is always incremental regardless of how long the station history is.
 
 Usage (standalone):
-    python aws_ingest.py                       # fetch all configured stations
-    python aws_ingest.py --station CAABT       # single station
-    python aws_ingest.py --since 2026-01-01    # force refetch from a date
-    python aws_ingest.py --dry-run             # print what would be fetched
+    python aws_ingest.py --toml T                      # fetch since the cache's end
+    python aws_ingest.py --toml T --since 2026-01-01   # refetch from a date
+    python aws_ingest.py --toml T --dry-run            # fetch, don't write
+    python aws_ingest.py --toml T --from-csv           # seed from the archived CSV
 
 Called by run_daily_<slope>.sh as the first step before smet_append.py.
 
-TODO: replace the stub _fetch_station() with the real CAIC API / CDOT RWIS
-      call once the endpoint and auth token are confirmed.
+The fetch reads the CAIC MySQL database on this host (sql_util), for the
+stations in the slope TOML's [[stations]] only. Both stations' raw columns
+are joined into the weather_data.csv layout and converted by
+smet_writer.convert_caic_frame, the same conversion that seeds the cache
+from the archived CSV. So a live row and a seeded row of the same hour are
+identical.
+
+The cache is one file per slope, named after the summit station
+(<weather_cache_dir>/<summit_id>.parquet), because smet_append reads that one
+file. Each fetch re-reads the last OVERLAP_H hours and replaces those cached
+rows, so an hour the database recorded late, or filled in afterwards, still
+lands. Rows already appended to the SMET files are not rewritten.
+
+It also reads CONTEXT_H hours before that window and does not write them.
+ILWR fills night-time cloudiness by interpolating from the daytime before,
+so a window converted without them gets up to 10 night rows wrong by up to
+6 W/m2 (measured on 2026-01-15). With them, a fetch reproduces the
+whole-season conversion of the archived CSV exactly (2026-01-14..20, all
+seven columns).
+
+The fetch never runs past `now`: the replay clock ($AVACHAIN_AS_OF) when set,
+otherwise the wall clock.
 """
 
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
 
-# --- Station registry ---
-# Default stations for little_prof.  For other slopes the pipeline passes
-# stations built via stations_from_cfg(cfg) instead of this module-level dict.
-STATIONS = {
-    "CAABT": {
-        "name":    "Abasin Top",
-        "lat":     39.6368,
-        "lon":    -105.8719,
-        "elev_m":  3780,
-    },
-    "CAABM": {
-        "name":    "Abasin Mid",
-        "lat":     39.6381,
-        "lon":    -105.8732,
-        "elev_m":  3530,
-    },
-}
-
-
-def stations_from_cfg(cfg) -> dict:
-    """Build a STATIONS-format dict from a ProjectConfig."""
-    return {
-        cfg.summit_id: {"name": cfg.summit_id,
-                        "lat":    cfg.summit_lat,
-                        "lon":    cfg.summit_lon,
-                        "elev_m": cfg.summit_alt_m},
-        cfg.base_id:   {"name": cfg.base_id,
-                        "lat":    cfg.base_lat,
-                        "lon":    cfg.base_lon,
-                        "elev_m": cfg.base_alt_m},
-    }
+# Hours re-read and replaced on every fetch, and hours read before them for
+# the ILWR interpolation only (see the module docstring)
+OVERLAP_H = 24
+CONTEXT_H = 24
 
 # Expected columns in the cache (SMET-compatible names + timestamp).
 # Units are exactly smet_writer.load_and_convert's output, which is also what
@@ -114,33 +106,13 @@ def append_to_cache(station_id: str, new_rows: pd.DataFrame) -> int:
     return len(new_rows)
 
 
-# ---------------------------------------------------------------------------
-# Data fetch — stub, replace with real CAIC / CDOT RWIS API call
-# ---------------------------------------------------------------------------
-
-def _fetch_station(station_id: str, since: pd.Timestamp | None,
-                   until: pd.Timestamp | None = None) -> pd.DataFrame:
-    """
-    TODO: implement real fetch from CAIC API or CDOT RWIS.
-
-    Expected return: DataFrame with columns matching CACHE_COLS, timestamps
-    UTC-aware, no duplicates, sorted ascending by timestamp.
-
-    For now returns an empty frame so the pipeline skeleton can run end-to-end
-    without a live data source.
-    """
-    print(f"    [aws_ingest] STUB: would fetch {station_id} "
-          f"since {since} until {until or 'now'}")
-    return pd.DataFrame(columns=CACHE_COLS)
-
-
 def seed_cache_from_csv(station_id: str, csv_path: Path, cfg,
                         role: str = "summit", dry_run: bool = False) -> int:
     """Seed the station cache from the archived CAIC weather CSV.
 
-    The live fetch is still a stub, so this is how an operational replay gets
-    station forcing: convert the whole archived season once, then gate it with
-    `smet_append --until`. Conversion is delegated to
+    This is how an operational replay gets station forcing (convert the whole
+    archived season once, then gate it with `smet_append --until`), and one
+    way to start a season's cache before the live fetch extends it. Conversion is delegated to
     smet_writer.load_and_convert so the cache carries exactly the units the
     SMET files are written in (TA °C, RH %, HS cm) — hand-rolling it here is
     how a 100x HS error gets in.
@@ -159,49 +131,97 @@ def seed_cache_from_csv(station_id: str, csv_path: Path, cfg,
         print(f"    [{station_id}] dry-run: not written")
         return 0
 
-    WEATHER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(cache_path(station_id), index=False)
+    _write_cache(station_id, df)
     print(f"    [{station_id}] wrote {cache_path(station_id)}")
     return len(df)
 
 
-def fetch_and_cache(station_id: str,
-                    since: pd.Timestamp | None = None,
-                    dry_run: bool = False) -> int:
-    """Fetch new records for station_id and append to cache.
+def _write_cache(station_id: str, df: pd.DataFrame) -> None:
+    # Write through a temp file and rename, so a crash never leaves a
+    # half-written cache for smet_append to read
+    WEATHER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    dst = cache_path(station_id)
+    tmp = dst.with_suffix(".parquet.tmp")
+    df.to_parquet(tmp, index=False)
+    tmp.replace(dst)
 
-    If `since` is None, resumes from the last cached timestamp (or fetches
-    all available history if the cache is empty).
 
-    Returns the number of new rows cached (0 on dry_run or no new data).
+def fetch_and_cache(cfg, since: pd.Timestamp | None = None,
+                    until: pd.Timestamp | None = None,
+                    dry_run: bool = False, engine=None) -> int:
+    """Fetch the slope's station rows from the CAIC database into its cache.
+
+    @param cfg: ProjectConfig (stations, summit station metadata)
+    @param since: refetch from here; default: the last cached hour minus
+                  OVERLAP_H. With no cache, the cache must be seeded first
+                  (--from-csv or --since).
+    @param until: last hour to take; default: the replay clock or now (UTC)
+    @param engine: SQLAlchemy engine (tests); default: sql_util.get_engine()
+    @returns: number of cached rows added or replaced
     """
-    last = since if since is not None else last_cached_timestamp(station_id)
-    until = pd.Timestamp(datetime.now(timezone.utc))
+    import sql_util
+    from config import replay_as_of
+    from smet_writer import convert_caic_frame, station_config_from_cfg
 
-    if last is not None and last >= until:
-        print(f"    [{station_id}] cache already current ({last})")
+    sid = cfg.summit_id
+    if not sid:
+        raise ValueError("the slope TOML has no summit station (role = \"summit\")")
+    stations = sql_util.stations_from_cfg(cfg)
+    if until is None:
+        as_of = replay_as_of()
+        until = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp.now(tz="UTC")
+    until = _utc(until).floor("h")
+    last = last_cached_timestamp(sid)
+    if since is None:
+        if last is None:
+            raise FileNotFoundError(
+                f"no station cache at {cache_path(sid)}; seed it first with "
+                f"`aws_ingest.py --toml <slope_config.toml> --from-csv` or "
+                f"`--since YYYY-MM-DD`")
+        since = last - pd.Timedelta(hours=OVERLAP_H)
+    since = _utc(since)
+    if since >= until:
+        print(f"    [{sid}] cache already current ({last})")
         return 0
 
-    print(f"    [{station_id}] fetching {last} → {until.strftime('%Y-%m-%d %H:%M')} UTC")
-    new_rows = _fetch_station(station_id, since=last, until=until)
-
+    print(f"    [{sid}] fetching {since:%Y-%m-%d %H:%M} -> {until:%Y-%m-%d %H:%M} UTC "
+          f"from {', '.join(stations)}")
+    # The database stores naive UTC; the window's start is exclusive. Read
+    # CONTEXT_H more for the ILWR interpolation and keep only rows > since.
+    start = since - pd.Timedelta(hours=CONTEXT_H)
+    raw = sql_util.fetch_weather(stations, start.tz_localize(None),
+                                 until.tz_localize(None), engine=engine)
+    if raw.empty:
+        print(f"    [{sid}] no new rows in the database")
+        return 0
+    new = convert_caic_frame(raw, tz_output="UTC",
+                             station=station_config_from_cfg(cfg, role="summit"))
+    new = new.reset_index().rename(columns={"time": "timestamp"})
+    new["timestamp"] = pd.to_datetime(new["timestamp"], utc=True)
+    new = new.dropna(subset=["timestamp"])
+    new = new[new["timestamp"] > since].reset_index(drop=True)
+    if new.empty:
+        print(f"    [{sid}] no new rows in the database")
+        return 0
+    print(f"    [{sid}] {len(new)} rows, {new['timestamp'].min()} -> "
+          f"{new['timestamp'].max()}")
     if dry_run:
-        print(f"    [{station_id}] dry-run: {len(new_rows)} rows would be cached")
+        print(f"    [{sid}] dry-run: not written")
         return 0
 
-    n = append_to_cache(station_id, new_rows)
-    print(f"    [{station_id}] cached {n} new rows "
-          f"(total: {len(load_cache(station_id))})")
-    return n
+    cached = load_cache(sid)
+    # fetched rows win over cached ones of the same hour (the overlap)
+    combined = pd.concat([cached, new], ignore_index=True) \
+        .drop_duplicates(subset=["timestamp"], keep="last") \
+        .sort_values("timestamp").reset_index(drop=True)
+    _write_cache(sid, combined)
+    print(f"    [{sid}] cached {len(new)} rows (total: {len(combined)})")
+    return len(new)
 
 
-def fetch_all(stations: dict | None = None,
-              since: pd.Timestamp | None = None,
-              dry_run: bool = False) -> dict[str, int]:
-    """Fetch all stations.  Pass stations=stations_from_cfg(cfg) for a non-default slope."""
-    active = stations if stations is not None else STATIONS
-    return {sid: fetch_and_cache(sid, since=since, dry_run=dry_run)
-            for sid in active}
+def _utc(t) -> pd.Timestamp:
+    t = pd.Timestamp(t)
+    return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
 
 
 # ---------------------------------------------------------------------------
@@ -211,8 +231,6 @@ def fetch_all(stations: dict | None = None,
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Fetch and cache AWS station data for the daily pipeline")
-    parser.add_argument("--station", default=None,
-                        help="Single station ID (default: all stations for the slope)")
     parser.add_argument("--since", default=None,
                         help="Force refetch from this date (YYYY-MM-DD)")
     parser.add_argument("--dry-run", action="store_true",
@@ -229,36 +247,27 @@ def main() -> None:
                         help="Slope name (used with --project-dir to select config)")
     args = parser.parse_args()
 
-    # Resolve station registry and weather cache from config.
     global WEATHER_CACHE_DIR
-    active_stations = STATIONS
     toml_path = Path(args.toml) if args.toml else None
     if toml_path is None and args.project_dir and args.slope_name:
         toml_path = Path(args.project_dir) / "slopes" / args.slope_name / "slope_config.toml"
-    if toml_path and toml_path.exists():
-        from config import ProjectConfig
-        cfg = ProjectConfig.from_toml(toml_path)
-        active_stations = stations_from_cfg(cfg)
-        WEATHER_CACHE_DIR = cfg.weather_cache_dir
-
-    since_ts = pd.Timestamp(args.since, tz="UTC") if args.since else None
+    if not (toml_path and toml_path.exists()):
+        raise SystemExit("aws_ingest needs the slope TOML (--toml): the stations "
+                         "and the cache location come from it")
+    from config import ProjectConfig
+    cfg = ProjectConfig.from_toml(toml_path)
+    WEATHER_CACHE_DIR = cfg.weather_cache_dir
 
     if args.from_csv:
-        if not (toml_path and toml_path.exists()):
-            raise SystemExit("--from-csv needs --toml (for station metadata)")
         csv_path = Path(args.from_csv) if args.from_csv is not True else cfg.weather_csv
         n = seed_cache_from_csv(cfg.summit_id, csv_path, cfg,
                                 role="summit", dry_run=args.dry_run)
         print(f"\n  Seeded {n} rows for {cfg.summit_id}")
         return
 
-    if args.station:
-        fetch_and_cache(args.station, since=since_ts, dry_run=args.dry_run)
-    else:
-        counts = fetch_all(stations=active_stations, since=since_ts, dry_run=args.dry_run)
-        total = sum(counts.values())
-        print(f"\n  Total new rows cached: {total}")
-
+    since_ts = pd.Timestamp(args.since, tz="UTC") if args.since else None
+    n = fetch_and_cache(cfg, since=since_ts, dry_run=args.dry_run)
+    print(f"\n  Rows cached: {n}")
 
 if __name__ == "__main__":
     main()
