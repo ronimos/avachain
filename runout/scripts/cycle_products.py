@@ -736,12 +736,26 @@ def inputs_and_caveats(manifest, horizons):
     rows.append(('Software', f"pipeline v{manifest.get('pipeline_version', PIPELINE_VERSION)}"
                  f"{' (' + manifest['git_commit'] + ')' if manifest.get('git_commit') else ''}"
                  f", AvaFrame {manifest.get('avaframe_version') or 'unknown'}"))
-    caveats = list((manifest.get('display') or {}).get('caveats') or [])
+    caveats = cycle_caveats(manifest)
     missing = [f"T+{n}" for n in range(3) if f"T_{n}" not in {hz['label'] for hz in horizons}]
     if missing:
         caveats.insert(0, f"No forecast for {', '.join(missing)}: no release scenarios were "
                           f"delivered for those days.")
     return {'rows': rows, 'caveats': caveats, 'snow_line': snow_line}
+
+
+def cycle_caveats(manifest):
+    # The path's caveats for this cycle: display.event_caveats for the
+    # cycle's own date first, then display.caveats, which hold for every
+    # cycle. A dated note (the 2026-01-18 debris) never reaches another
+    # day's report.
+    # @param manifest: cycle manifest (cycle_date 'YYYYMMDD' or 'YYYY-MM-DD')
+    # @returns: list of caveat strings
+    display = manifest.get('display') or {}
+    d = str(manifest.get('cycle_date') or '').replace('-', '')
+    key = f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 else None
+    dated = {str(k): v for k, v in (display.get('event_caveats') or {}).items()}
+    return list(dated.get(key) or []) + list(display.get('caveats') or [])
 
 
 def build_report(cycle_dir, manifest, horizons, dpi=120):

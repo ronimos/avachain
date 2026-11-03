@@ -57,5 +57,40 @@ class InputsBox(unittest.TestCase):
         self.assertEqual(box['snow_line'], ('Last snow height survey', '2026-01-14'))
 
 
+
+class EventCaveats(unittest.TestCase):
+    # Ron, 2026-11-03: the Jan 18 notes (debris, last season's DEM offset)
+    # are last season's and must not reach a live report.
+    DISPLAY = {'caveats': ['general'],
+               'event_caveats': {'2026-01-18': ['jan18 a', 'jan18 b']}}
+
+    def test_dated_caveats_only_on_their_own_cycle(self):
+        self.assertEqual(cp.cycle_caveats({'display': self.DISPLAY, 'cycle_date': '20260118'}),
+                         ['jan18 a', 'jan18 b', 'general'])
+        self.assertEqual(cp.cycle_caveats({'display': self.DISPLAY, 'cycle_date': '20261205'}),
+                         ['general'])
+
+    def test_cycle_date_with_dashes_and_missing(self):
+        self.assertEqual(cp.cycle_caveats({'display': self.DISPLAY, 'cycle_date': '2026-01-18'})[0],
+                         'jan18 a')
+        self.assertEqual(cp.cycle_caveats({'display': self.DISPLAY}), ['general'])
+
+    def test_yaml_date_keys_still_match(self):
+        # An unquoted 2026-01-18 key loads from YAML as a date object
+        import datetime
+        disp = {'event_caveats': {datetime.date(2026, 1, 18): ['jan18']}}
+        self.assertEqual(cp.cycle_caveats({'display': disp, 'cycle_date': '20260118'}), ['jan18'])
+
+    def test_little_professor_profile_keeps_jan18_notes_off_live_reports(self):
+        import yaml
+        prof = yaml.safe_load((Path(__file__).resolve().parent.parent / 'config' / 'paths'
+                               / 'little_professor.yaml').read_text())
+        live = cp.cycle_caveats({'display': prof['display'], 'cycle_date': '20261205'})
+        jan18 = cp.cycle_caveats({'display': prof['display'], 'cycle_date': '20260118'})
+        self.assertFalse(any('debris' in c or '251110' in c for c in live))
+        self.assertTrue(any('debris' in c for c in jan18))
+        self.assertTrue(any('251110' in c for c in jan18))
+
+
 if __name__ == '__main__':
     unittest.main()
