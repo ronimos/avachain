@@ -319,3 +319,55 @@ def test_carry_fills_near_cells_and_leaves_far_ones_out():
     assert cmap[0, 0] == 0 and st["cells_dropped_outside_domain"] == 1
     assert st["cells_filled_from_nearest"] == 8 and st["cells_left_out"] == 12
     assert st["lost_clusters"] == []
+
+
+# ---------------------------------------------------------------- terrain
+
+import cluster_terrain                                          # noqa: E402
+from scipy.ndimage import label as _label                        # noqa: E402
+
+
+def _two_facets(ridge=13.3, rough=0.0, seed=0):
+    # A ridge off the superpixel grid: west of it faces west, east faces east.
+    y, x = np.mgrid[0:40, 0:48].astype(float)
+    dem = 3600 - np.abs(x - ridge) * 0.8
+    if rough:
+        dem = dem + rough * np.random.default_rng(seed).standard_normal(dem.shape)
+    return dem
+
+
+def test_terrain_clusters_are_connected_numbered_and_sized():
+    dem = _two_facets(rough=0.3)
+    domain = np.ones(dem.shape, bool)
+    domain[:3] = False
+    cmap = cluster_terrain.terrain_clusters(dem, domain, cells_per_cluster=10)
+    ids = np.unique(cmap[cmap > 0])
+    assert (cmap[~domain] == 0).all() and (cmap[domain] > 0).all()
+    np.testing.assert_array_equal(ids, np.arange(1, len(ids) + 1))
+    assert 0.5 * domain.sum() / 10 <= len(ids) <= 1.5 * domain.sum() / 10
+    for i in ids:
+        assert _label(cmap == i)[1] == 1          # one connected piece
+
+
+def test_terrain_clusters_do_not_straddle_an_aspect_break():
+    # Columns 13 and 14 sit on the crest (x = 13.3): their central-difference
+    # gradient mixes both facets, and a crest cluster may reach one cell past
+    # them on either side. Nothing farther than that is shared.
+    dem = _two_facets()
+    cmap = cluster_terrain.terrain_clusters(dem, np.ones(dem.shape, bool), 10)
+    west, east = set(np.unique(cmap[:, :12])), set(np.unique(cmap[:, 16:]))
+    assert not (west & east)
+
+
+@pytest.mark.parametrize("bearing", [0, 45, 90, 135, 180, 225, 270, 315])
+def test_terrain_aspect_is_the_map_frame_downslope_bearing(bearing):
+    # A plane falling toward `bearing` (degrees clockwise from north). Rows
+    # count southward, so northing = -row.
+    r, c = np.mgrid[0:30, 0:30].astype(float)
+    east, north = c, -r
+    b = np.radians(bearing)
+    dem = 3600 - 0.7 * (east * np.sin(b) + north * np.cos(b))
+    f = cluster_terrain.terrain_features(dem)
+    got = np.degrees(np.arctan2(f["aspect_sin"][15, 15], f["aspect_cos"][15, 15])) % 360
+    assert got == pytest.approx(bearing, abs=1e-6)
+    assert f["slope"][15, 15] == pytest.approx(np.degrees(np.arctan(0.7)))
