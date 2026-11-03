@@ -63,6 +63,10 @@ def resolve_wrf_smet(wrf: dict, season_start: Optional[str]) -> Optional[Path]:
 # Environment variable holding the simulated "now" for operational replay.
 AS_OF_ENV = "AVACHAIN_AS_OF"
 
+# Worker processes for per-cluster SMET generation (forcing_pipeline smet).
+# The step runs before SNOWPACK, so it does not compete with MAX_JOBS there.
+SMET_WORKERS = 16
+
 
 def replay_as_of(explicit: "str | _dt.datetime | None" = None) -> Optional[_dt.datetime]:
     """Simulated UTC 'now' for operational replay, or None in live operation.

@@ -178,7 +178,9 @@ echo ""
 echo ">>> Step 2c: SMET generation + observations since the survey"
 CURRENT_STEP="Step 2c: SMET generation + observations since the survey"
 step2c_start=$SECONDS
-$PIPELINE smet
+# Only rows from the previous survey (the survey anchor, not yet moved) on
+# change, and the survey cycle restarts SNOWPACK there; earlier rows are kept.
+$PIPELINE smet --since-survey-anchor
 # smet ends at the survey time; append station observations up to now.
 $SMET_APPEND
 step2c_elapsed=$((SECONDS - step2c_start))
