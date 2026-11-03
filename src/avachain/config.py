@@ -171,6 +171,22 @@ class ProjectConfig:
     # off only for ablations.
     clean_survey_pixels: bool = True
 
+    # --- Season (season_start.py) ---
+    # [snowpack] season_start / season_end. When set, only surveys dated
+    # inside the window count (pipeline_io.discover_surveys), so last
+    # season's rasters in survey_dir cannot leak into this season's pairs.
+    season_start: Optional[_dt.date] = None
+    season_end: Optional[_dt.date] = None
+    # [snowpack] start_from_bare_ground: gap_fill writes a segment from
+    # season_start (HS 0) to the season's first survey, so SNOWPACK runs the
+    # early season from bare ground instead of starting at the first survey
+    # with its whole depth deposited at once. Off by default: it changes the
+    # forcing of every cluster, and 2025-26 acceptance was run without it.
+    start_from_bare_ground: bool = False
+    # [weather] source: "csv" reads weather_csv (archived season), "cache"
+    # reads the station cache that aws_ingest keeps current (live season).
+    weather_source: str = "csv"
+
     # --- Domain mask ---
     min_slope_deg: float = 15.0
 
@@ -416,6 +432,12 @@ class ProjectConfig:
                             if "validation_dir" in paths else None),
             windninja_library_dir=Path(paths.get("windninja_library_dir", "windninja/library")),
             clean_survey_pixels=bool(processing.get("clean_survey_pixels", True)),
+            season_start=(_dt.date.fromisoformat(str(snowpack["season_start"]))
+                          if snowpack.get("season_start") else None),
+            season_end=(_dt.date.fromisoformat(str(snowpack["season_end"]))
+                        if snowpack.get("season_end") else None),
+            start_from_bare_ground=bool(snowpack.get("start_from_bare_ground", False)),
+            weather_source=_weather_source(data.get("weather", {})),
             survey_markers=bool(surveys.get("markers", False)),
             slope_name=slope_name,
             slope_dir=Path(paths.get("slope_dir", f"snowpack/{slope_name}")),
@@ -438,6 +460,13 @@ class ProjectConfig:
             dir_overrides={k: paths[k] for k in OVERRIDABLE_DIRS if k in paths},
         )
             
+
+def _weather_source(weather: dict) -> str:
+    src = str(weather.get("source", "csv"))
+    if src not in ("csv", "cache"):
+        raise ValueError(f"[weather] source must be \"csv\" or \"cache\", got {src!r}")
+    return src
+
 
 def shell_paths(cfg: ProjectConfig) -> dict:
     """Directories the shell scripts need, as AVA_<NAME> -> absolute path.
