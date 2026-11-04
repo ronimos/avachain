@@ -105,6 +105,40 @@ def test_scripts_take_t_stable_only_after_nwp_ingest_succeeded():
     spec.loader.exec_module(m)
     cfg = tomllib.loads((repo / "slopes" / "Professor_PTC" / "slope_config.toml").read_text())
     for sh in (m._render_run_operational(cfg), m._render_run_daily(cfg)):
-        a = sh.index("$NWP --lead-hours 48")
+        a = sh.index("$NWP --lead-hours")
         block = sh[a:sh.index('STABLE_TS=$(echo', a)]
         assert "NWP_OK=0" in block and "if [[ $NWP_OK -eq 1 ]]; then" in block
+
+
+class TestForecastWindow:
+    """Ron, 2026-11-04: lead 60 h, and if T+2 is past the WRF outlook use its
+    last forward-looking timestamp. One window for SMETs and the pass."""
+
+    def test_full_lead_inside_the_outlook(self, tmp_path):
+        p = _wrf(tmp_path / "w.smet", last="2026-11-07T18:00:00")
+        stable, end, clamped = ni.forecast_window(p, 60, now=pd.Timestamp("2026-11-04T19:00"))
+        assert (stable, end, clamped) == (pd.Timestamp("2026-11-04T12:00", tz="UTC"),
+                                          pd.Timestamp("2026-11-07T00:00", tz="UTC"), False)
+
+    def test_clamped_to_the_last_forecast_row(self, tmp_path):
+        # a run 6 h after midnight-MST: T_stable 11-06 12 UTC, +60 h > last row
+        p = _wrf(tmp_path / "w.smet", last="2026-11-06T12:00:00 -4\n2026-11-07T18:00:00")
+        _, end, clamped = ni.forecast_window(p, 60, now=pd.Timestamp("2026-11-06T13:00"))
+        assert end == pd.Timestamp("2026-11-07T18:00", tz="UTC") and clamped
+
+    def test_no_forecast_rows(self, tmp_path):
+        p = _wrf(tmp_path / "w.smet", last="2026-11-04T12:00:00")
+        assert ni.forecast_window(p, 60, now=pd.Timestamp("2026-11-05T00:00")) is None
+
+
+def test_scripts_take_the_window_from_nwp_ingest():
+    import importlib.util, tomllib
+    repo = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("install_mod_w", repo / "install.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    cfg = tomllib.loads((repo / "slopes" / "Professor_PTC" / "slope_config.toml").read_text())
+    for sh in (m._render_run_operational(cfg), m._render_run_daily(cfg)):
+        assert "$NWP --lead-hours 60 ||" in sh
+        assert "$NWP --lead-hours 60 --print-window" in sh
+        assert "+ pd.Timedelta(hours=48)" not in sh        # no second, hard-coded window

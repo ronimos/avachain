@@ -677,29 +677,19 @@ if [[ $NO_NWP -eq 0 ]]; then
     # T_stable only when nwp_ingest wrote the forecast SMETs: otherwise the
     # forecast pass would run on missing or stale ones.
     NWP_OK=1
-    $NWP --lead-hours 48 || {{ NWP_OK=0; echo "    WARNING: nwp_ingest failed — continuing without NWP extension"; }}
+    $NWP --lead-hours {nwp_lead_hours} || {{ NWP_OK=0; echo "    WARNING: nwp_ingest failed — continuing without NWP extension"; }}
     _ts_output=""
     if [[ $NWP_OK -eq 1 ]]; then
-    _ts_output=$(python3 -c "
-import sys; sys.path.insert(0, '$PROJECT_DIR/src/avachain')
-from nwp_ingest import get_stable_ts
-from config import ProjectConfig
-from pathlib import Path
-import pandas as pd
-cfg = ProjectConfig.from_toml(Path('$TOML'))
-wrf = Path(cfg.wrf_smet_file) if cfg.wrf_smet_file else None
-if wrf and wrf.exists():
-    ts = get_stable_ts(wrf)
-    if ts:
-        print(ts.strftime('%Y-%m-%dT%H:%M'),
-              (ts + pd.Timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M'))
-" 2>/dev/null)
+    # The window (T_stable, end) comes from nwp_ingest itself: end is
+    # T_stable + lead, clamped to WRF's last forecast timestamp, so the
+    # forecast pass never runs past the forecast SMETs.
+    _ts_output=$($NWP --lead-hours {nwp_lead_hours} --print-window 2>/dev/null | tail -1)
     fi
     if [[ -n "$_ts_output" ]]; then
         STABLE_TS=$(echo "$_ts_output" | cut -d' ' -f1)
         NWP_EDATE=$(echo "$_ts_output" | cut -d' ' -f2)
         echo "    T_stable  = $STABLE_TS"
-        echo "    NWP EDATE = $NWP_EDATE (T_stable + 48h)"
+        echo "    NWP EDATE = $NWP_EDATE (T_stable + {nwp_lead_hours} h, clamped to the WRF outlook)"
     else
         echo "    WRF not available; observed run only"
     fi
@@ -915,29 +905,19 @@ if [[ $NO_NWP -eq 0 ]]; then
     # T_stable only when nwp_ingest wrote the forecast SMETs: otherwise the
     # forecast pass would run on missing or stale ones.
     NWP_OK=1
-    $NWP --lead-hours 48 || {{ NWP_OK=0; echo "    WARNING: nwp_ingest failed — continuing without NWP extension"; }}
+    $NWP --lead-hours {nwp_lead_hours} || {{ NWP_OK=0; echo "    WARNING: nwp_ingest failed — continuing without NWP extension"; }}
     _ts_output=""
     if [[ $NWP_OK -eq 1 ]]; then
-    _ts_output=$(python3 -c "
-import sys; sys.path.insert(0, '$PROJECT_DIR/src/avachain')
-from nwp_ingest import get_stable_ts
-from config import ProjectConfig
-from pathlib import Path
-import pandas as pd
-cfg = ProjectConfig.from_toml(Path('$TOML'))
-wrf = Path(cfg.wrf_smet_file) if cfg.wrf_smet_file else None
-if wrf and wrf.exists():
-    ts = get_stable_ts(wrf)
-    if ts:
-        print(ts.strftime('%Y-%m-%dT%H:%M'),
-              (ts + pd.Timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M'))
-" 2>/dev/null)
+    # The window (T_stable, end) comes from nwp_ingest itself: end is
+    # T_stable + lead, clamped to WRF's last forecast timestamp, so the
+    # forecast pass never runs past the forecast SMETs.
+    _ts_output=$($NWP --lead-hours {nwp_lead_hours} --print-window 2>/dev/null | tail -1)
     fi
     if [[ -n "$_ts_output" ]]; then
         STABLE_TS=$(echo "$_ts_output" | cut -d' ' -f1)
         NWP_EDATE=$(echo "$_ts_output" | cut -d' ' -f2)
         echo "    T_stable  = $STABLE_TS"
-        echo "    NWP EDATE = $NWP_EDATE (T_stable + 48h)"
+        echo "    NWP EDATE = $NWP_EDATE (T_stable + {nwp_lead_hours} h, clamped to the WRF outlook)"
     else
         echo "    WRF not available; observed run only"
     fi
@@ -1534,6 +1514,7 @@ def _render_run_daily(cfg: dict) -> str:
     slope      = cfg["slope"]
     slope_name = slope["name"]
     return _RUN_DAILY_TEMPLATE.format(
+        nwp_lead_hours = int(cfg.get("nwp", {}).get("lead_hours", 48)),
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,
     )
@@ -1548,6 +1529,7 @@ def _render_run_operational(cfg: dict) -> str:
     size_factors = sc.get("size_factors", [0.70, 0.85, 1.00, 1.15, 1.30])
     depth_pcts   = sc.get("depth_percentiles", [10, 50, 90])
     return _RUN_OPERATIONAL_TEMPLATE.format(
+        nwp_lead_hours = int(cfg.get("nwp", {}).get("lead_hours", 48)),
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,
         n_triggers    = sc.get("n_triggers", 5),

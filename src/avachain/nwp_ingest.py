@@ -95,6 +95,10 @@ FC_MULT   = [1, 1, 0.01, 1, 1, 1, 1, 1, 0.01]         # RH in %, HS in cm
 # WITHOUT its forecast rows, then being written. A reader there would fail, or
 # worse, build a short forecast without any error. wait_for_wrf waits it out.
 WRF_SETTLE_S = 600        # unchanged this long = the rebuild has finished
+# Forecast hours a file must hold past T_stable to count as finished (the
+# output/ copy has none). Smaller than the lead on purpose: the lead is
+# clamped to what the file holds (Ron, 2026-11-04), not waited for.
+WRF_READY_FORECAST_H = 24
 WRF_WAIT_TIMEOUT_S = 1800
 WRF_POLL_S = 60
 
@@ -161,6 +165,24 @@ def wait_for_wrf(path: Path, forecast_hours: float = 0.0, now=None,
     if why is None and clock() - t0 >= poll_s:
         print(f"    WRF ready after {(clock() - t0) / 60:.1f} min", flush=True)
     return why
+
+
+def forecast_window(wrf_smet_path: Path, lead_hours: float, now=None):
+    """(T_stable, end, clamped): the forecast runs T_stable -> end.
+
+    end = T_stable + lead_hours, or the file's last (forward-looking) data
+    timestamp when the WRF outlook stops earlier (Ron, 2026-11-04: a midnight
+    run reaches T+2 at 18 UTC exactly at the end of the previous morning's
+    cycle). The SMETs, the forecast pass and its end date all use this one
+    window, so SNOWPACK never runs past its forcing. None when the file has
+    no row at or before now, or none after T_stable.
+    """
+    stable = get_stable_ts(wrf_smet_path, now=now)
+    last = _last_data_ts(wrf_smet_path)
+    if stable is None or last is None or last <= stable:
+        return None
+    want = stable + pd.Timedelta(hours=lead_hours)
+    return stable, min(want, last), last < want
 
 
 def get_stable_ts(wrf_smet_path: Path, now=None) -> pd.Timestamp | None:
@@ -465,6 +487,9 @@ def main() -> None:
                         help="Override WRF SMET file path")
     parser.add_argument("--lead-hours", type=int, default=48,
                         help="Forecast horizon in hours beyond T_stable (default: 48)")
+    parser.add_argument("--print-window", action="store_true",
+                        help="print 'T_stable end' (YYYY-MM-DDTHH:MM, UTC) of the forecast "
+                             "window as its last line and exit; the run scripts read it")
     parser.add_argument("--cluster", type=int, default=None,
                         help="Single cluster ID to update (default: all)")
     parser.add_argument("--dry-run", action="store_true",
@@ -487,7 +512,8 @@ def main() -> None:
     if wrf_smet_path is None:
         print("ERROR: no WRF SMET file — provide --toml or --wrf-smet")
         sys.exit(1)
-    why = wait_for_wrf(wrf_smet_path, forecast_hours=args.lead_hours)
+    why = wait_for_wrf(wrf_smet_path,
+                       forecast_hours=min(args.lead_hours, WRF_READY_FORECAST_H))
     if why is not None:
         print(f"ERROR: WRF SMET not usable: {why}")
         print("  Confirm /ssd is mounted and the CAIC forecast run finished.")
@@ -509,8 +535,19 @@ def main() -> None:
         sys.exit(1)
     print(f"  T_stable = {stable_ts}")
 
-    # Read WRF data from T_stable to T_stable + lead_hours
-    end_ts = stable_ts + pd.Timedelta(hours=args.lead_hours)
+    # Read WRF data from T_stable to T_stable + lead_hours, clamped to the
+    # file's last forecast timestamp.
+    win = forecast_window(wrf_smet_path, args.lead_hours)
+    if win is None:
+        print("ERROR: WRF SMET has no forecast rows after T_stable")
+        sys.exit(1)
+    _, end_ts, clamped = win
+    if clamped:
+        print(f"  WRF outlook ends {end_ts:%Y-%m-%dT%H:%M}, before T_stable + "
+              f"{args.lead_hours} h: the forecast stops there")
+    if args.print_window:
+        print(f"{stable_ts:%Y-%m-%dT%H:%M} {end_ts:%Y-%m-%dT%H:%M}")
+        return
     wrf_raw, wrf_alt = read_wrf_smet(
         wrf_smet_path, stable_ts - pd.Timedelta(hours=LEAD_IN_HOURS), end_ts)
     if wrf_raw.empty:

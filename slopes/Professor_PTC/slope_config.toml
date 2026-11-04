@@ -110,6 +110,12 @@ explosive_trigger_points = [
     [39.6481336, -105.8787209],
 ]
 
+# NWP forecast pass: T_stable -> T_stable + lead_hours, clamped to the WRF
+# outlook's last timestamp. 60 h (Ron, 2026-11-04): the daily run at 00:00
+# local has T_stable ~06 UTC, and T+2's 18 UTC snapshot is 60 h later.
+[nwp]
+lead_hours = 60
+
 [wrf]
 fcst_base_dir = "/ssd/snowpack/fcst"
 season        = ""
