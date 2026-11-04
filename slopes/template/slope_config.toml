@@ -119,15 +119,21 @@ wrf_smet_file = ""   # abs path to the selected aspect-variant .smet file
 wrf_dist_km   = 0.0  # distance from slope centre to WRF grid cell (km)
 
 # ---------------------------------------------------------------------------
-# [cron] — automation schedule (install.py prints the crontab lines)
+# [cron] — automation schedule (install.py writes an /etc/cron.d file)
 # hour_utc: without [surveys] markers, the UTC hour at which the survey
 #   script fires each day. 03:00 UTC = 20:00 MST = evening after the
 #   afternoon UAS flight.
 # With markers, hour_utc is unused: the survey script is polled every
 #   poll_minutes and the daily script fires at daily_hour_utc
 #   (13 UTC = 06:00 MST); both share one flock so they never overlap.
+# The WRF archive (wrf_archive.py) runs hourly at :20.
+# user: the account the jobs run as (default: whoever runs install.py).
+# crond_dir: where install.py writes avachain-<slope> in /etc/cron.d format
+#   (default <project_dir>/cron); install it with the sudo command it prints.
 # ---------------------------------------------------------------------------
 [cron]
 hour_utc       = 3
 poll_minutes   = 10
 daily_hour_utc = 13
+# user         = "ron"
+# crond_dir    = "/home/avachain/cron"
