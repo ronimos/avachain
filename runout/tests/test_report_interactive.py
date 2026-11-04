@@ -73,6 +73,12 @@ class Payload(unittest.TestCase):
         self.assertNotIn('reason', t2)              # missing, but nothing said why
         self.assertNotIn('reason', p['slots'][0])   # the day that ran
 
+    def test_a_day_still_running_is_marked_pending(self):
+        p = ri.build_payload([self.hz], '20260118', reasons={'T_1': 'Still running'},
+                             pending={'T_1'})
+        self.assertTrue(p['slots'][1].get('pending'))
+        self.assertFalse(p['slots'][2].get('pending'))
+
     def test_probability_round_trips_for_the_readout(self):
         p = ri.build_payload([self.hz], '20260118')
         raw = gzip.decompress(base64.b64decode(p['slots'][0]['prob_gz']))

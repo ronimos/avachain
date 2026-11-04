@@ -485,3 +485,18 @@ def test_runout_venv_uses_the_deployment_interpreter(install, tmp_path, monkeypa
     monkeypatch.setattr(sp, "run", lambda cmd, **k: calls.append(cmd) or sp.CompletedProcess(cmd, 0))
     install._ensure_runout_venv({"runout": {}}, proj)
     assert calls == [[str(uv), "sync", "--frozen", "--python", str(interp.resolve())]]
+
+
+def test_forecast_slopes_run_every_forecast_day(install):
+    """[scenarios] forecast_days: the scripts run `analysis_pipeline forecast`
+    (T_0..T_n); slopes without it keep analyze + scenarios."""
+    cfg = _cfg("Professor_PTC")
+    assert cfg["scenarios"]["forecast_days"] == 3
+    for sh, survey in ((install._render_run_operational(cfg), True),
+                       (install._render_run_daily(cfg), False)):
+        assert "$ANALYSIS forecast $SNAPSHOT_ARG" in sh
+        assert "$ANALYSIS scenarios" not in sh and "$ANALYSIS analyze" not in sh
+        assert ('--n-triggers "$N_TRIGGERS"' in sh) == survey
+    dev = _cfg("little_prof")
+    for sh in (install._render_run_operational(dev), install._render_run_daily(dev)):
+        assert "$ANALYSIS analyze $SNAPSHOT_ARG" in sh and "$ANALYSIS forecast" not in sh

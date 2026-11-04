@@ -146,6 +146,9 @@ class ProjectConfig:
     # depth 12, scour 18), which the Jan 18 validation runs rely on. Ron,
     # 2026-11-04: operations use 18 (11:00 MST / 12:00 MDT, on the 6 h grid).
     snapshot_hour_utc: Optional[int] = None
+    # Days per forecast cycle (T_0..T_{n-1}) for `analysis_pipeline forecast`;
+    # None = the run scripts keep the single-day analyze + scenarios path.
+    forecast_days: Optional[int] = None
 
     # --- Survey file pattern ---
     # Expected format: YYMMDD_*_snowHeight.tif
@@ -480,6 +483,8 @@ class ProjectConfig:
                 scenarios.get("explosive_trigger_points", [])),
             snapshot_hour_utc=(int(scenarios["snapshot_hour_utc"])
                                if scenarios.get("snapshot_hour_utc") is not None else None),
+            forecast_days=(int(scenarios["forecast_days"])
+                           if scenarios.get("forecast_days") is not None else None),
             stations=data.get("stations", []),
             wrf_smet_file=wrf_smet,
             wrf_smet_dir=wrf_smet.parent if wrf_smet else None,

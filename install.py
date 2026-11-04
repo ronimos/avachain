@@ -713,15 +713,7 @@ echo ""
 echo ">>> Step 4: Analysis + scenario generation"
 CURRENT_STEP="Step 4: Analysis + scenario generation"
 step4_start=$SECONDS
-$ANALYSIS analyze $SNAPSHOT_ARG
-if [[ $NO_SCENARIOS -eq 0 ]]; then
-    $ANALYSIS scenarios $SNAPSHOT_ARG \\
-        --n-triggers "$N_TRIGGERS" \\
-        --size-factors $SIZE_FACTORS \\
-        --depth-pcts $DEPTH_PCTS
-else
-    echo "    Scenarios skipped (--no-scenarios)"
-fi
+{analysis_block}
 step4_elapsed=$((SECONDS - step4_start))
 echo "    Done: $((step4_elapsed / 60))m $((step4_elapsed % 60))s"
 echo ""
@@ -937,12 +929,7 @@ echo ""
 
 echo ">>> Step 5: Analysis + scenario generation"
 step5_start=$SECONDS
-$ANALYSIS analyze $SNAPSHOT_ARG
-if [[ $NO_SCENARIOS -eq 0 ]]; then
-    $ANALYSIS scenarios $SNAPSHOT_ARG
-else
-    echo "    Scenarios skipped (--no-scenarios)"
-fi
+{analysis_block}
 step5_elapsed=$((SECONDS - step5_start))
 echo ""
 
@@ -1514,10 +1501,36 @@ def _render_run_daily(cfg: dict) -> str:
     slope      = cfg["slope"]
     slope_name = slope["name"]
     return _RUN_DAILY_TEMPLATE.format(
+        analysis_block = _analysis_block(cfg, survey=False),
         nwp_lead_hours = int(cfg.get("nwp", {}).get("lead_hours", 48)),
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,
     )
+
+
+def _analysis_block(cfg: dict, survey: bool) -> str:
+    """The run scripts' analysis step.
+
+    With [scenarios] forecast_days: `analysis_pipeline forecast`, analyze +
+    scenarios for each forecast day T_0..T_{n-1} at the TOML snapshot hour
+    (Ron, 2026-11-04). Without it, the single-day analyze + scenarios.
+    """
+    extra = (' \\\n        --n-triggers "$N_TRIGGERS" \\\n        --size-factors $SIZE_FACTORS'
+             ' \\\n        --depth-pcts $DEPTH_PCTS') if survey else ""
+    if cfg.get("scenarios", {}).get("forecast_days"):
+        return ("if [[ $NO_SCENARIOS -eq 0 ]]; then\n"
+                "    # analyze + scenarios for each forecast day T_0..T_n ([scenarios]\n"
+                "    # forecast_days, snapshot_hour_utc); sets in <scenarios>/<date>/T_n/\n"
+                f"    $ANALYSIS forecast $SNAPSHOT_ARG{extra}\n"
+                "else\n"
+                "    echo \"    Analysis and scenarios skipped (--no-scenarios)\"\n"
+                "fi")
+    return ("$ANALYSIS analyze $SNAPSHOT_ARG\n"
+            "if [[ $NO_SCENARIOS -eq 0 ]]; then\n"
+            f"    $ANALYSIS scenarios $SNAPSHOT_ARG{extra}\n"
+            "else\n"
+            "    echo \"    Scenarios skipped (--no-scenarios)\"\n"
+            "fi")
 
 
 def _render_run_operational(cfg: dict) -> str:
@@ -1529,6 +1542,7 @@ def _render_run_operational(cfg: dict) -> str:
     size_factors = sc.get("size_factors", [0.70, 0.85, 1.00, 1.15, 1.30])
     depth_pcts   = sc.get("depth_percentiles", [10, 50, 90])
     return _RUN_OPERATIONAL_TEMPLATE.format(
+        analysis_block = _analysis_block(cfg, survey=True),
         nwp_lead_hours = int(cfg.get("nwp", {}).get("lead_hours", 48)),
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,

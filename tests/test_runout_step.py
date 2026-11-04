@@ -102,7 +102,7 @@ def test_tree_links_the_set_and_the_repo_config(tmp_path):
     s = _published_set(tmp_path)
     rc = rs.runout_settings(_toml(tmp_path))
     for _ in range(2):                                  # a rerun replaces the links
-        cfg_dir = rs.prepare_tree(rc, s, "2026-12-05")
+        cfg_dir = rs.prepare_tree(rc, {"T_0": s}, "2026-12-05")
     work = tmp_path / "work" / "runout" / "P"
     assert (work / "scen" / "P_profile" / "20261205" / "T_0").resolve() == s.resolve()
     local = (cfg_dir / "local.yaml").read_text()
@@ -114,11 +114,11 @@ def test_tree_links_the_set_and_the_repo_config(tmp_path):
 def test_command(tmp_path):
     s = _published_set(tmp_path)
     rc = rs.runout_settings(_toml(tmp_path))
-    cmd = rs.runout_command(rc, tmp_path / "cfg", s, "2026-12-05", "P")
+    cmd = rs.runout_command(rc, tmp_path / "cfg", "2026-12-05", "P")
     assert cmd[1:5] == ["-m", "scripts", "run", "--profile"]
     assert cmd[cmd.index("--path") + 1] == "P_profile"
     assert cmd[cmd.index("--date") + 1] == "20261205"
-    assert cmd[cmd.index("--snow-height") + 1] == str(s / "scour_depth.tif")
+    assert cmd[cmd.index("--snow-height") + 1] == "set"   # each day its own set's raster
 
 
 def test_no_runout_table_skips(tmp_path, capsys):
@@ -132,7 +132,7 @@ def test_an_unreadable_set_is_refused(tmp_path, capsys):
     t = _toml(tmp_path)
     assert rs.main(["--toml", str(t), "--snapshot-date", "2026-12-05"]) == 2
     err = capsys.readouterr().err
-    assert "cannot be read" in err and "READY" in err
+    assert "no readable release set" in err
 
 
 def test_one_runout_at_a_time_on_the_host(tmp_path, monkeypatch):
@@ -222,3 +222,58 @@ class TestRunScripts:
         assert "ALERTED" not in ok.stdout
         skip = self._run(block, 0, no_runout=1)
         assert "STATUS=skipped" in skip.stdout and "called" not in skip.stdout
+
+
+def _forecast_sets(tmp_path, labels):
+    """Publish one set per label under release/2026-12-05/<label>/."""
+    out = {}
+    for lab in labels:
+        stage = tmp_path / f".stage_{lab}"
+        stage.mkdir()
+        (stage / "scour_depth.tif").write_text(lab)
+        final = tmp_path / "release" / "2026-12-05" / lab
+        final.parent.mkdir(parents=True, exist_ok=True)
+        handoff.publish(stage, final, "release", horizon=lab)
+        out[lab] = final
+    return out
+
+
+def test_every_forecast_day_is_found_in_order(tmp_path):
+    sets = _forecast_sets(tmp_path, ["T_0", "T_2", "T_10", "T_1"])
+    from config import ProjectConfig
+    cfg = ProjectConfig.from_toml(_toml(tmp_path))
+    assert list(rs.release_sets(cfg, "2026-12-05")) == ["T_0", "T_1", "T_2", "T_10"]
+
+
+def test_a_single_day_set_runs_as_t0(tmp_path):
+    s = _published_set(tmp_path)
+    from config import ProjectConfig
+    cfg = ProjectConfig.from_toml(_toml(tmp_path))
+    assert rs.release_sets(cfg, "2026-12-05") == {"T_0": s}
+
+
+def test_stale_links_of_an_earlier_run_are_cleared(tmp_path):
+    sets = _forecast_sets(tmp_path, ["T_0", "T_1"])
+    rc = rs.runout_settings(_toml(tmp_path))
+    rs.prepare_tree(rc, sets, "2026-12-05")
+    rs.prepare_tree(rc, {"T_0": sets["T_0"]}, "2026-12-05")
+    day = tmp_path / "work" / "runout" / "P" / "scen" / "P_profile" / "20261205"
+    assert sorted(p.name for p in day.iterdir()) == ["T_0"]
+
+
+def test_a_damaged_day_is_left_out_and_the_rest_runs(tmp_path, capsys):
+    sets = _forecast_sets(tmp_path, ["T_0", "T_1"])
+    (sets["T_1"] / "scour_depth.tif").write_text("XX")       # edited after publish
+    fake = tmp_path / "fake_runout"
+    (fake / ".venv" / "bin").mkdir(parents=True)
+    (fake / ".venv" / "bin" / "python").write_text("")
+    import pytest as _pt
+    mp = _pt.MonkeyPatch()
+    mp.setattr(rs, "RUNOUT", fake)
+    try:
+        assert rs.main(["--toml", str(_toml(tmp_path)), "--snapshot-date", "2026-12-05",
+                        "--dry-run"]) == 0
+    finally:
+        mp.undo()
+    out, err = capsys.readouterr()
+    assert "T_1 left out" in err and "T_0=" in out and "T_1=" not in out

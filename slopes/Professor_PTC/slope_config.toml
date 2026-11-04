@@ -102,6 +102,9 @@ stauchwall_deg    = 29.0
 # One snapshot time for every read (features, release depth, scour): 18 UTC
 # = 11:00 MST / 12:00 MDT, on SNOWPACK's 6 h profile grid (Ron, 2026-11-04).
 snapshot_hour_utc = 18
+# Forecast days per cycle: T_0 (today), T_1, T_2, each from the observed or
+# the NWP forecast store at snapshot_hour_utc (analysis_pipeline forecast).
+forecast_days     = 3
 # Explosive-control shot locations, [lat, lon] WGS84. On a day when no cluster
 # passes the trigger gates, the clusters containing these points are the
 # triggers. Fixed on the ground, so they hold for any season's cluster map.

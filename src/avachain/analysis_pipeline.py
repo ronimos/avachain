@@ -553,9 +553,112 @@ def resolve_snapshot_ts(cfg, args) -> None:
 
 
 def scenario_set_dir(cfg, args) -> Path:
-    """Where a scenario set is published: <scenarios_dir>/<date>[/<horizon>]."""
-    base = cfg.scenarios_dir / args.snapshot_date
+    """Where a scenario set is published: <scenarios_dir>/<date>[/<horizon>].
+
+    <date> is the cycle date when one is given (a forecast cycle groups its
+    days T_0..T_n under it), else the snapshot date."""
+    base = cfg.scenarios_dir / (getattr(args, 'cycle_date', None) or args.snapshot_date)
     return base / args.forecast_horizon if args.forecast_horizon else base
+
+
+def store_span(zarr_path):
+    """(first, last) time in a Zarr store, or None when there is none."""
+    if not zarr_path or not Path(zarr_path).exists():
+        return None
+    import xarray as xr
+    t = xr.open_zarr(str(zarr_path))['time'].values
+    if len(t) == 0:
+        return None
+    return pd.Timestamp(t.min()), pd.Timestamp(t.max())
+
+
+def plan_forecast_days(cycle_date: str, n_days: int, hour: int,
+                       main_span, fc_span) -> list:
+    """Which store and time each day T+0..T+n-1 of a cycle reads.
+
+    Day n is <cycle_date + n> at <hour> UTC (Ron, 2026-11-04: 18 UTC). It
+    reads the observed store when that covers the time (an afternoon survey
+    run), else the NWP forecast store. Past the forecast store's end the time
+    is clamped to its last step ("if T+2 is past the WRF outlook, use its last
+    forward-looking timestamp"); a day whose clamped time is not after the
+    previous day's is skipped, as is any day with no store covering it.
+    Returns one dict per day: day, label, date, ts, store ('observed' |
+    'forecast' | None), clamped, reason.
+    """
+    base = pd.Timestamp(cycle_date)
+    out, prev = [], None
+    for n in range(n_days):
+        date = (base + pd.Timedelta(days=n)).strftime("%Y-%m-%d")
+        ts = pd.Timestamp(f"{date}T{hour:02d}:00")
+        d = {"day": n, "label": f"T_{n}", "date": date, "ts": ts,
+             "store": None, "clamped": False, "reason": None}
+        if main_span and ts <= main_span[1]:
+            d["store"] = "observed"
+        elif fc_span and ts <= fc_span[1]:
+            d["store"] = "forecast"
+        elif fc_span and (prev is None or fc_span[1] > prev):
+            d.update(ts=fc_span[1], store="forecast", clamped=True)
+        else:
+            d["reason"] = ("no forecast store" if not fc_span else
+                           f"the WRF outlook ends {fc_span[1]:%Y-%m-%dT%H:%M}, "
+                           f"not after the previous day")
+        if d["store"]:
+            prev = d["ts"]
+        out.append(d)
+    return out
+
+
+def step_forecast(cfg, args):
+    """analyze + scenarios for each day of a forecast cycle (T_0..T_{n-1}).
+
+    The cycle date is the snapshot date. Each day's set goes to
+    <scenarios_dir>/<cycle_date>/T_n/. Days read from the forecast store write
+    their feature CSVs to <analysis_dir>/forecast/<cycle_date>/T_n/, so the
+    observed analysis of that date never finds a forecast's CSVs. A day that
+    fails is reported and the next one still runs; the step fails only if no
+    day published a set.
+    """
+    import copy
+    if cfg.snapshot_hour_utc is None:
+        sys.exit("ERROR: forecast needs [scenarios] snapshot_hour_utc in the TOML")
+    n_days = args.days or cfg.forecast_days or 3
+    main_span = store_span(cfg.zarr_path)
+    fc_span = store_span(cfg.forecast_zarr_path)
+    plan = plan_forecast_days(args.snapshot_date, n_days, cfg.snapshot_hour_utc,
+                              main_span, fc_span)
+    print(f"\n=== step_forecast  cycle={args.snapshot_date}  days={n_days} ===")
+    print(f"  observed store: {main_span[0] if main_span else '-'} .. {main_span[1] if main_span else '-'}")
+    print(f"  forecast store: {fc_span[0] if fc_span else '-'} .. {fc_span[1] if fc_span else '-'}")
+    published = 0
+    for d in plan:
+        tag = f"{d['label']} {d['date']}"
+        if not d["store"]:
+            print(f"\n  {tag}: skipped ({d['reason']})")
+            continue
+        a = copy.copy(args)
+        a.cycle_date = args.snapshot_date
+        a.snapshot_date = d["date"]
+        a.snapshot_ts = f"{d['ts']:%Y-%m-%dT%H:%M}"
+        a.forecast_horizon = d["label"]
+        a.store_kind = d["store"]
+        a.clamped = d["clamped"]
+        if d["store"] == "forecast":
+            a.zarr_path = cfg.forecast_zarr_path
+            a.features_dir = cfg.analysis_dir / "forecast" / args.snapshot_date / d["label"]
+            a.force = True                       # the forecast store is rebuilt every cycle
+        else:
+            a.zarr_path = cfg.zarr_path
+        print(f"\n  {tag}: {d['store']} store at {a.snapshot_ts} UTC"
+              + (" (clamped to the end of the WRF outlook)" if d["clamped"] else ""), flush=True)
+        try:
+            step_analyze(cfg, a)
+            step_scenarios(cfg, a)
+            published += 1
+        except (Exception, SystemExit) as e:
+            print(f"  {tag}: FAILED: {e}", flush=True)
+    if not published:
+        sys.exit("ERROR: no forecast day published a scenario set")
+    print(f"\n  forecast cycle {args.snapshot_date}: {published} of {n_days} days published")
 
 
 def step_scenarios(cfg, args):
@@ -580,7 +683,11 @@ def step_scenarios(cfg, args):
                     path=cfg.slope_name, snapshot_date=args.snapshot_date,
                     horizon=args.forecast_horizon,
                     status="ok" if n else "no_scenarios", n_scenarios=n,
-                    trigger_source=meta_d.get("trigger_source"))
+                    trigger_source=meta_d.get("trigger_source"),
+                    cycle_date=getattr(args, 'cycle_date', None),
+                    snapshot_ts=getattr(args, 'snapshot_ts', None),
+                    store=getattr(args, 'store_kind', None),
+                    clamped=getattr(args, 'clamped', None))
     print(f"Published scenario set → {final}")
     return final
 
@@ -1310,7 +1417,7 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="Post-SNOWPACK analysis pipeline (Pipeline B)")
     parser.add_argument('step',
-        choices=['zarr_build', 'analyze', 'scenarios', 'all'],
+        choices=['zarr_build', 'analyze', 'scenarios', 'forecast', 'all'],
         help="Pipeline step to run")
 
     # Common
@@ -1347,6 +1454,11 @@ def build_parser():
                              '(analyze: comparison, deviations, Meloche; '
                              'the scenarios release comparison is always written). '
                              'Off by default.')
+
+    # forecast (analyze + scenarios per forecast day)
+    parser.add_argument('--days', type=int, default=None,
+                        help='forecast: number of days T_0.. (default [scenarios] '
+                             'forecast_days, else 3)')
 
     # scenarios
     parser.add_argument('--forecast-horizon', default=None,
@@ -1450,6 +1562,9 @@ def main():
 
     if args.step in ('scenarios', 'all'):
         step_scenarios(cfg, args)
+
+    if args.step == 'forecast':
+        step_forecast(cfg, args)
 
 
 if __name__ == '__main__':
