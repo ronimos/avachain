@@ -1363,8 +1363,17 @@ def _ensure_runout_venv(cfg: dict, project_dir: Path) -> None:
         print(f"WARNING: no runout venv and no uv on PATH. Build it with:\n"
               f"    cd {runout} && uv sync --frozen")
         return
-    print(f"Building the runout venv ({runout}, uv sync --frozen) ...")
-    r = subprocess.run([uv, "sync", "--frozen"], cwd=runout)
+    # Build on the main venv's interpreter. Left to itself uv links the venv
+    # to its own managed Python under the installing user's ~/.local, which
+    # is mode 700: Val's account (and any other) could not run runout. The
+    # deployment keeps its interpreter in /home/avachain/code/python for
+    # that reason (dress rehearsal, 2026-11-04).
+    cmd = [uv, "sync", "--frozen"]
+    main_py = project_dir / ".venv" / "bin" / "python"
+    if main_py.exists():
+        cmd += ["--python", str(main_py.resolve())]
+    print(f"Building the runout venv ({runout}, {' '.join(cmd[1:])}) ...")
+    r = subprocess.run(cmd, cwd=runout)
     if r.returncode != 0:
         print(f"WARNING: uv sync failed (exit {r.returncode}); runout will not run "
               f"until it is built: cd {runout} && uv sync --frozen")

@@ -440,3 +440,24 @@ class TestCronD:
     def test_name_is_one_cron_reads(self, install):
         # cron skips /etc/cron.d files with a dot (or other characters) in the name
         assert install._crond_name("loveland.e2 a") == "avachain-loveland_e2_a"
+
+
+def test_runout_venv_uses_the_deployment_interpreter(install, tmp_path, monkeypatch):
+    """Dress rehearsal 11-04: uv linked runout/.venv to its own Python under
+    ~/.local (mode 700), so no other account could run runout."""
+    import subprocess as sp
+    proj = tmp_path / "proj"
+    (proj / "runout").mkdir(parents=True)
+    (proj / "runout" / "pyproject.toml").write_text("")
+    interp = tmp_path / "code" / "python" / "bin" / "python3.12"
+    interp.parent.mkdir(parents=True)
+    interp.write_text("")
+    (proj / ".venv" / "bin").mkdir(parents=True)
+    (proj / ".venv" / "bin" / "python").symlink_to(interp)
+    uv = tmp_path / "uv"
+    uv.write_text("")
+    calls = []
+    monkeypatch.setattr("shutil.which", lambda name: str(uv))
+    monkeypatch.setattr(sp, "run", lambda cmd, **k: calls.append(cmd) or sp.CompletedProcess(cmd, 0))
+    install._ensure_runout_venv({"runout": {}}, proj)
+    assert calls == [[str(uv), "sync", "--frozen", "--python", str(interp.resolve())]]
