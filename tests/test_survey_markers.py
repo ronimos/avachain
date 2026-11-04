@@ -203,8 +203,15 @@ class TestOperationalScript:
         tif = _survey(tmp_path, D1, "READY")
         script = self._script(tmp_path, 'CURRENT_STEP="Step 2: Gap-fill"\n'
                                         'echo started\nsleep 30 >/dev/null 2>&1 & wait $!')
+        # bash cannot trap a signal ignored on entry, and a pytest started as
+        # a background job (`... &` from a script) ignores SIGINT, so the
+        # child would sleep out its 30 s. Start the child with defaults.
+        def _default_signals():
+            for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                signal.signal(s, signal.SIG_DFL)
         p = subprocess.Popen(["bash", str(script)], stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, text=True)
+                             stderr=subprocess.PIPE, text=True,
+                             preexec_fn=_default_signals)
         assert p.stdout.readline().strip() == "started"
         time.sleep(0.2)
         p.send_signal(sig)
