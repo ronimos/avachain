@@ -93,6 +93,12 @@ n_triggers         = 5
 size_factors       = [0.70, 0.85, 1.00, 1.15, 1.30]
 depth_percentiles  = [10, 50, 90]
 stauchwall_deg     = 29.0
+# Explosive-control shot locations, [lat, lon] WGS84. On a day when no cluster
+# passes the trigger gates (thin early-season pack), the clusters containing
+# these points are the triggers; a shot release holding < 0.10 m of snow is
+# dropped, and if none is left an empty scenario set is published. Leave
+# empty for a slope with no explosive control.
+explosive_trigger_points = []
 
 # ---------------------------------------------------------------------------
 # [wrf] — WRF forecast forcing
