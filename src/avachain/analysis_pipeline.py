@@ -557,11 +557,13 @@ def step_scenarios(cfg, args):
         handoff.discard(stage)
         raise
     meta = stage / "metadata.json"
-    n = json.loads(meta.read_text())["n_scenarios"] if meta.exists() else 0
+    meta_d = json.loads(meta.read_text()) if meta.exists() else {}
+    n = meta_d.get("n_scenarios", 0)
     handoff.publish(stage, final, "release", toml=cfg.toml_path,
                     path=cfg.slope_name, snapshot_date=args.snapshot_date,
                     horizon=args.forecast_horizon,
-                    status="ok" if n else "no_scenarios", n_scenarios=n)
+                    status="ok" if n else "no_scenarios", n_scenarios=n,
+                    trigger_source=meta_d.get("trigger_source"))
     print(f"Published scenario set → {final}")
     return final
 
@@ -593,7 +595,6 @@ def _build_scenarios(cfg, args, out_dir: Path):
     dem, transform, crs_wkt, raster_profile = _load_dem(cfg)
     cluster_map = np.load(str(cfg.analysis_dir / "cluster_map.npy"))
     ds          = load_dataset(args.pro_dir, zarr_path=args.zarr_path)
-    groups      = _load_groups(cfg, dem, transform, args.snapshot_date)
 
     start_zone_mask = kml_to_mask(cfg.start_zone_kml, dem.shape, transform)
 
@@ -745,11 +746,97 @@ def _build_scenarios(cfg, args, out_dir: Path):
             print(f"  Candidates after elevation >= P{elev_pct} "
                   f"({elev_threshold:.0f}m) filter: {len(candidate_ids)}")
 
+    sk38_col = 'min_sk38' if 'min_sk38' in snap_features.columns else 'sk38_min'
+    trigger_source = 'model'
     if not candidate_ids:
-        raise ValueError("No candidate trigger clusters found in start zone")
+        # No cluster passed the gates: every thin early-season day does this.
+        # Trigger at the slope's explosive-control shot locations instead
+        # (Ron, 2026-11-04). They take no gate, rank or Pi1 test and get equal
+        # weight. The release model still decides what each one releases: a
+        # trigger with no features gets the oriented rectangle with depth
+        # 0.8 x HS, and a trigger that fails the slab tensile gate releases
+        # nothing. With no shot locations configured, publish an empty set.
+        triggers = _explosive_triggers(cfg.explosive_trigger_clusters,
+                                       cluster_map, snap_features, sk38_col)
+        if triggers.empty:
+            print("  No candidate trigger clusters in the start zone and no "
+                  "explosive_trigger_clusters on the cluster map — "
+                  "publishing an empty scenario set")
+            return out_dir
+        trigger_source = 'explosive_fallback'
+        print(f"  No candidate trigger clusters in the start zone — using the "
+              f"explosive-control locations {list(triggers.index)}")
+    else:
+        triggers = _model_triggers(candidate_ids, snap_features, meloche_df,
+                                   sk38_col, args, cfg, cluster_map, dem,
+                                   transform, start_zone_mask)
+    return _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
+                               sk38_col, snap_features, meloche_df, ds,
+                               cluster_map, dem, transform, crs_wkt,
+                               raster_profile, start_zone_mask)
 
+
+# metres — a shot-location (fallback) scenario whose release holds less snow
+# than this on average is dropped. Ron, 2026-11-04.
+MIN_FALLBACK_RELEASE_DEPTH_M = 0.10
+# kg/m^3 — release density when no cluster in the polygon has a slab density
+# (the value the old release-group median fell back to).
+DEFAULT_SLAB_DENSITY = 280.0
+DEFAULT_SLAB_DENSITY_STD = 20.0
+
+
+def _release_mean_depth(release_depth: np.ndarray) -> float:
+    """Mean depth over the polygon's valid cells, as write_scenario computes it."""
+    valid = release_depth[~np.isnan(release_depth)]
+    return float(valid.mean()) if valid.size else 0.0
+
+
+def _polygon_density(polygon, cluster_map, snap_features, transform):
+    """(mean, std) slab density of the clusters inside a release polygon.
+
+    The median and spread over clusters, as the release-group density was
+    computed, but from this scenario's own polygon. The release group came
+    from the observed release GeoJSONs, so on any day with no observed
+    avalanche it was empty and the density was NaN, which runout passes to
+    com1DFA. Falls back to DEFAULT_SLAB_DENSITY(_STD) when the polygon's
+    clusters have no slab density; std falls back when fewer than two do.
+    """
+    import rasterio.features
+    mask = rasterio.features.geometry_mask(
+        [polygon.__geo_interface__], out_shape=cluster_map.shape,
+        transform=transform, invert=True)
+    cids = [int(c) for c in np.unique(cluster_map[mask]) if c > 0]
+    if 'slab_density' not in snap_features.columns:
+        return DEFAULT_SLAB_DENSITY, DEFAULT_SLAB_DENSITY_STD
+    rho = snap_features['slab_density'].reindex(cids).dropna()
+    if rho.empty:
+        return DEFAULT_SLAB_DENSITY, DEFAULT_SLAB_DENSITY_STD
+    std = float(rho.std()) if len(rho) > 1 else DEFAULT_SLAB_DENSITY_STD
+    return float(rho.median()), std
+
+
+def _explosive_triggers(cids, cluster_map, snap_features, sk38_col):
+    """Fallback triggers: the configured shot locations present on the map.
+
+    Returns their feature rows in the configured order, all-NaN for a
+    cluster with no features, and always with the Sk38 column.
+    """
+    on_map = set(int(c) for c in np.unique(cluster_map) if c > 0)
+    missing = [c for c in cids if c not in on_map]
+    if missing:
+        print(f"  WARNING: explosive_trigger_clusters {missing} are not on "
+              f"the cluster map — skipped")
+    keep = [int(c) for c in dict.fromkeys(cids) if c in on_map]
+    triggers = snap_features.reindex(keep)
+    if sk38_col not in triggers.columns:
+        triggers[sk38_col] = np.nan
+    return triggers
+
+
+def _model_triggers(candidate_ids, snap_features, meloche_df, sk38_col, args,
+                    cfg, cluster_map, dem, transform, start_zone_mask):
+    """Pi1 gate, Sk38 ranking and the propagation check on the candidates."""
     cand_df  = snap_features.loc[candidate_ids].copy()
-    sk38_col = 'min_sk38' if 'min_sk38' in cand_df.columns else 'sk38_min'
 
     # Join Pi1 from meloche features for propagation gate.
     # A trigger that can't propagate (low Pi1) produces a degenerate release —
@@ -781,7 +868,7 @@ def _build_scenarios(cfg, args, out_dir: Path):
         _mid_sf = args.size_factors[len(args.size_factors) // 2]
         for t_cid_check in triggers.index:
             _a_ca_check = 50.0
-            if not meloche_df.empty and t_cid_check in meloche_df.index:
+            if 'A_ca_brittle' in meloche_df.columns and t_cid_check in meloche_df.index:
                 _v = meloche_df.loc[t_cid_check, 'A_ca_brittle']
                 if isinstance(_v, pd.Series): _v = _v.iloc[0]
                 if not np.isnan(float(_v)):
@@ -811,8 +898,15 @@ def _build_scenarios(cfg, args, out_dir: Path):
         else:
             print("  WARNING: all triggers failed propagation — "
                   "keeping original set with rectangle fallback")
+    return triggers
 
-    print(f"Trigger clusters: {list(triggers.index)} "
+
+def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
+                        sk38_col, snap_features, meloche_df, ds, cluster_map,
+                        dem, transform, crs_wkt, raster_profile,
+                        start_zone_mask):
+    """Write the scenario ensemble for the chosen triggers into out_dir."""
+    print(f"Trigger clusters ({trigger_source}): {list(triggers.index)} "
           f"Sk38={list(triggers[sk38_col].round(3))}")
 
     # --- Output directory (staging; step_scenarios publishes it) ---
@@ -848,16 +942,13 @@ def _build_scenarios(cfg, args, out_dir: Path):
         _dst.write(scour_raster[np.newaxis, ...])
     print(f"  Written: {scour_tif_path}")
 
-    # --- Scenario density (release zone median from features) ---
-    rel_df       = snap_features[snap_features.index.isin(groups.get('release', set()))]
-    density_mean = float(rel_df['slab_density'].median()
-                         if 'slab_density' in rel_df.columns else 280.0)
-    density_std  = float(rel_df['slab_density'].std()
-                         if 'slab_density' in rel_df.columns else 20.0)
-
     # --- Precompute weights per axis ---
     sk38_vals     = list(triggers[sk38_col])
-    t_weights     = _trigger_weights(len(triggers), sk38_vals)
+    # Shot locations carry no instability ranking (Sk38 is often NaN on a
+    # thin pack), so each gets the same weight.
+    t_weights     = (_trigger_weights(len(triggers), sk38_vals)
+                     if trigger_source == 'model'
+                     else [1.0 / len(triggers)] * len(triggers))
     s_weights     = _size_weights(args.size_factors)
     d_weights     = _depth_weights(args.depth_pcts)
 
@@ -871,6 +962,7 @@ def _build_scenarios(cfg, args, out_dir: Path):
 
     # --- Generate scenarios ---
     rows            = []
+    n_below_floor   = 0
     weight_map      = {}
     a_ca_list       = []
     median_polygons = []   # (polygon, size_factor) for comparison plot
@@ -882,7 +974,8 @@ def _build_scenarios(cfg, args, out_dir: Path):
         A_ca    = 50.0   # default fallback (m)
         A_CA_MAX = 300.0 # cap — start zone is ~250m wide; beyond this
                          # the scaling law is unreliable (very low tau_g)
-        if not meloche_df.empty and t_cid in meloche_df.index:
+        # No column at all when no cluster reached TAU_G_FEATURE_FLOOR.
+        if 'A_ca_brittle' in meloche_df.columns and t_cid in meloche_df.index:
             val = meloche_df.loc[t_cid, 'A_ca_brittle']
             if isinstance(val, pd.Series):
                 val = val.iloc[0]
@@ -923,7 +1016,7 @@ def _build_scenarios(cfg, args, out_dir: Path):
                     hs_m = float(np.nanmean(ds_t['HS'].values))
                     print(f"    scour_depth trigger cid={t_cid}: "
                           f"HS={hs_m:.2f}m  "
-                          f"slab={slab_thick_m:.2f}m  "
+                          f"slab={slab_thick_m if slab_thick_m is None else round(slab_thick_m, 2)}m  "
                           f"scour={hh_depth_m:.2f}m  "
                           f"HH={hh_value}")
                 else:
@@ -976,6 +1069,18 @@ def _build_scenarios(cfg, args, out_dir: Path):
                 release_depth = rasterize_release_polygon(
                     polygon, scaled_depth, dem.shape, transform)
 
+                # A shot location on a thin or scoured pack gives a polygon
+                # with almost no snow in it (11-27: 0-3 mm). Not worth a
+                # com1DFA run, and not a release (Ron, 2026-11-04).
+                if trigger_source == 'explosive_fallback':
+                    _md = _release_mean_depth(release_depth)
+                    if _md < MIN_FALLBACK_RELEASE_DEPTH_M:
+                        n_below_floor += 1
+                        continue
+
+                density_mean, density_std = _polygon_density(
+                    polygon, cluster_map, snap_features, transform)
+
                 # Scenario weight = trigger × size × depth
                 weight = t_weights[t_rank] * s_weights[s_idx] * d_weights[d_idx]
 
@@ -1012,6 +1117,7 @@ def _build_scenarios(cfg, args, out_dir: Path):
                     hand_hardness_value   = hh_value,
                 )
                 # Augment row with trigger rank and sk38
+                row['density_kgm3'] = round(density_mean, 1)
                 row['sk38_rank'] = t_rank + 1
                 row['min_sk38']  = float(sk38_vals[t_rank])
                 if _rg.MASK_MODE == 'diagnostic':
@@ -1030,8 +1136,22 @@ def _build_scenarios(cfg, args, out_dir: Path):
                                    'polygon': polygon, 'size_factor': size_f,
                                    'trigger': t_cid}
 
-    if not rows:
+    if n_below_floor:
+        print(f"  Dropped {n_below_floor} shot-location scenarios with mean "
+              f"release depth < {MIN_FALLBACK_RELEASE_DEPTH_M} m")
+    if not rows and n_below_floor:
+        print("  No shot-location release holds enough snow — "
+              "publishing an empty scenario set")
+    elif not rows:
         print("WARNING: No scenarios generated — check trigger clusters and Meloche features")
+    if not rows:
+        if trigger_source != 'model':
+            # Still record why the set is empty: the manifest reads this.
+            (out_dir / "metadata.json").write_text(json.dumps(
+                {'snapshot_date': args.snapshot_date, 'n_scenarios': 0,
+                 'n_trigger_locations': len(triggers),
+                 'trigger_source': trigger_source,
+                 'n_below_depth_floor': n_below_floor}, indent=2))
         return out_dir
 
     # Normalise weights to sum to 1
@@ -1049,6 +1169,7 @@ def _build_scenarios(cfg, args, out_dir: Path):
         snapshot_date     = args.snapshot_date,
         n_scenarios       = len(rows),
         n_triggers        = len(triggers),
+        trigger_source    = trigger_source,
         size_factors      = args.size_factors,
         depth_percentiles = args.depth_pcts,
         mu                = args.mu,
@@ -1115,7 +1236,10 @@ def _build_scenarios(cfg, args, out_dir: Path):
           f"Size factors: {len(args.size_factors)}  "
           f"Depth pcts: {len(args.depth_pcts)}")
     print(f"  A_ca range: {min(a_ca_list):.1f}–{max(a_ca_list):.1f} m")
-    print(f"  Density: {density_mean:.1f} ± {density_std:.1f} kg/m³")
+    _rho = [r['density_kgm3'] for r in rows if 'density_kgm3' in r]
+    if _rho:
+        print(f"  Density (per release polygon): median {np.median(_rho):.1f}, "
+              f"range {min(_rho):.1f}–{max(_rho):.1f} kg/m³")
     return out_dir
 
 

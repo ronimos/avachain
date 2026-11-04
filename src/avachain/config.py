@@ -135,6 +135,11 @@ class ProjectConfig:
     mu: float = 0.155           # Voellmy dry friction (uncalibrated default)
     xi: float = 1500.0          # Voellmy turbulent friction m/s² (uncalibrated default)
     stauchwall_deg: float = 29.0   # Ron, 2026-10-27 (was 28.0)
+    # Cluster IDs of the slope's explosive-control shot locations. When no
+    # cluster passes the trigger gates (thin early-season pack), scenarios
+    # trigger here instead of failing (Ron, 2026-11-04). IDs refer to the
+    # slope's cluster map: a new or renumbered map needs a new list.
+    explosive_trigger_clusters: list = field(default_factory=list)
 
     # --- Survey file pattern ---
     # Expected format: YYMMDD_*_snowHeight.tif
@@ -458,6 +463,8 @@ class ProjectConfig:
             size_factors=list(scenarios.get("size_factors", [0.70, 0.85, 1.00, 1.15, 1.30])),
             depth_percentiles=list(scenarios.get("depth_percentiles", [10, 50, 90])),
             stauchwall_deg=float(scenarios.get("stauchwall_deg", 29.0)),
+            explosive_trigger_clusters=[int(c) for c in
+                                        scenarios.get("explosive_trigger_clusters", [])],
             stations=data.get("stations", []),
             wrf_smet_file=wrf_smet,
             wrf_smet_dir=wrf_smet.parent if wrf_smet else None,

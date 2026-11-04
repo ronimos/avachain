@@ -86,6 +86,9 @@ n_triggers        = 5
 size_factors      = [0.70, 0.85, 1.00, 1.15, 1.30]
 depth_percentiles = [10, 50, 90]
 stauchwall_deg    = 29.0
+# Explosive-control shot locations (cluster IDs on this slope's cluster map).
+# Used as the triggers on a day when no cluster passes the trigger gates.
+explosive_trigger_clusters = [3500, 2568, 2480, 4137]
 
 [wrf]
 fcst_base_dir = "/ssd/snowpack/fcst"
