@@ -144,8 +144,14 @@ and keeps one snapshot per cycle of the slope's grid cell (all files, about
 1 MB) in `work/weather/wrf_archive/<season>/<zone>/<cell>/<cycle UTC>/`, with a
 `manifest.json` of sha256 sums. It skips files younger than 10 min and cycles
 identical to the last snapshot. This archive is what a 2026-27 forecast-skill
-check needs; 2025-26 has none. A run that reads the live WRF file during the
-rebuild window finds it missing (`RefillError`).
+check needs; 2025-26 has none.
+
+**The rebuild window.** During the rebuild the WRF file is missing, then present
+without its forecast rows, then being written. Every reader waits it out
+(`nwp_ingest.wait_for_wrf`). It needs the file present and unchanged for
+10 min, and for `nwp_ingest` the data must reach `T_stable` + 48 h. It polls
+every minute for up to 30 min, then fails as before. The run scripts take
+`T_stable` only after `nwp_ingest` has succeeded.
 
 The SMET files the chain writes (`work/snowpack/<path>/input/smet/`) hold
 **°C, % and cm**, because SNOWPACK applies the header's offsets and multipliers
@@ -226,13 +232,37 @@ dropped.
 4. Write only under `work/runout/<path>/` and `handoff/<path>/runout/`.
 5. Never modify the release set.
 
-### 2.6 Runout → forecast (planned)
+### 2.6 Release → runout → forecast
 
-This follows the same contract. Runout publishes
-`handoff/<path>/runout/<date>/<horizon>/` with runout and exceedance rasters, a
-`manifest.json` and `READY` last. The forecast step reads that set and writes
-products to `outputs/<path>/forecasts/`. Use `code/avachain/src/avachain/handoff.py`
-(`staging_dir`, `publish`, `is_ready`) instead of re-implementing it.
+`src/avachain/runout_step.py` is the last step of both run scripts
+(Ron, 2026-11-04). It runs inline, after `scenarios` has published the day's set:
+
+1. It reads `handoff/<path>/release/<date>/` only when `READY` exists and every
+   file matches the manifest's size and sha256 (`handoff.verify`). Otherwise it
+   exits 2.
+2. It builds runout's tree under the TOML's `[runout] work_dir`
+   (`work/runout/<path>/`). It writes `config/local.yaml`, links the repo's
+   `runout/config/{paths,physics,profiles.yaml}`, and links the set as
+   `scen/<profile>/<YYYYMMDD>/T_0`.
+3. It takes `[runout] lock_file` (`work/runout/.runout.lock`, one for every
+   slope), waiting if it must. com1DFA sims can reach >10 GB each, and the
+   4-sim cap has to hold across slopes, not only per run.
+4. It runs the runout venv (`runout/.venv`, built by `install.py`) with the
+   `forecast` profile and the set's `scour_depth.tif` (entrainment rule B).
+   Runout writes its work tree, logs and products under `work_dir`. It
+   publishes `report.html`, `details.html`, `viewer.html` and
+   `scenarios.xlsx` to `[runout] publish_root`
+   (`/home/www/html/ron/runout_forecast/forecasts/<path>/<date>/`, plus
+   `latest/` and `index.html`).
+
+An empty release set (`status: "no_scenarios"`) needs no sims: the report says
+why there is no forecast. Only T+0 exists today. Release sets for T+1 and T+2
+wait for the NWP-forced release side.
+
+**A runout failure does not fail the survey.** Snowpack and release succeeded
+and are published, and a FAILED survey would redo about 40 min of SNOWPACK to
+retry runout. The run logs `RUNOUT_STATUS` and the command that reruns runout
+alone. A run killed during runout still ends FAILED (signal traps).
 
 ---
 
@@ -243,8 +273,8 @@ from the slope TOML.
 
 | Script | When | What it does |
 |---|---|---|
-| `run_Professor_PTC.sh` | A survey has arrived | Claims the oldest `READY` survey, then runs resample → transport → avalanche → gap_fill → cluster_update → smet → smet_append → nwp_ingest → SNOWPACK survey cycle → analyze → scenarios (publishes §2.5). Its EXIT trap marks the survey `DONE` or `FAILED`. A run killed by SIGTERM, SIGINT or SIGHUP (reboot, OOM, kill) exits 143 / 130 / 129 and is marked `FAILED`, so the survey is retried. Before 2026-11-04 it was marked `DONE`. If nothing is `READY`, it exits without doing anything. |
-| `run_daily_Professor_PTC.sh` | Every morning, between surveys | aws_ingest → smet_append → nwp_ingest → SNOWPACK daily cycle (from yesterday's anchor to today, plus a 48 h forecast) → analyze → scenarios. It does not touch surveys, clusters or SMET rewrites. |
+| `run_Professor_PTC.sh` | A survey has arrived | Claims the oldest `READY` survey, then runs resample → transport → avalanche → gap_fill → cluster_update → smet → smet_append → nwp_ingest → SNOWPACK survey cycle → analyze → scenarios (publishes §2.5) → runout (§2.6). Its EXIT trap marks the survey `DONE` or `FAILED`. A run killed by SIGTERM, SIGINT or SIGHUP (reboot, OOM, kill) exits 143 / 130 / 129 and is marked `FAILED`, so the survey is retried. Before 2026-11-04 it was marked `DONE`. If nothing is `READY`, it exits without doing anything. |
+| `run_daily_Professor_PTC.sh` | Every morning, between surveys | aws_ingest → smet_append → nwp_ingest → SNOWPACK daily cycle (from yesterday's anchor to today, plus a 48 h forecast) → analyze → scenarios → runout (§2.6). It does not touch surveys, clusters or SMET rewrites. |
 | `run_full_pipeline.sh` | Setup, or after a change to static inputs, physics or forcing | Full rebuild: all forcing steps, full-season SNOWPACK with the two-pass avalanche reinit (`--reinit`), a single Zarr build. Takes about 6–8 h. Run it detached (`setsid nohup …`) so it survives a logout. |
 
 The SNOWPACK state carries over between runs as restart files in

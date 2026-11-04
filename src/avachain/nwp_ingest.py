@@ -59,6 +59,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -87,6 +88,80 @@ FC_MULT   = [1, 1, 0.01, 1, 1, 1, 1, 1, 0.01]         # RH in %, HS in cm
 # ---------------------------------------------------------------------------
 # WRF SMET helpers
 # ---------------------------------------------------------------------------
+
+# The CAIC run (/ssd/snowpack/fcst_snowpack.sh) does `rm -rf fcst/<season>`,
+# copies output/ back and then runs the forecast, every morning (~07:39-07:55
+# local on 2026-11-04). In that window the WRF file is missing, then present
+# WITHOUT its forecast rows, then being written. A reader there would fail, or
+# worse, build a short forecast without any error. wait_for_wrf waits it out.
+WRF_SETTLE_S = 600        # unchanged this long = the rebuild has finished
+WRF_WAIT_TIMEOUT_S = 1800
+WRF_POLL_S = 60
+
+
+def _last_data_ts(path: Path) -> pd.Timestamp | None:
+    """Last data timestamp of a SMET file (reads only its tail)."""
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        f.seek(max(0, f.tell() - 65536))
+        lines = f.read().decode(errors="replace").splitlines()
+    for line in reversed(lines):
+        tok = line.strip().split(None, 1)
+        if tok and tok[0][:1].isdigit():
+            try:
+                return pd.Timestamp(tok[0], tz="UTC")
+            except ValueError:
+                continue
+    return None
+
+
+def wrf_ready(path: Path, forecast_hours: float = 0.0, now=None,
+              wall=None) -> str | None:
+    """None when the WRF file can be read, else why not.
+
+    Ready = it exists, has not changed for WRF_SETTLE_S, and (forecast_hours
+    > 0) its data reach T_stable + forecast_hours, i.e. the forecast rows are
+    there. `now` is the replay-aware clock for T_stable; `wall` the real time
+    for the settle test (the file's mtime is real time even in a replay).
+    """
+    path = Path(path)
+    if not path.exists():
+        return f"{path} does not exist"
+    wall = time.time() if wall is None else wall
+    age = wall - path.stat().st_mtime
+    if age < WRF_SETTLE_S:
+        return f"{path} changed {age:.0f} s ago (rebuild in progress?)"
+    if forecast_hours > 0:
+        stable = get_stable_ts(path, now=now)
+        last = _last_data_ts(path)
+        if stable is None or last is None:
+            return f"{path} has no data rows"
+        if last < stable + pd.Timedelta(hours=forecast_hours):
+            return (f"{path} ends {last:%Y-%m-%dT%H:%M}, short of T_stable "
+                    f"{stable:%Y-%m-%dT%H:%M} + {forecast_hours:g} h (forecast not written yet?)")
+    return None
+
+
+def wait_for_wrf(path: Path, forecast_hours: float = 0.0, now=None,
+                 timeout_s: float | None = None, poll_s: float | None = None,
+                 sleep=time.sleep, clock=time.time) -> str | None:
+    """Wait until wrf_ready(); None when ready, else the last reason.
+
+    Timeout and poll default to the module constants read at call time, so
+    tests (tests/conftest.py) can set the wait to zero for the whole suite."""
+    timeout_s = WRF_WAIT_TIMEOUT_S if timeout_s is None else timeout_s
+    poll_s = WRF_POLL_S if poll_s is None else poll_s
+    t0 = clock()
+    why = wrf_ready(path, forecast_hours, now, clock())
+    if why is not None:
+        print(f"    WRF not ready: {why}; waiting up to {timeout_s / 60:.0f} min", flush=True)
+    while why is not None and clock() - t0 < timeout_s:
+        sleep(poll_s)
+        why = wrf_ready(path, forecast_hours, now, clock())
+    if why is None and clock() - t0 >= poll_s:
+        print(f"    WRF ready after {(clock() - t0) / 60:.1f} min", flush=True)
+    return why
+
 
 def get_stable_ts(wrf_smet_path: Path, now=None) -> pd.Timestamp | None:
     """Return the last timestamp in the WRF SMET file that is ≤ now (UTC).
@@ -409,9 +484,13 @@ def main() -> None:
         else Path(cfg.wrf_smet_file) if cfg and cfg.wrf_smet_file
         else None
     )
-    if wrf_smet_path is None or not wrf_smet_path.exists():
-        print(f"ERROR: WRF SMET file not found: {wrf_smet_path}")
-        print("  Provide --toml or --wrf-smet, or confirm /ssd is mounted.")
+    if wrf_smet_path is None:
+        print("ERROR: no WRF SMET file — provide --toml or --wrf-smet")
+        sys.exit(1)
+    why = wait_for_wrf(wrf_smet_path, forecast_hours=args.lead_hours)
+    if why is not None:
+        print(f"ERROR: WRF SMET not usable: {why}")
+        print("  Confirm /ssd is mounted and the CAIC forecast run finished.")
         sys.exit(1)
 
     smet_dir = (

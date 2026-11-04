@@ -137,3 +137,14 @@ poll_minutes   = 10
 daily_hour_utc = 13
 # user         = "ron"
 # crond_dir    = "/home/avachain/cron"
+
+# ---------------------------------------------------------------------------
+# [runout] — com1DFA runout after each published release set
+# (runout_step.py, the last step of the run scripts). Leave the table out to
+# skip runout for this slope. path_profile names runout/config/paths/<name>.yaml.
+# ---------------------------------------------------------------------------
+# [runout]
+# path_profile = "<name>"
+# work_dir     = "/home/avachain/work/runout/<name>"
+# publish_root = "/home/www/html/ron/runout_forecast"
+# lock_file    = "/home/avachain/work/runout/.runout.lock"

@@ -489,6 +489,7 @@ _RUN_OPERATIONAL_TEMPLATE = """\
 #   ./run_{slope_name}.sh --no-nwp                 # skip NWP forecast extension
 #   ./run_{slope_name}.sh --no-cluster-update      # keep cluster ids frozen
 #   ./run_{slope_name}.sh --no-scenarios           # stop after analyze
+#   ./run_{slope_name}.sh --no-runout              # stop after scenarios
 #
 # Hand-labelled avalanches enter through the known-events file read by the
 # `avalanche` step, not through flags here.
@@ -526,6 +527,7 @@ DEPTH_PCTS="{depth_pcts}"
 NO_NWP=0
 NO_CLUSTER_UPDATE=0
 NO_SCENARIOS=0
+NO_RUNOUT=0
 STABLE_TS=""
 
 while [[ $# -gt 0 ]]; do
@@ -537,6 +539,7 @@ while [[ $# -gt 0 ]]; do
         --no-nwp)            NO_NWP=1; shift ;;
         --no-cluster-update) NO_CLUSTER_UPDATE=1; shift ;;
         --no-scenarios)      NO_SCENARIOS=1; shift ;;
+        --no-runout)         NO_RUNOUT=1; shift ;;
         *)                   echo "Unknown arg: $1"; exit 1 ;;
     esac
 done
@@ -666,7 +669,12 @@ CURRENT_STEP="Step 2d: NWP forecast extension"
 step2d_start=$SECONDS
 NWP_EDATE=""
 if [[ $NO_NWP -eq 0 ]]; then
-    $NWP --lead-hours 48 || echo "    WARNING: nwp_ingest failed — continuing without NWP extension"
+    # T_stable only when nwp_ingest wrote the forecast SMETs: otherwise the
+    # forecast pass would run on missing or stale ones.
+    NWP_OK=1
+    $NWP --lead-hours 48 || {{ NWP_OK=0; echo "    WARNING: nwp_ingest failed — continuing without NWP extension"; }}
+    _ts_output=""
+    if [[ $NWP_OK -eq 1 ]]; then
     _ts_output=$(python3 -c "
 import sys; sys.path.insert(0, '$PROJECT_DIR/src/avachain')
 from nwp_ingest import get_stable_ts
@@ -681,6 +689,7 @@ if wrf and wrf.exists():
         print(ts.strftime('%Y-%m-%dT%H:%M'),
               (ts + pd.Timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M'))
 " 2>/dev/null)
+    fi
     if [[ -n "$_ts_output" ]]; then
         STABLE_TS=$(echo "$_ts_output" | cut -d' ' -f1)
         NWP_EDATE=$(echo "$_ts_output" | cut -d' ' -f2)
@@ -722,6 +731,27 @@ step4_elapsed=$((SECONDS - step4_start))
 echo "    Done: $((step4_elapsed / 60))m $((step4_elapsed % 60))s"
 echo ""
 
+echo ">>> Step 5: Runout (com1DFA) on the published release set"
+step5_start=$SECONDS
+RUNOUT_STATUS="skipped"
+if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
+    CURRENT_STEP="Step 5: Runout"
+    # A runout failure does not fail the run: snowpack and release succeeded
+    # and are published, and a FAILED survey would redo SNOWPACK to retry
+    # runout (Ron, 2026-11-04). A kill still ends FAILED (signal traps).
+    if python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG; then
+        RUNOUT_STATUS="ok"
+    else
+        RUNOUT_STATUS="FAILED (exit $?)"
+        echo "WARNING: runout $RUNOUT_STATUS. The run stays successful. Rerun runout alone:"
+        echo "    python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG"
+    fi
+else
+    echo "    Runout skipped (--no-runout or --no-scenarios)"
+fi
+step5_elapsed=$((SECONDS - step5_start))
+echo ""
+
 total_elapsed=$SECONDS
 echo "============================================================"
 echo "  {display_name} — Operational update complete"
@@ -736,6 +766,7 @@ echo "  Step 2c (smet):            $((step2c_elapsed / 60))m $((step2c_elapsed %
 echo "  Step 2d (nwp_ingest):      $((step2d_elapsed / 60))m $((step2d_elapsed % 60))s"
 echo "  Step 3  (SNOWPACK cycle):  $((step3_elapsed / 60))m $((step3_elapsed % 60))s"
 echo "  Step 4  (analysis):        $((step4_elapsed / 60))m $((step4_elapsed % 60))s"
+echo "  Step 5  (runout):          $((step5_elapsed / 60))m $((step5_elapsed % 60))s  $RUNOUT_STATUS"
 echo ""
 echo "  Scenarios: $AVA_SCENARIOS_DIR/"
 echo "  Log:       $LOGFILE"
@@ -767,12 +798,14 @@ _RUN_DAILY_TEMPLATE = """\
 #      today's T_stable, save the new anchor, replace the main Zarr after the
 #      old anchor, run the forecast into the separate forecast store
 #   5. analyze, then scenarios unless --no-scenarios
+#   6. runout on the published set (runout_step.py) unless --no-runout
 #
 # Usage:
 #   ./run_daily_{slope_name}.sh
 #   ./run_daily_{slope_name}.sh --snapshot 2026-02-15
 #   ./run_daily_{slope_name}.sh --no-nwp
 #   ./run_daily_{slope_name}.sh --no-scenarios
+#   ./run_daily_{slope_name}.sh --no-runout
 #   ./run_daily_{slope_name}.sh --dry-run        # report SMET appends only
 #
 # Cron: the lines install.py prints ([cron] daily_hour_utc, under the same
@@ -801,6 +834,7 @@ LOG_DIR=$AVA_LOGS_DIR
 SNAPSHOT_DATE=""
 NO_NWP=0
 NO_SCENARIOS=0
+NO_RUNOUT=0
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -808,6 +842,7 @@ while [[ $# -gt 0 ]]; do
         --snapshot)     SNAPSHOT_DATE="$2"; shift 2 ;;
         --no-nwp)       NO_NWP=1; shift ;;
         --no-scenarios) NO_SCENARIOS=1; shift ;;
+        --no-runout)    NO_RUNOUT=1; shift ;;
         --dry-run)      DRY_RUN=1; shift ;;
         *)              echo "Unknown arg: $1"; exit 1 ;;
     esac
@@ -855,7 +890,12 @@ step3_start=$SECONDS
 NWP_EDATE=""
 STABLE_TS=""
 if [[ $NO_NWP -eq 0 ]]; then
-    $NWP --lead-hours 48 || echo "    WARNING: nwp_ingest failed — continuing without NWP extension"
+    # T_stable only when nwp_ingest wrote the forecast SMETs: otherwise the
+    # forecast pass would run on missing or stale ones.
+    NWP_OK=1
+    $NWP --lead-hours 48 || {{ NWP_OK=0; echo "    WARNING: nwp_ingest failed — continuing without NWP extension"; }}
+    _ts_output=""
+    if [[ $NWP_OK -eq 1 ]]; then
     _ts_output=$(python3 -c "
 import sys; sys.path.insert(0, '$PROJECT_DIR/src/avachain')
 from nwp_ingest import get_stable_ts
@@ -870,6 +910,7 @@ if wrf and wrf.exists():
         print(ts.strftime('%Y-%m-%dT%H:%M'),
               (ts + pd.Timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M'))
 " 2>/dev/null)
+    fi
     if [[ -n "$_ts_output" ]]; then
         STABLE_TS=$(echo "$_ts_output" | cut -d' ' -f1)
         NWP_EDATE=$(echo "$_ts_output" | cut -d' ' -f2)
@@ -903,6 +944,28 @@ fi
 step5_elapsed=$((SECONDS - step5_start))
 echo ""
 
+echo ">>> Step 6: Runout (com1DFA) on the published release set"
+step6_start=$SECONDS
+RUNOUT_STATUS="skipped"
+if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
+    CURRENT_STEP="Step 6: Runout"
+    # A runout failure does not fail the run: snowpack and release succeeded
+    # and are published, and a FAILED survey would redo SNOWPACK to retry
+    # runout (Ron, 2026-11-04). A kill still ends FAILED (signal traps).
+    if python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG; then
+        RUNOUT_STATUS="ok"
+    else
+        RUNOUT_STATUS="FAILED (exit $?)"
+        echo "WARNING: runout $RUNOUT_STATUS. The run stays successful. Rerun runout alone:"
+        echo "    python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG"
+    fi
+else
+    echo "    Runout skipped (--no-runout or --no-scenarios)"
+fi
+step6_elapsed=$((SECONDS - step6_start))
+echo ""
+
+
 total_elapsed=$SECONDS
 echo "============================================================"
 echo "  Daily forward complete"
@@ -913,6 +976,7 @@ echo "  Step 2 (smet_append): $((step2_elapsed / 60))m $((step2_elapsed % 60))s"
 echo "  Step 3 (nwp_ingest):  $((step3_elapsed / 60))m $((step3_elapsed % 60))s"
 echo "  Step 4 (SNOWPACK):    $((step4_elapsed / 60))m $((step4_elapsed % 60))s"
 echo "  Step 5 (analysis):    $((step5_elapsed / 60))m $((step5_elapsed % 60))s"
+echo "  Step 6 (runout):      $((step6_elapsed / 60))m $((step6_elapsed % 60))s  $RUNOUT_STATUS"
 echo "  Log:       $LOGFILE"
 echo "============================================================"
 """
@@ -1240,6 +1304,30 @@ def _render_crond(cfg: dict, project_dir: Path, toml_path: Path) -> str:
         when, cmd = line.split(" ", 5)[:5], line.split(" ", 5)[5]
         out.append(" ".join(when + [user, cmd]))
     return "\n".join(out) + "\n"
+
+
+def _ensure_runout_venv(cfg: dict, project_dir: Path) -> None:
+    """runout/ is its own uv project (AvaFrame 2.1 needs numpy < 2, avachain's
+    xsnow numpy >= 2.3), so it has its own venv. Built here when the TOML has
+    [runout] and runout/.venv is missing; never rebuilt over an existing one."""
+    import shutil
+    import subprocess
+    runout = project_dir / "runout"
+    if "runout" not in cfg or not (runout / "pyproject.toml").exists():
+        return
+    if (runout / ".venv" / "bin" / "python").exists():
+        print(f"Runout venv present: {_shown(runout / '.venv', project_dir)}")
+        return
+    uv = shutil.which("uv") or str(Path.home() / ".local" / "bin" / "uv")
+    if not Path(uv).exists():
+        print(f"WARNING: no runout venv and no uv on PATH. Build it with:\n"
+              f"    cd {runout} && uv sync --frozen")
+        return
+    print(f"Building the runout venv ({runout}, uv sync --frozen) ...")
+    r = subprocess.run([uv, "sync", "--frozen"], cwd=runout)
+    if r.returncode != 0:
+        print(f"WARNING: uv sync failed (exit {r.returncode}); runout will not run "
+              f"until it is built: cd {runout} && uv sync --frozen")
 
 
 def _cron_log_path(cfg: dict) -> Path:
@@ -1799,6 +1887,7 @@ Examples:
     fc_ini = ini_path.with_name("master_config_forecast.ini")
     fc_ini.write_text(_render_master_forecast_ini(cfg))
     print(f"Wrote {_shown(fc_ini, project_dir)}")
+    _ensure_runout_venv(cfg, project_dir)
     print()
 
     # --- template.sno ---

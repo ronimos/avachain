@@ -128,3 +128,27 @@ def discard(stage: Path) -> None:
 
 def is_ready(final: Path) -> bool:
     return (final / READY).exists()
+
+
+def verify(final: Path) -> list[str]:
+    """Problems with a published set, empty when it can be read.
+
+    A consumer reads a set only when READY exists and every file the
+    manifest lists is present with its recorded size and sha256 (READY is
+    written last, but a set can still be damaged or edited after it).
+    """
+    final = Path(final)
+    if not is_ready(final):
+        return [f"{final}: no {READY}"]
+    try:
+        manifest = json.loads((final / MANIFEST).read_text())
+    except (OSError, ValueError) as e:
+        return [f"{final / MANIFEST}: {e}"]
+    problems = []
+    for f in manifest.get("files", []):
+        p = final / f["path"]
+        if not p.is_file():
+            problems.append(f"missing {f['path']}")
+        elif p.stat().st_size != f["bytes"] or _sha256(p) != f["sha256"]:
+            problems.append(f"changed since publish: {f['path']}")
+    return problems

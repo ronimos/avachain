@@ -1166,8 +1166,12 @@ def refill_source(cfg: ProjectConfig) -> Path:
     if path is None:
         raise RefillError("no [wrf] wrf_smet_file in the slope TOML: the SMET step needs "
                           "the WRF-forced SMET to add the NWP-only fields (run install.py)")
-    if not Path(path).exists():
-        raise RefillError(f"WRF refill SMET not found: {path}. Check [wrf] fcst_base_dir / "
+    # The CAIC run deletes and rebuilds this file every morning; wait out the
+    # rebuild rather than fail the survey (nwp_ingest.wait_for_wrf).
+    from nwp_ingest import wait_for_wrf
+    why = wait_for_wrf(Path(path))
+    if why is not None:
+        raise RefillError(f"WRF refill SMET not usable: {why}. Check [wrf] fcst_base_dir / "
                           f"wrf_zone / wrf_grid_id and the season (from [snowpack] season_start, "
                           f"or [wrf] season)")
     return Path(path)
