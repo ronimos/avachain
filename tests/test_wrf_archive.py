@@ -101,3 +101,19 @@ def test_operational_toml_names_a_cell():
     import tomllib
     wrf = tomllib.loads(toml.read_text())["wrf"]
     assert wrf["fcst_base_dir"] and "wrf_zone" in wrf and "wrf_grid_id" in wrf
+
+
+def test_a_second_run_at_the_same_time_skips(tmp_path, capsys):
+    # Two cron lines firing at :20 would write the same .partial dir; the
+    # second run must leave the archive to the first.
+    import fcntl
+    cell = _cell(tmp_path)
+    arch = tmp_path / "arch"
+    arch.mkdir()
+    with open(arch / ".wrf_archive.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        assert wa.main(["--cell-dir", str(cell), "--archive-dir", str(arch)]) == 0
+        assert "skipped" in capsys.readouterr().out
+        assert not (arch / "2026").exists()
+    assert wa.main(["--cell-dir", str(cell), "--archive-dir", str(arch)]) == 0
+    assert len(list((arch / "2026" / "zone055" / "077963").glob("*Z"))) == 1

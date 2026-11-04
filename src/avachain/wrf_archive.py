@@ -19,8 +19,11 @@ cycle was written. A run does nothing when:
   - the newest file is younger than --min-age-min (the rebuild may still be
     writing; it takes ~15 min for all zones), or
   - the *_res.smet files are byte-identical to the latest snapshot.
-So it is safe to run as often as hourly. Stdlib only, no project imports, so
-a pinned copy can run from cron before a full deploy.
+So it is safe to run as often as hourly. Two runs at once (a duplicate cron
+line) would write the same .partial staging dir, so a run holds a
+non-blocking lock on <archive-dir>/.wrf_archive.lock and a second run exits
+at once. Stdlib only, no project imports, so a pinned copy can run from cron
+before a full deploy.
 
 The cell comes from the slope TOML's [wrf] fcst_base_dir / wrf_zone /
 wrf_grid_id (install.py writes them), in the newest season folder that has
@@ -28,6 +31,7 @@ it; --cell-dir names it directly instead.
 """
 import argparse
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
@@ -140,6 +144,13 @@ def main(argv=None) -> int:
     ap.add_argument("--archive-dir", type=Path, required=True)
     ap.add_argument("--min-age-min", type=float, default=10.0)
     args = ap.parse_args(argv)
+    args.archive_dir.mkdir(parents=True, exist_ok=True)
+    lock = open(args.archive_dir / ".wrf_archive.lock", "a")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"another wrf_archive run holds {lock.name} — skipped")
+        return 0
     rc = 0
     cells = list(args.cell_dir or [])
     for t in args.toml or []:
