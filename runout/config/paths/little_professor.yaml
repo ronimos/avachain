@@ -1,0 +1,62 @@
+# Path profile: Little Professor (Loveland Pass, US-6)
+#
+# Static inputs for one avalanche path. Relative paths resolve against
+# avachain_root from local.yaml. Nothing in here changes between forecast
+# cycles. Physics lives in config/physics/, run choices in profiles.yaml.
+
+slug: little_professor
+# Folder name under scenario_root when it differs from the slug
+# scenario_slug: little_prof
+display:
+  project_name: Little Professor
+  subtitle: Loveland Pass, US-6
+  highway: US-6
+  # Shown in the report's "Inputs and caveats" box (Ron, 2026-11-02;
+  # debris and DEM caveats rewritten 2026-11-03 after Val's reply). These
+  # hold for every cycle of this path; event_caveats below only for the
+  # cycle of that date (Ron, 2026-11-03: the Jan 18 notes are last season's
+  # and must not reach a live 2026-27 report).
+  caveats:
+    - "τ₀ = 125 Pa was fitted to a single avalanche (2026-01-18), on last season's DEM pair. It has not been tested on any other event."
+    - "Entrainment depth comes from the release side's scour_depth.tif, which covers only the snowpack model's domain. Below that domain the flow entrains nothing."
+  # Keyed by cycle date (YYYY-MM-DD); shown before the general caveats.
+  event_caveats:
+    "2026-01-18":
+      - "τ₀ was fitted to this avalanche, so this day's runout is not an independent test."
+      - "Val drew the observed debris from the 2026-01-20 orthophoto, two days after the event, so its toe is approximate. The modelled runouts have not been scored against it."
+      - "Last season's surveys had no shared ground control, so the snow-free surfaces differ by about 1 m (the runout DEM, 260605, sits a median 1.1 m below the snowpack DEM, 251110). This does not enter com1DFA: snow height is a thickness laid onto 260605, and τ₀ was fitted with the same pairing."
+
+terrain:
+  dem: data/static/little_professor/terrain/260605_Professor_Bare_Ground_Full_Path-DSM_1m.tiff
+  # Optional high-resolution priority DEM mosaicked onto dem. Comment out
+  # to use dem alone.
+  # dem_priority: data/static/little_professor/terrain/site_highres_dsm.tif
+  dem_feather_cells: 5
+  dem_vertical_correction_m: 0.0
+
+canopy:
+  forest: data/static/little_professor/canopy/forest.shp
+
+infrastructure:
+  road: data/static/little_professor/infrastructure/cdot_US6_LP_LittleProfessor.shp
+  # Point layer with a 'ref_name' field (tower, bench, road, ...). Each
+  # scenario is tested against every point.
+  reference_points: data/static/little_professor/infrastructure/reference_points.geojson
+
+release:
+  # Start zone polygon(s) used by the scenario generator (sweep and
+  # calibrate modes). Forecast mode takes release areas from the chain's scenarios.
+  start_zone: data/static/little_professor/release/start_zone.geojson
+
+entrainment:
+  # Used when the profile sets entrainment.mode: polygon. Constant depth
+  # comes from the per-scenario scour cap.
+  polygon: data/static/little_professor/release/entrainment_polygon.geojson
+
+road:
+  buffer_m: 1.0                 # corridor half-width around the centerline
+  chainage_origin: far_from_release
+
+reference_points:
+  radius_m: 10.0                # a point counts as reached when any reach
+                                # cell falls within this distance of it

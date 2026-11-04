@@ -1,0 +1,153 @@
+# profiles.yaml - named run profiles.
+#
+# A profile maps onto the physics sections (com1dfa, friction, defaults,
+# entrainment, resistance, reach, probability) plus execution and output,
+# and carries run-level keys:
+#   description  free text, shown in the run log and manifest
+#   extends      inherit another profile, then override
+#   mode         forecast | sweep | calibrate | verify
+#   physics      physics file name under config/physics/ (no extension)
+#   paths        path slugs to run (list); --path on the CLI narrows it
+#   horizons     horizon labels to run (list) or 'all'
+#   entrainment  mode: auto | polygon | raster  (plus any parameter overrides)
+#   products     what to build (viewer, viewer_3d, report)
+#   sweep        depth sweep settings (mode sweep): classes_file, classes,
+#                depths, entrainment_depth_m, entrainment_variants, release
+#   grid         parameter grid for calibrate: {section.key: [values], ...}
+#   calibrate    scenario source, thresholds and tolerance (mode calibrate)
+#   bracket      physics file names verify reruns beside the forecast physics
+#
+# Section values here override the physics file; --set section.key=value
+# overrides both. Unknown keys fail at resolve time. A run with --set
+# overrides needs --run-name so it cannot be mistaken for the profile.
+#
+#   python -m scripts run --profile forecast --date 20261201
+#   python -m scripts run --profile forecast --path bethel --horizon T_0
+#   python -m scripts run --profile forecast --set friction.tau0=100 --run-name tau100
+
+# Operational forecast. The only profile whose output goes to forecasters.
+forecast:
+  description: Operational forecast, all horizons present, locked physics
+  mode: forecast
+  physics: operational
+  paths: [little_professor]
+  horizons: all
+  entrainment:
+    mode: raster               # raster from --snow-height
+    # The raster is the release side's scour_depth.tif
+    # (handoff/<path>/release/<date>/<set>/), entrained as is. Ron chose this
+    # on 2026-11-02 over Val's rule (survey snow height capped at the
+    # scenario's scour_depth_m, raster_cap: true). On Jan 18 the two give the
+    # same weighted P(reach) and near-road probabilities. B has no ad hoc
+    # 0.3 m fallback, and its depth comes from the same SNOWPACK state as the
+    # release. A survey raster (--snow-height latest) is refused here.
+    raster_cap: false
+  execution:
+    parallel: true
+    max_workers: 4
+    # Hard ceiling on concurrent com1DFA sims (scripts/workers.py). A large
+    # release can reach >10 GB; 24 at once ran the shared host out of
+    # memory on 2026-11-02. Raise only with a deliberate --set of this key.
+    max_workers_cap: 4
+    abort_on_crs_mismatch: true
+  output:
+    cog: true
+    probability_colormap: viridis
+    report_plots_dpi: 120
+    viewer_basemap: hillshade
+  products: [report, viewer, viewer_3d]
+
+# Val's existing RunoutProbabilityEnvelope tree, read in place (see
+# config/paths/little_professor_legacy.yaml and config/local.yaml).
+#   python -m scripts run --profile legacy --date 20260118 --snow-height <HS.tif>
+#   python -m scripts run --profile legacy_nosurvey --date 20260118
+legacy:
+  extends: forecast
+  description: Little Professor on the archived RunoutProbabilityEnvelope tree, T+0 to T+2
+  paths: [little_professor_legacy]
+  horizons: [T_0, T_1, T_2]
+  entrainment:
+    raster_cap: true           # Val's rule: the raster is survey snow height
+
+legacy_nosurvey:
+  extends: legacy
+  description: Same, without a snow height raster
+  entrainment:
+    mode: auto
+
+# Same forecast without the snow height raster (no survey available).
+forecast_nosurvey:
+  extends: forecast
+  description: Operational forecast, auto-detected corridor at the scour cap
+  entrainment:
+    mode: auto
+
+# Bethel forecast: entrainment from the path profile polygon.
+forecast_bethel:
+  extends: forecast
+  description: Bethel operational forecast, polygon entrainment
+  paths: [bethel]
+  entrainment:
+    mode: polygon
+
+# Depth sweep: the full start zone at uniform depths, one run per friction
+# class, with and without entrainment. Equal weights, no probability stack.
+#   python -m scripts run --profile sweep --path bethel --run-name preseason
+sweep:
+  extends: forecast
+  description: Start-zone depth sweep by friction class, lookup table and curves
+  mode: sweep
+  paths: [bethel]
+  entrainment:
+    mode: polygon
+  sweep:
+    classes_file: friction_classes      # config/physics/<name>.yaml
+    classes: all                        # or a list of class names
+    depths: [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0]
+    entrainment_depth_m: 0.20           # constant depth inside the polygon
+    entrainment_variants: [on, off]     # run each class both ways
+    release: start_zone                 # path profile key, or a file path
+  products: [report]
+
+# Calibrate: one scenario across a parameter grid, scored against an
+# observed event. The operational physics file is never changed here.
+#   python -m scripts run --profile calibrate --path little_professor --event 20260118 --run-name tau_grid
+#   python -m scripts run --profile calibrate --path little_professor --event all --run-name tau_grid
+calibrate:
+  extends: forecast
+  description: tau0 grid against one observed event
+  mode: calibrate
+  paths: [little_professor]
+  entrainment:
+    mode: auto
+  grid:
+    friction.tau0: [50, 75, 100, 125, 150, 200, 300]
+  calibrate:
+    scenario: synthetic          # an ensemble member id (scenario_038) or synthetic
+    scenario_date: null          # cycle the member comes from; default the event date
+    horizon: T_0
+    thresholds: [0.1, 0.5]       # score at each; judged at judge_threshold
+    judge_threshold: 0.1
+    tolerance:
+      iou: 0.05                  # cells within this of the best IoU are in range
+      toe_m: 10.0                # cells within this of the best |toe error| are in range
+  products: []
+
+# Same grid for a Voellmy test physics file (make config/physics/voellmy_test.yaml first).
+calibrate_voellmy:
+  extends: calibrate
+  description: mu and xi grid under a Voellmy physics file
+  physics: voellmy_test
+  grid:
+    friction.mu: [0.15, 0.2, 0.25]
+    friction.xi: [1000, 1500, 2000]
+
+# Verify: rerun a past forecast's T+0 with the physics it used and with
+# each bracket physics file, and score against the event of that day.
+#   python -m scripts run --profile verify --path little_professor --date 20260118 --run-name v1
+verify:
+  extends: forecast
+  description: Rerun a past T+0 at the forecast physics and the bracket, score the outcome
+  mode: verify
+  bracket: []                    # physics file names, e.g. [tau0_low, tau0_high]
+  products: []

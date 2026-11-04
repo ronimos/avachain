@@ -1,0 +1,36 @@
+# Path profile: Bethel
+#
+# Template. Fill in the file names once the static layers are placed under
+# data/static/bethel/. Same keys as little_professor.yaml.
+
+slug: bethel
+# scenario_slug: bethel
+display:
+  project_name: Bethel
+  subtitle: Loveland Pass, US-6
+  highway: US-6
+
+terrain:
+  dem: data/static/bethel/terrain/bethel_bare_ground_dsm_1m.tif
+  dem_feather_cells: 5
+  dem_vertical_correction_m: 0.0
+
+canopy:
+  forest: data/static/bethel/canopy/forest.shp
+
+infrastructure:
+  road: data/static/bethel/infrastructure/road.shp
+  reference_points: data/static/bethel/infrastructure/reference_points.geojson
+
+release:
+  start_zone: data/static/bethel/release/start_zone.geojson
+
+entrainment:
+  polygon: data/static/bethel/release/entrainment_polygon.geojson
+
+road:
+  buffer_m: 1.0
+  chainage_origin: far_from_release
+
+reference_points:
+  radius_m: 10.0

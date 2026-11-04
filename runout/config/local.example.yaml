@@ -1,0 +1,16 @@
+# local.yaml - machine-specific roots. Copy to local.yaml (gitignored).
+# Every other path in the pipeline is built from these two.
+
+# The avachain tree (data/, intermediate/, outputs/, logs/)
+avachain_root: /home/avachain
+
+# Where the snowpack chain writes scenario sets. Read-only for the runout side.
+# Layout: <scenario_root>/<path_slug>/<YYYYMMDD>/<T_n>/scenario_###/
+scenario_root: /home/avachain/intermediate/scenarios
+
+# Optional. Web-served folder the cycle products are copied to:
+#   <publish_root>/forecasts/<path_slug>/<YYYYMMDD>/{report,details,viewer}.html, scenarios.xlsx
+#   <publish_root>/forecasts/<path_slug>/latest/   (copy of the newest cycle)
+#   <publish_root>/forecasts/<path_slug>/index.html (cycle list)
+# Leave unset to skip publishing.
+publish_root: /home/www/html/avachain
