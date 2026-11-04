@@ -105,7 +105,8 @@ the `smet` step rewrites only the rows after the previous survey anchor:
 
 ## 5. The NWP forecast pass
 
-Every survey and daily cycle ends with a 48 h forecast past the last
+Every survey and daily cycle ends with a forecast (`[nwp] lead_hours`, 60 h, clamped to
+the WRF outlook's last timestamp; see `docs/deployment.md` §2.2) past the last
 observation (`T_stable`), forced by the WRF column at the slope.
 
 - WRF has no HS, and the observed config forces SNOWPACK by measured HS
@@ -128,6 +129,17 @@ Before 1cc40e2 the forecast pass stopped every cluster at `T_stable` with
 Every WRF cycle is archived (`wrf_archive.py`, hourly cron, see
 `docs/deployment.md` §2.2), because the CAIC run overwrites the file each
 morning. Without the archive a forecast cannot be checked afterwards.
+
+## 5b. Forecast days and the 03:00 report
+
+Ron, 2026-11-04. The runout report is due at 03:00 local, so the daily run
+starts at 00:00 local (`CRON_TZ=America/Denver` in the cron.d file). Each
+cycle produces three days, T_0..T_2, at 18 UTC (11:00 MST / 12:00 MDT). They
+come from the observed store where it reaches and from the NWP forecast
+store otherwise, and T_2 is clamped to the WRF outlook's end when it lies
+beyond it. Runout runs each day with its own scour raster and publishes the
+report after each one, so a partial report is out at 03:00 if the run is
+late. A 03:15 alert fires when there is no report. Details: `docs/deployment.md` §2.6 and §3.
 
 ## 6. Thin early-season days: release scenarios
 
