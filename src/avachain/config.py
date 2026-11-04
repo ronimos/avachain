@@ -135,11 +135,12 @@ class ProjectConfig:
     mu: float = 0.155           # Voellmy dry friction (uncalibrated default)
     xi: float = 1500.0          # Voellmy turbulent friction m/s² (uncalibrated default)
     stauchwall_deg: float = 29.0   # Ron, 2026-10-27 (was 28.0)
-    # Cluster IDs of the slope's explosive-control shot locations. When no
+    # The slope's explosive-control shot locations, (lat, lon) WGS84. When no
     # cluster passes the trigger gates (thin early-season pack), scenarios
-    # trigger here instead of failing (Ron, 2026-11-04). IDs refer to the
-    # slope's cluster map: a new or renumbered map needs a new list.
-    explosive_trigger_clusters: list = field(default_factory=list)
+    # trigger at the clusters containing these points instead of failing
+    # (Ron, 2026-11-04). Points, not cluster IDs: the shot locations are
+    # fixed on the ground, while cluster IDs change with every new map.
+    explosive_trigger_points: list = field(default_factory=list)
 
     # --- Survey file pattern ---
     # Expected format: YYMMDD_*_snowHeight.tif
@@ -470,14 +471,29 @@ class ProjectConfig:
             size_factors=list(scenarios.get("size_factors", [0.70, 0.85, 1.00, 1.15, 1.30])),
             depth_percentiles=list(scenarios.get("depth_percentiles", [10, 50, 90])),
             stauchwall_deg=float(scenarios.get("stauchwall_deg", 29.0)),
-            explosive_trigger_clusters=[int(c) for c in
-                                        scenarios.get("explosive_trigger_clusters", [])],
+            explosive_trigger_points=_lat_lon_points(
+                scenarios.get("explosive_trigger_points", [])),
             stations=data.get("stations", []),
             wrf_smet_file=wrf_smet,
             wrf_smet_dir=wrf_smet.parent if wrf_smet else None,
             dir_overrides={k: paths[k] for k in OVERRIDABLE_DIRS if k in paths},
         )
             
+
+def _lat_lon_points(points) -> list:
+    """[[lat, lon], ...] from the TOML, checked for range and order."""
+    out = []
+    for pt in points:
+        if len(pt) != 2:
+            raise ValueError(f"explosive_trigger_points entry {pt!r} is not [lat, lon]")
+        lat, lon = float(pt[0]), float(pt[1])
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            raise ValueError(f"explosive_trigger_points entry {pt!r}: "
+                             f"lat must be in [-90, 90], lon in [-180, 180] "
+                             f"(order is [lat, lon])")
+        out.append((lat, lon))
+    return out
+
 
 def _weather_source(weather: dict) -> str:
     src = str(weather.get("source", "csv"))

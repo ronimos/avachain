@@ -26,10 +26,14 @@ import analysis_pipeline as ap
 import release_geometry as _rg
 from config import ProjectConfig
 
-SHOTS = [3500, 2568, 2480, 4137]     # Little Professor shot locations (Ron)
+# Little Professor shot locations (Ron), [lat, lon] WGS84: the centres of
+# 2025-26 clusters 3500, 2568, 2480 and 4137, as in the slope TOML.
+POINTS = [(39.6488366, -105.8788572), (39.6487075, -105.8782511),
+          (39.6484944, -105.8791514), (39.6481336, -105.8787209)]
+SHOTS = [3500, 2568, 2480, 4137]
 
 
-def _thin_day(tmp_path, monkeypatch, depth_m, shots=SHOTS):
+def _thin_day(tmp_path, monkeypatch, depth_m, points=POINTS):
     """Run _build_scenarios on a thin day with a uniform slab depth."""
     d = fx.load()
     an = tmp_path / "analysis"
@@ -43,7 +47,7 @@ def _thin_day(tmp_path, monkeypatch, depth_m, shots=SHOTS):
 
     cfg = SimpleNamespace(
         analysis_dir=an, resampled_dir=fx.DATA, start_zone_kml=fx.START_ZONE_KML,
-        depth_scales={50: 1.0}, explosive_trigger_clusters=list(shots),
+        depth_scales={50: 1.0}, explosive_trigger_points=list(points),
         release_geojson=tmp_path / "none.geojson",
         release_geojsons_for_date=lambda _d: [])
     args = SimpleNamespace(
@@ -94,7 +98,7 @@ def test_shallow_shot_releases_are_dropped_and_recorded(tmp_path, monkeypatch):
 
 
 def test_no_candidates_and_no_shot_locations_is_an_empty_set(tmp_path, monkeypatch):
-    out, meta = _thin_day(tmp_path, monkeypatch, depth_m=0.5, shots=[])
+    out, meta = _thin_day(tmp_path, monkeypatch, depth_m=0.5, points=[])
     assert meta is None                         # step_scenarios -> no_scenarios
     assert not (out / "scenarios").exists() or not any((out / "scenarios").iterdir())
 
@@ -154,13 +158,47 @@ class TestPolygonDensity:
             assert np.isfinite(json.loads(f.read_text())["mean_kgm3"])
 
 
-def test_toml_shot_locations(tmp_path):
-    src = Path(fx.REPO / "slopes/Professor_PTC/slope_config.toml").read_text()
-    assert ProjectConfig.from_toml(
-        fx.REPO / "slopes/Professor_PTC/slope_config.toml"
-    ).explosive_trigger_clusters == SHOTS
-    stripped = "\n".join(l for l in src.splitlines()
-                         if not l.startswith("explosive_trigger_clusters"))
+def test_points_find_the_2025_26_shot_clusters():
+    d = fx.load()
+    assert ap._clusters_at_points(POINTS, d['cluster_map'], d['transform']) == SHOTS
+
+
+def test_point_order_is_lat_lon():
+    # Swapped, every point is far off the raster, so nothing is found.
+    d = fx.load()
+    swapped = [(lon, lat) for lat, lon in POINTS]
+    assert ap._clusters_at_points(swapped, d['cluster_map'], d['transform']) == []
+
+
+def test_points_off_the_map_or_in_one_cluster(capsys):
+    d = fx.load()
+    pts = [POINTS[0], (39.70, -105.80), POINTS[0], POINTS[1]]
+    assert ap._clusters_at_points(pts, d['cluster_map'], d['transform']) == SHOTS[:2]
+    assert "on no cluster" in capsys.readouterr().out
+
+
+def test_points_follow_the_ground_not_the_ids():
+    # A renumbered map (a new season, terrain clusters) gives other ids at the
+    # same places; the points pick up the new ids.
+    d = fx.load()
+    renum = np.where(d['cluster_map'] > 0, d['cluster_map'] + 100000, 0)
+    assert ap._clusters_at_points(POINTS, renum, d['transform']) == \
+        [c + 100000 for c in SHOTS]
+
+
+@pytest.mark.parametrize("slope", ["Professor_PTC", "little_prof"])
+def test_toml_shot_locations(slope, tmp_path):
+    toml = fx.REPO / f"slopes/{slope}/slope_config.toml"
+    assert ProjectConfig.from_toml(toml).explosive_trigger_points == POINTS
+    src = toml.read_text()
+    i = src.index("explosive_trigger_points")
+    j = src.index("]\n]", i) + 2 if "]\n]" in src[i:] else src.index("\n]", i) + 2
     p = tmp_path / "slope_config.toml"
-    p.write_text(stripped)
-    assert ProjectConfig.from_toml(p).explosive_trigger_clusters == []
+    p.write_text(src[:i] + src[j:])
+    assert ProjectConfig.from_toml(p).explosive_trigger_points == []
+
+
+def test_toml_rejects_lon_lat_order(tmp_path):
+    from config import _lat_lon_points
+    with pytest.raises(ValueError, match=r"\[lat, lon\]"):
+        _lat_lon_points([[-105.8788572, 39.6488366]])

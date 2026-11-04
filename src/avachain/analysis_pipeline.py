@@ -756,11 +756,13 @@ def _build_scenarios(cfg, args, out_dir: Path):
         # trigger with no features gets the oriented rectangle with depth
         # 0.8 x HS, and a trigger that fails the slab tensile gate releases
         # nothing. With no shot locations configured, publish an empty set.
-        triggers = _explosive_triggers(cfg.explosive_trigger_clusters,
-                                       cluster_map, snap_features, sk38_col)
+        shot_cids = _clusters_at_points(cfg.explosive_trigger_points,
+                                        cluster_map, transform)
+        triggers = _explosive_triggers(shot_cids, cluster_map, snap_features,
+                                       sk38_col)
         if triggers.empty:
             print("  No candidate trigger clusters in the start zone and no "
-                  "explosive_trigger_clusters on the cluster map — "
+                  "explosive_trigger_points on the cluster map — "
                   "publishing an empty scenario set")
             return out_dir
         trigger_source = 'explosive_fallback'
@@ -815,6 +817,33 @@ def _polygon_density(polygon, cluster_map, snap_features, transform):
     return float(rho.median()), std
 
 
+def _clusters_at_points(points, cluster_map, transform) -> list:
+    """Cluster id under each (lat, lon) WGS84 point, in order, no duplicates.
+
+    A point off the raster or on a cell with no cluster is reported and
+    skipped. Two points in one cluster give one trigger.
+    """
+    from pyproj import Transformer
+    from rasterio.transform import rowcol
+    to_xy = Transformer.from_crs(4326, RASTER_EPSG, always_xy=True)
+    nrow, ncol = cluster_map.shape
+    cids = []
+    for lat, lon in points:
+        x, y = to_xy.transform(lon, lat)
+        cid = 0
+        if np.isfinite(x) and np.isfinite(y):      # inf for an impossible lat
+            r, c = rowcol(transform, x, y)
+            if 0 <= r < nrow and 0 <= c < ncol:
+                cid = int(cluster_map[r, c])
+        if cid <= 0:
+            print(f"  WARNING: shot location ({lat}, {lon}) is on no cluster "
+                  f"(E {x:.1f}, N {y:.1f}) — skipped")
+            continue
+        if cid not in cids:
+            cids.append(cid)
+    return cids
+
+
 def _explosive_triggers(cids, cluster_map, snap_features, sk38_col):
     """Fallback triggers: the configured shot locations present on the map.
 
@@ -824,7 +853,7 @@ def _explosive_triggers(cids, cluster_map, snap_features, sk38_col):
     on_map = set(int(c) for c in np.unique(cluster_map) if c > 0)
     missing = [c for c in cids if c not in on_map]
     if missing:
-        print(f"  WARNING: explosive_trigger_clusters {missing} are not on "
+        print(f"  WARNING: shot-location clusters {missing} are not on "
               f"the cluster map — skipped")
     keep = [int(c) for c in dict.fromkeys(cids) if c in on_map]
     triggers = snap_features.reindex(keep)
