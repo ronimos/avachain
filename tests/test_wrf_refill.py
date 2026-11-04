@@ -52,11 +52,18 @@ class TestResolve:
         assert resolve_wrf_smet({}, "2025-10-01") is None
 
     @pytest.mark.parametrize("slope", ["little_prof", "little_prof_replay",
-                                       "little_prof_replay_jan", "Professor_PTC"])
+                                       "little_prof_replay_jan"])
     def test_existing_slopes_are_unchanged(self, slope):
         cfg = ProjectConfig.from_toml(REPO / "slopes" / slope / "slope_config.toml")
         assert cfg.wrf_smet_file == Path(WRF["wrf_smet_file"])
         assert cfg.wrf_smet_dir == Path(WRF["wrf_smet_file"]).parent
+
+    def test_the_deployment_reads_the_2026_27_file(self):
+        """Professor_PTC is set to 2026-11-20 .. 2027-05-15 (Ron, 2026-11-04):
+        its refill and forecast follow season_start to fcst/2026/, while the
+        TOML's install stamp still names 2025."""
+        cfg = ProjectConfig.from_toml(REPO / "slopes" / "Professor_PTC" / "slope_config.toml")
+        assert cfg.wrf_smet_file == Path("/ssd/snowpack/fcst/2026/zone055/077963/0779632_res.smet")
 
 
 class TestRefillSource:
