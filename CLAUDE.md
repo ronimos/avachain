@@ -135,12 +135,18 @@ physics is a porting defect, not a local choice. Module mapping:
 | `analysis_pipeline.py` | `generate_scenarios.py` |
 | `scenario_writer.py` | `scenario_writer.py` |
 
-Three behaviours where **avachain is deliberately better** — fix these in the
+Four behaviours where **avachain is deliberately better** — fix these in the
 standalone, never revert them here:
 
 1. Release depth from slab thickness above the WL, not `hs`.
 2. Depth raster clipped to the polygon before computing volume.
 3. `depth_percentile` actually scales depth.
+4. Release density per scenario: the median `slab_density` of the clusters
+   inside that scenario's own release polygon, 280 kg/m³ when they have none
+   (`analysis_pipeline._polygon_density`, Ron 2026-11-04). The standalone
+   takes the trigger cluster's density (fallback 250). avachain's old source,
+   the observed release group, was NaN on every day without an observed
+   avalanche, and runout passes density straight to com1DFA.
 
 When comparing constants, **grep case-insensitively and compare by value**. A
 case-sensitive search for `tau_g.*50` silently misses
