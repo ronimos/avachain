@@ -48,3 +48,15 @@ def test_operational_toml_sets_18():
     assert cfg.snapshot_hour_utc == 18
     assert ProjectConfig.from_toml(REPO / "slopes" / "little_prof" / "slope_config.toml") \
         .snapshot_hour_utc is None
+
+
+def test_release_depth_is_read_at_the_snapshot_time():
+    times = pd.to_datetime(["2026-12-02T12:00", "2026-12-02T18:00"]).values
+    ds = xr.Dataset({"HS": (("location", "time"), np.array([[1.0, 2.0]]))},
+                    coords={"location": ["cluster_0001"], "time": times})
+    cm = np.ones((2, 2), dtype=int)
+    old = depth_from_snowpack(cm, ds, "2026-12-02")                       # 12:00
+    new = depth_from_snowpack(cm, ds, "2026-12-02", snapshot_ts="2026-12-02T18:00")
+    # HS is in metres in the store; the fallback is 0.8 x HS, in metres
+    # (it divided by 100 until 2026-11-04).
+    assert np.allclose(old, 0.8) and np.allclose(new, 1.6)
