@@ -63,6 +63,19 @@ def horizon_label(label):
     return 'T+' + label.split('_', 1)[1]
 
 
+def no_release_reasons(manifest):
+    # Why each day without a forecast has none, from the release side
+    # @param manifest: cycle manifest
+    # @returns: dict {label: reason} for horizons whose release set was
+    #           published empty (status 'no release')
+    out = {}
+    for label, h in (manifest.get('horizons') or {}).items():
+        rel = h.get('release') or {}
+        if rel.get('status') == 'no_scenarios' and rel.get('reason'):
+            out[label] = rel['reason']
+    return out
+
+
 def load_cycle(cycle_dir):
     # Read manifest.json and every completed horizon's outputs
     # @param cycle_dir: Path to outputs/forecasts/<slug>/<YYYYMMDD>/
@@ -83,7 +96,10 @@ def load_cycle(cycle_dir):
         hdir = cycle_dir / label
         if not (hdir / 'probability.tif').exists() or \
                 not (hdir / 'road_impact_summary.json').exists():
-            logging.warning(f"[{label}] no ensemble outputs; left out of products")
+            if (manifest['horizons'][label].get('status') == 'no release'):
+                logging.info(f"[{label}] no release scenarios; reported with the reason")
+            else:
+                logging.warning(f"[{label}] no ensemble outputs; left out of products")
             continue
         cfg = yaml.safe_load((hdir / 'run_config.yaml').read_text())
         road = json.loads((hdir / 'road_impact_summary.json').read_text())
@@ -527,6 +543,8 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 </table></div>
 
 {% if failed %}<div class="warn">Horizons not run: {{ failed }}</div>{% endif %}
+{% for name, valid, reason in no_release %}<div class="warn"><b>No forecast for {{ name }}{% if valid %} ({{ valid }}){% endif %}.</b> {{ reason }}</div>
+{% endfor %}
 
 <h2>Probability of reach</h2>
 {% if imap_html %}{{ imap_html }}
@@ -737,9 +755,15 @@ def inputs_and_caveats(manifest, horizons):
                  f"{' (' + manifest['git_commit'] + ')' if manifest.get('git_commit') else ''}"
                  f", AvaFrame {manifest.get('avaframe_version') or 'unknown'}"))
     caveats = cycle_caveats(manifest)
-    missing = [f"T+{n}" for n in range(3) if f"T_{n}" not in {hz['label'] for hz in horizons}]
-    if missing:
-        caveats.insert(0, f"No forecast for {', '.join(missing)}: no release scenarios were "
+    reasons = no_release_reasons(manifest)
+    done = {hz['label'] for hz in horizons}
+    missing = [f"T_{n}" for n in range(3) if f"T_{n}" not in done]
+    for label in missing:
+        if label in reasons:
+            caveats.insert(0, f"{horizon_label(label)}: {reasons[label]}")
+    unexplained = [horizon_label(l) for l in missing if l not in reasons]
+    if unexplained:
+        caveats.insert(0, f"No forecast for {', '.join(unexplained)}: no release scenarios were "
                           f"delivered for those days.")
     return {'rows': rows, 'caveats': caveats, 'snow_line': snow_line}
 
@@ -766,7 +790,8 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
     # @param dpi: int
     # @returns: Path to report.html
     try:
-        payload = ri.build_payload(horizons, manifest['cycle_date'])
+        payload = ri.build_payload(horizons, manifest['cycle_date'],
+                                   reasons=no_release_reasons(manifest))
         imap = ri.render_parts(payload)
     except Exception as e:
         # the static maps still render; the interactive part is a bonus
@@ -812,9 +837,13 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
             vals.append(_fmt(pw if pw is not None else rp.get('fraction_reached')))
         ref_rows.append({'name': n, 'dist': _fmt(names[n], 0), 'cells': vals})
 
+    reasons = no_release_reasons(manifest)
     failed = [f"{horizon_label(k)} ({v['status']})"
               for k, v in manifest.get('horizons', {}).items()
-              if k not in {hz['label'] for hz in horizons}]
+              if k not in {hz['label'] for hz in horizons} and k not in reasons]
+    no_release = [(horizon_label(k), manifest['horizons'][k].get('valid_date'), r)
+                  for k, r in sorted(reasons.items(),
+                                     key=lambda kv: int(kv[0].split('_', 1)[1]))]
 
     cfg = horizons[0]['config']
     fm = cfg['com1dfa']['friction_model']
@@ -830,7 +859,7 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
         cycle_date=f"{manifest['cycle_date'][:4]}-{manifest['cycle_date'][4:6]}-{manifest['cycle_date'][6:]}",
         issued=manifest.get('issued', '').replace('T', ' '),
         survey_date=(manifest.get('survey') or {}).get('date'),
-        horizons=rows, failed=', '.join(failed),
+        horizons=rows, failed=', '.join(failed), no_release=no_release,
         maps_b64=plot_small_multiples(horizons, dpi),
         exceed_b64=plot_road_approach(horizons, dpi, dists),
         nm_ref=' to the road crossing' if dists else '',
@@ -1066,6 +1095,9 @@ def build_cycle_products(cycle_dir, products=('report', 'viewer')):
     # @raises RuntimeError: if no horizon has ensemble outputs
     manifest, horizons = load_cycle(cycle_dir)
     if not horizons:
+        if no_release_reasons(manifest) and 'report' in products:
+            # every day ended with no release: say so and why
+            return [build_no_release_report(cycle_dir, manifest)]
         raise RuntimeError(f"no completed horizons in {cycle_dir}")
     dpi = int((horizons[0]['config'].get('output') or {}).get('report_plots_dpi', 120))
     written = []
@@ -1080,6 +1112,62 @@ def build_cycle_products(cycle_dir, products=('report', 'viewer')):
     return written
 
 
+NO_RELEASE_TEMPLATE = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<title>{{ project }} runout forecast {{ cycle_date }}</title>
+<style>{{ css }}</style></head>
+<body>
+<h1>AVALANCHE RUNOUT FORECAST: {{ project|upper }}</h1>
+<div class="hdr"><table>
+<tr><td>Path</td><td>{{ project }}{% if subtitle %}, {{ subtitle }}{% endif %}</td></tr>
+<tr><td>Issued</td><td>{{ issued }}</td></tr>
+<tr><td>Forecast date</td><td>{{ cycle_date }}</td></tr>
+</table></div>
+
+<h2>No release scenarios</h2>
+<p>The release model produced no avalanche release for any forecast day, so no
+runout was simulated. This is a model result, not a failure.</p>
+<table>
+<thead><tr><th class="l">Day</th><th>Valid</th><th class="l">Why there is no forecast</th></tr></thead>
+<tbody>
+{% for d in days %}<tr><td class="l">{{ d.name }}</td><td class="c">{{ d.valid or '-' }}</td><td class="l">{{ d.reason }}</td></tr>
+{% endfor %}
+</tbody></table>
+
+{% if caveats %}<h2>Caveats</h2>
+<ul class="caveats">{% for c in caveats %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
+
+<div class="meta">Pipeline v{{ version }}{% if git %} ({{ git }}){% endif %}.</div>
+</body></html>
+"""
+
+
+def build_no_release_report(cycle_dir, manifest):
+    # report.html for a cycle where no day had release scenarios
+    # @param cycle_dir: Path to the cycle folder
+    # @param manifest: cycle manifest
+    # @returns: Path to report.html
+    reasons = no_release_reasons(manifest)
+    days = []
+    for label, h in sorted((manifest.get('horizons') or {}).items(),
+                           key=lambda kv: int(kv[0].split('_', 1)[1])):
+        days.append({'name': horizon_label(label), 'valid': h.get('valid_date'),
+                     'reason': reasons.get(label) or f"not run ({h.get('status')})"})
+    cd = manifest['cycle_date']
+    html = Template(NO_RELEASE_TEMPLATE).render(
+        css=CSS, days=days, caveats=cycle_caveats(manifest),
+        project=manifest.get('display', {}).get('project_name', manifest['path']),
+        subtitle=manifest.get('display', {}).get('subtitle', ''),
+        cycle_date=f"{cd[:4]}-{cd[4:6]}-{cd[6:]}",
+        issued=manifest.get('issued', '').replace('T', ' '),
+        version=manifest.get('pipeline_version', PIPELINE_VERSION),
+        git=manifest.get('git_commit'))
+    out = Path(cycle_dir) / 'report.html'
+    out.write_text(html)
+    logging.info(f"no-release report written: {out}")
+    return out
+
+
 # --------- Publishing ---------
 
 INDEX_TEMPLATE = """<!DOCTYPE html>
@@ -1091,11 +1179,9 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <table style="width:auto">
 <thead><tr><th class="l">Cycle</th><th class="l">Report</th><th class="l">Details</th><th class="l">Viewer</th><th class="l">Table</th></tr></thead>
 <tbody>
-{% for d in dates %}<tr><td class="l">{{ d }}</td>
-<td class="l"><a href="{{ d }}/report.html">report</a></td>
-<td class="l"><a href="{{ d }}/details.html">details</a></td>
-<td class="l"><a href="{{ d }}/viewer.html">viewer</a></td>
-<td class="l"><a href="{{ d }}/scenarios.xlsx">xlsx</a></td></tr>
+{% for d, have in dates %}<tr><td class="l">{{ d }}</td>
+{% for f, t in [('report.html', 'report'), ('details.html', 'details'), ('viewer.html', 'viewer'), ('scenarios.xlsx', 'xlsx')] %}<td class="l">{% if f in have %}<a href="{{ d }}/{{ f }}">{{ t }}</a>{% else %}-{% endif %}</td>
+{% endfor %}</tr>
 {% endfor %}
 </tbody></table>
 </body></html>
@@ -1124,6 +1210,11 @@ def publish(cycle_dir, publish_root, slug, cycle_date):
     dest.mkdir(parents=True, exist_ok=True)
     for f in present:
         shutil.copy2(cycle_dir / f, dest / f)
+    # a rerun that now has fewer products (a no-release day) must not leave
+    # the earlier run's details/viewer/table beside the new report
+    for f in PUBLISHED_FILES:
+        if f not in present and (dest / f).exists():
+            (dest / f).unlink()
 
     # latest/ = newest dated folder present under the path
     dates = sorted((d.name for d in path_root.iterdir()
@@ -1136,7 +1227,9 @@ def publish(cycle_dir, publish_root, slug, cycle_date):
             shutil.rmtree(latest)
         shutil.copytree(newest, latest)
 
+    # a no-release cycle has only report.html: link what each date has
+    rows = [(d, {f.name for f in (path_root / d).iterdir()}) for d in dates]
     (path_root / 'index.html').write_text(
-        Template(INDEX_TEMPLATE).render(css=CSS, slug=slug, dates=dates))
+        Template(INDEX_TEMPLATE).render(css=CSS, slug=slug, dates=rows))
     logging.info(f"published {', '.join(present)} -> {dest} (latest = {dates[0] if dates else '-'})")
     return dest

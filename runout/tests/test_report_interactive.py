@@ -63,6 +63,16 @@ class Payload(unittest.TestCase):
         self.assertTrue(p['slots'][1]['missing'] and p['slots'][2]['missing'])
         self.assertNotIn('missing', p['slots'][0])
 
+    def test_a_day_without_release_carries_its_reason(self):
+        # Ron, 2026-11-04: the report says why a day has no forecast
+        why = 'No release scenarios (snowpack 2025-11-30): all 30 candidate releases held too little snow.'
+        p = ri.build_payload([self.hz], '20260118', reasons={'T_1': why})
+        t1, t2 = p['slots'][1], p['slots'][2]
+        self.assertTrue(t1['missing'])
+        self.assertEqual(t1['reason'], why)
+        self.assertNotIn('reason', t2)              # missing, but nothing said why
+        self.assertNotIn('reason', p['slots'][0])   # the day that ran
+
     def test_probability_round_trips_for_the_readout(self):
         p = ri.build_payload([self.hz], '20260118')
         raw = gzip.decompress(base64.b64decode(p['slots'][0]['prob_gz']))

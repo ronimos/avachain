@@ -10,9 +10,15 @@ Description:
     present; older layouts with a top-level scenarios folder or nested
     T_n/scenarios still resolve. Each scenario's inputs land in
     scenario_###/release/ with avaframe/ and outputs/ beside it.
+
+    A release set published empty (manifest status "no_scenarios": no
+    cluster qualified as a trigger, or every release held too little snow)
+    is still a horizon. It has nothing to run, and release_info() says why,
+    so the report can say why there is no forecast for that day.
 """
 
 # --------- Load Libraries --------
+import json
 import logging
 import re
 import shutil
@@ -20,6 +26,10 @@ from pathlib import Path
 
 
 HORIZON_RE = re.compile(r'^T_(\d+)$')
+
+# avachain analysis_pipeline.MIN_RELEASE_DEPTH_M, used for the wording when
+# a release set's metadata does not carry the floor itself
+RELEASE_DEPTH_FLOOR_M = 0.10
 
 
 def normalize_date(text):
@@ -78,10 +88,68 @@ def _has_scenarios(d):
                               for c in d.iterdir())
 
 
+def release_info(src_dir):
+    # What the release side published for one horizon, from its handoff
+    # manifest.json (and metadata.json for the counts)
+    # @param src_dir: Path to the horizon folder, or its scenarios/ subfolder
+    # @returns: dict (status, n_scenarios, trigger_source, n_trigger_locations,
+    #           n_below_depth_floor, snapshot_date, reason) or None when the
+    #           folder holds no release manifest
+    src_dir = Path(src_dir)
+    for d in (src_dir, src_dir.parent):
+        try:
+            man = json.loads((d / 'manifest.json').read_text())
+        except (OSError, ValueError):
+            continue
+        if man.get('producer') != 'release':
+            continue
+        try:
+            meta = json.loads((d / 'metadata.json').read_text())
+        except (OSError, ValueError):
+            meta = {}
+        info = {
+            'status': man.get('status'),
+            'n_scenarios': man.get('n_scenarios'),
+            'trigger_source': man.get('trigger_source') or meta.get('trigger_source'),
+            'n_trigger_locations': meta.get('n_trigger_locations'),
+            'n_below_depth_floor': meta.get('n_below_depth_floor'),
+            'min_release_depth_m': meta.get('min_release_depth_m', RELEASE_DEPTH_FLOOR_M),
+            'snapshot_date': man.get('snapshot_date'),
+        }
+        info['reason'] = no_release_reason(info) if info['status'] == 'no_scenarios' else None
+        return info
+    return None
+
+
+def no_release_reason(info):
+    # One sentence saying why a release set has no scenarios
+    # @param info: dict from release_info
+    # @returns: str
+    src = info.get('trigger_source')
+    n_low = info.get('n_below_depth_floor') or 0
+    n_trig = info.get('n_trigger_locations')
+    floor = f"{info.get('min_release_depth_m', RELEASE_DEPTH_FLOOR_M):.2f} m"
+    snap = f" (snowpack {info['snapshot_date']})" if info.get('snapshot_date') else ''
+    if src == 'explosive_fallback' and n_low:
+        return (f"No release scenarios{snap}: no snowpack cluster met the trigger "
+                f"criteria, and the {n_low} releases tried at the explosive-control "
+                f"shot locations held too little snow (mean depth under {floor}).")
+    if src == 'model' and n_low:
+        where = f" from {n_trig} trigger location{'s' if n_trig != 1 else ''}" if n_trig else ''
+        return (f"No release scenarios{snap}: all {n_low} candidate releases{where} "
+                f"held too little snow (mean depth under {floor}).")
+    if src is None:
+        return (f"No release scenarios{snap}: no snowpack cluster met the trigger "
+                f"criteria, and no explosive-control shot locations are configured.")
+    return (f"No release scenarios{snap}: no release area could be built from the "
+            f"trigger locations.")
+
+
 def discover_horizons(date_dir):
     # List the horizons present for one cycle, in numeric order
     # @param date_dir: Path to the dated folder (source, or the local copy)
-    # @returns: list of (source_dir, label) for horizons that hold scenarios
+    # @returns: list of (source_dir, label) for horizons that hold scenarios,
+    #           or whose release set was published empty (status no_scenarios)
     # T_n folders are the rule. A top-level 'scenarios' folder with
     #       no T_0 counts as T_0 for cycles written under the old layout.
     date_dir = Path(date_dir)
@@ -98,6 +166,10 @@ def discover_horizons(date_dir):
             if _has_scenarios(cand):
                 found[int(m.group(1))] = (cand, d.name)
                 break
+        else:
+            info = release_info(d)
+            if info and info['status'] == 'no_scenarios':
+                found[int(m.group(1))] = (d, d.name)
     if 0 not in found and _has_scenarios(date_dir / 'scenarios'):
         found[0] = (date_dir / 'scenarios', 'T_0')
     return [found[k] for k in sorted(found)]

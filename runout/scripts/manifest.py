@@ -156,7 +156,7 @@ def build_manifest(profile, sections, physics, path_profile, local,
 
 
 def add_horizon(manifest, label, source_dir, n_scenarios, valid_date,
-                outputs_dir, work_dir, status):
+                outputs_dir, work_dir, status, release=None):
     # Record one horizon's inputs and result in the manifest
     # @param manifest: dict from build_manifest (modified in place)
     # @param label: horizon label (T_0, T_1, ...)
@@ -165,7 +165,8 @@ def add_horizon(manifest, label, source_dir, n_scenarios, valid_date,
     # @param valid_date: str YYYY-MM-DD the horizon is valid for
     # @param outputs_dir: Path to the horizon's outputs
     # @param work_dir: Path to the horizon's work tree
-    # @param status: 'ok', 'FAILED (exit n)', 'skipped (...)', 'dry-run'
+    # @param status: 'ok', 'no release', 'FAILED (exit n)', 'skipped (...)', 'dry-run'
+    # @param release: dict from discover.release_info, or None
     # @returns: None
     manifest['horizons'][label] = {
         'valid_date': valid_date,
@@ -175,6 +176,8 @@ def add_horizon(manifest, label, source_dir, n_scenarios, valid_date,
         'work_dir': str(work_dir),
         'status': status,
     }
+    if release:
+        manifest['horizons'][label]['release'] = release
 
 
 def valid_date_for(cycle_date, label):

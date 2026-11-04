@@ -375,10 +375,17 @@ def run_forecast(args, profile, sections, physics, local, config_dir):
             else:
                 n = discover.copy_horizon(src_dir, work_dir)
                 if n == 0:
-                    logging.warning(f"[{label}] nothing to run, skipping")
-                    results[label] = 'skipped (empty)'
+                    rel = discover.release_info(src_dir)
+                    if rel and rel['status'] == 'no_scenarios':
+                        # the release side published an empty set on purpose
+                        logging.info(f"[{label}] {rel['reason']}")
+                        results[label] = 'no release'
+                    else:
+                        logging.warning(f"[{label}] nothing to run, skipping")
+                        results[label] = 'skipped (empty)'
                     mf.add_horizon(manifest, label, src_dir, 0, valid, outputs_dir,
-                                   work_dir, results[label])
+                                   work_dir, results[label], release=rel)
+                    mf.write(manifest, manifest_path)
                     continue
 
             # Config and run
@@ -404,7 +411,8 @@ def run_forecast(args, profile, sections, physics, local, config_dir):
             else:
                 results[label] = 'ok' if rc == 0 else f'FAILED (exit {rc})'
             mf.add_horizon(manifest, label, src_dir, n, valid, outputs_dir,
-                           work_dir, results[label])
+                           work_dir, results[label],
+                           release=discover.release_info(src_dir))
             mf.write(manifest, manifest_path)
 
         # Path summary
@@ -415,7 +423,8 @@ def run_forecast(args, profile, sections, physics, local, config_dir):
             logging.info(f"   {label}: {status}")
         logging.info("=" * 70)
 
-        ok = [s for s in results.values() if s in ('ok', 'dry-run')]
+        # a day with no release is a result, not a failure
+        ok = [s for s in results.values() if s in ('ok', 'dry-run', 'no release')]
         failed = [s for s in results.values() if s.startswith('FAILED')]
         if args.dry_run and not failed:
             status = 'dry-run'
