@@ -572,6 +572,26 @@ def store_span(zarr_path):
     return pd.Timestamp(t.min()), pd.Timestamp(t.max())
 
 
+# One SNOWPACK profile step (PROF_DAYS_BETWEEN = 0.25 d).
+PROFILE_STEP = pd.Timedelta(hours=6)
+
+
+def fresh_forecast_span(main_span, fc_span):
+    """The forecast store's span if it was built from the current observed
+    state, else None.
+
+    The cycle rebuilds the forecast store only when the NWP pass runs; when
+    nwp_ingest fails it keeps the previous cycle's, which still covers the
+    coming days. A store is current when it starts within one profile step
+    after the observed store ends (T_stable).
+    """
+    if not fc_span or not main_span:
+        return None
+    if main_span[1] < fc_span[0] <= main_span[1] + PROFILE_STEP:
+        return fc_span
+    return None
+
+
 def plan_forecast_days(cycle_date: str, n_days: int, hour: int,
                        main_span, fc_span) -> list:
     """Which store and time each day T+0..T+n-1 of a cycle reads.
@@ -624,6 +644,12 @@ def step_forecast(cfg, args):
     n_days = args.days or cfg.forecast_days or 3
     main_span = store_span(cfg.zarr_path)
     fc_span = store_span(cfg.forecast_zarr_path)
+    if fc_span and fresh_forecast_span(main_span, fc_span) is None:
+        print(f"  WARNING: the forecast store ({fc_span[0]} .. {fc_span[1]}) was not "
+              f"built from this cycle (observations end "
+              f"{main_span[1] if main_span else '-'}): not used, so only days the "
+              f"observations cover are produced")
+        fc_span = None
     plan = plan_forecast_days(args.snapshot_date, n_days, cfg.snapshot_hour_utc,
                               main_span, fc_span)
     print(f"\n=== step_forecast  cycle={args.snapshot_date}  days={n_days} ===")

@@ -740,7 +740,8 @@ JS = r"""
     cell.append(title, bx); row.append(cell);
     if (s.missing) {
       bx.classList.add('imap-none');
-      bx.textContent = s.reason ? 'No forecast for ' + s.valid + '. ' + s.reason
+      bx.textContent = s.pending ? s.name + ' (' + s.valid + ') is still running; this page is updated when it finishes.'
+                     : s.reason ? 'No forecast for ' + s.valid + '. ' + s.reason
                                 : 'No forecast for ' + s.valid + ': no scenarios were delivered for ' + s.name + '.';
       new ResizeObserver(() => bx.style.height = boxHeight(bx) + 'px').observe(bx);
       return;

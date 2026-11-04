@@ -50,3 +50,14 @@ def test_no_nwp_only_what_the_observations_cover():
     p = _plan("2026-12-02T18:00", None)
     assert [d["store"] for d in p] == ["observed", None, None]
     assert p[1]["reason"] == "no forecast store"
+
+
+def test_a_stale_forecast_store_is_not_used():
+    """nwp_ingest failed today: the cycle keeps yesterday's forecast store,
+    which still covers today's 18 UTC. It must not be read as today's."""
+    from analysis_pipeline import fresh_forecast_span
+    main = (T("2025-10-01"), T("2026-12-02T06:00"))
+    assert fresh_forecast_span(main, (T("2026-12-02T12:00"), T("2026-12-04T18:00")))  # this cycle's
+    assert fresh_forecast_span(main, (T("2026-12-01T12:00"), T("2026-12-03T18:00"))) is None  # yesterday's
+    assert fresh_forecast_span(main, (T("2026-12-03T00:00"), T("2026-12-05T00:00"))) is None  # a gap
+    assert fresh_forecast_span(None, (T("2026-12-02T12:00"), T("2026-12-04T18:00"))) is None

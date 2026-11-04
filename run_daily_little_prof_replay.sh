@@ -181,7 +181,9 @@ if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
         RUNOUT_STATUS="FAILED (exit $?)"
         echo "WARNING: runout $RUNOUT_STATUS. The run stays successful. Rerun runout alone:"
         echo "    python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG"
-        $ALERT --subject "runout $RUNOUT_STATUS"             --body "Snowpack and release finished and are published; the run stays successful. Rerun runout alone: python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG"             --log "$LOGFILE" || true
+        $ALERT --subject "runout $RUNOUT_STATUS" \
+            --body "Snowpack and release finished and are published; the run stays successful. Rerun runout alone: python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG" \
+            --log "$LOGFILE" || true
     fi
 else
     echo "    Runout skipped (--no-runout or --no-scenarios)"
