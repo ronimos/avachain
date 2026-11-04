@@ -55,6 +55,19 @@ def discover_surveys(cfg: ProjectConfig, as_of=None) -> list:
     surveys = [(parse_survey_date(f.name), f) for f in survey_files]
     surveys.sort(key=lambda x: x[0])
 
+    # Season window: last season's rasters stay in survey_dir as history but
+    # must not pair with this season's first survey (a March -> November
+    # "pair" would put the whole summer into one transport field).
+    lo, hi = cfg.season_start, cfg.season_end
+    if lo is not None or hi is not None:
+        out = [d for d, _ in surveys
+               if (lo is not None and d < lo) or (hi is not None and d > hi)]
+        surveys = [(d, f) for d, f in surveys
+                   if not ((lo is not None and d < lo) or (hi is not None and d > hi))]
+        if out:
+            print(f"Season {lo or '..'} -> {hi or '..'}: ignoring {len(out)} "
+                  f"survey(s) outside it")
+
     cutoff = replay_as_of(as_of)
     if cutoff is not None:
         hidden = [d for d, _ in surveys if d > cutoff.date()]
@@ -160,10 +173,34 @@ def load_transport_meta(cfg: ProjectConfig) -> list:
 # =====================================================================
 
 def load_weather(cfg: ProjectConfig) -> pd.DataFrame:
-    """Load and convert weather CSV to SI units with UTC timestamps."""
+    """Station weather, converted, hourly, UTC.
+
+    [weather] source = "csv" converts the archived CAIC CSV; "cache" reads
+    the station cache aws_ingest keeps current, which holds exactly
+    load_and_convert's output (aws_ingest.seed_cache_from_csv), so the two
+    give the same frame for the same hours. A live season has no CSV.
+    """
+    if cfg.weather_source == "cache":
+        return _load_weather_cache(cfg)
     wx = load_and_convert(str(cfg.weather_csv), tz_output="UTC",
                           station=station_config_from_cfg(cfg, "summit"))
     print(f"Weather: {wx.index[0]} → {wx.index[-1]}, {len(wx)} hours")
+    return wx
+
+
+def _load_weather_cache(cfg: ProjectConfig) -> pd.DataFrame:
+    """The summit station's cache (<weather_cache_dir>/<summit_id>.parquet)
+    in load_and_convert's layout: a tz-naive UTC index named 'time'."""
+    p = cfg.weather_cache_dir / f"{cfg.summit_id}.parquet"
+    if not p.exists():
+        raise FileNotFoundError(
+            f"[weather] source = \"cache\" but {p} does not exist. Fill it with "
+            f"`aws_ingest.py --toml <slope_config.toml> --since <season_start>`")
+    df = pd.read_parquet(p)
+    t = pd.to_datetime(df.pop("timestamp"), utc=True).dt.tz_localize(None)
+    wx = df.set_index(pd.DatetimeIndex(t, name="time")).sort_index()
+    wx = wx[~wx.index.duplicated(keep="last")]
+    print(f"Weather (cache {p.name}): {wx.index[0]} → {wx.index[-1]}, {len(wx)} hours")
     return wx
 
 

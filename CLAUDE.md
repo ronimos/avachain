@@ -135,12 +135,18 @@ physics is a porting defect, not a local choice. Module mapping:
 | `analysis_pipeline.py` | `generate_scenarios.py` |
 | `scenario_writer.py` | `scenario_writer.py` |
 
-Three behaviours where **avachain is deliberately better** — fix these in the
+Four behaviours where **avachain is deliberately better** — fix these in the
 standalone, never revert them here:
 
 1. Release depth from slab thickness above the WL, not `hs`.
 2. Depth raster clipped to the polygon before computing volume.
 3. `depth_percentile` actually scales depth.
+4. Release density per scenario: the median `slab_density` of the clusters
+   inside that scenario's own release polygon, 280 kg/m³ when they have none
+   (`analysis_pipeline._polygon_density`, Ron 2026-11-04). The standalone
+   takes the trigger cluster's density (fallback 250). avachain's old source,
+   the observed release group, was NaN on every day without an observed
+   avalanche, and runout passes density straight to com1DFA.
 
 When comparing constants, **grep case-insensitively and compare by value**. A
 case-sensitive search for `tau_g.*50` silently misses
@@ -376,6 +382,35 @@ fixed on 10-27:
 `analyze` reads `Timestamp(date)`, which is 00:00, so an event-day analysis is
 pre-scour. A 12:00 or 18:00 snapshot on the event day is post-scour on the
 scoured clusters.
+
+## Season start, the forecast pass and thin days
+
+`docs/season_start.md` is the procedure. The traps:
+
+- **The forecast pass has its own forcing and config.** WRF has no HS, and
+  the observed config enforces measured HS, so every forecast stopped with
+  `[E] missing { HS }` until 1cc40e2 (while SNOWPACK printed FINISHED).
+  `nwp_ingest` writes `input/smet_forecast/` (PSUM, HS nodata), and the
+  forecast pass runs `master_config_forecast.ini`, which turns off
+  `ENFORCE_MEASURED_SNOW_HEIGHTS` in **both** `[SNOWPACK]` and
+  `[SNOWPACKADVANCED]`. Overriding only one leaves HS forcing on. Observed
+  SMETs never carry forecast rows. Do not reintroduce append-into-observed.
+- **An empty scenario set is a valid result.** On a no-candidate day the
+  triggers are the shot locations, `[scenarios] explosive_trigger_points`.
+  These are **[lat, lon] points, never cluster IDs**: IDs change with every
+  cluster map, the shot locations don't. If every shot release holds
+  < 0.10 m, the set publishes as `status: "no_scenarios"` and the run ends
+  DONE. On such a day `meloche_df` has **no arrest-index columns at all**
+  (nothing reached `TAU_G_FEATURE_FLOOR`), so guard column access, not just
+  row access.
+- **Release density is per polygon.** It comes from the clusters inside the
+  release polygon (see the standalone section). Its old source, the observed
+  release group, is empty on every live day.
+- **A survey run killed by a signal must end FAILED.** The scripts trap
+  HUP/INT/TERM to exit 128+n before the EXIT trap writes the marker. In tests,
+  remember that bash cannot trap a signal that was ignored when it started:
+  a pytest run as a background job (`… &`) ignores SIGINT, so start such
+  children with default handlers.
 
 ## Output layout
 

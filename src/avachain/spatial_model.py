@@ -478,6 +478,56 @@ def gap_fill_period(hs_start: np.ndarray,
     return grids
 
 
+# Below this station HS at the first survey, the station's own depth is too
+# small to scale a cell's surveyed depth by (a wind-loaded cell with 1 m of
+# snow over a station reading 3 cm), and the ramp follows the station's
+# cumulative snowfall instead.
+BARE_GROUND_MIN_STATION_HS_M = 0.10
+# A cell's pre-survey HS is at most this multiple of its surveyed HS, so a
+# station spike cannot put metres of snow on a cell for one hour.
+BARE_GROUND_MAX_FACTOR = 3.0
+
+
+def bare_ground_fraction(stn_hs_series: pd.Series) -> tuple:
+    """Fraction f(t) of the first survey's depth present at each hour, from
+    season start (bare ground) to the survey.
+
+    The station sets the timing, the survey sets each cell's amount:
+      - station HS at the survey >= BARE_GROUND_MIN_STATION_HS_M:
+        f = station HS(t) / station HS(survey), clipped to
+        [0, BARE_GROUND_MAX_FACTOR]. Early storms that melted out on the
+        station melt out on every cell, and settlement shows as f > 1.
+      - else, if the station saw any snowfall: f = cumulative positive
+        station dHS(t) / its total. Snow only accumulates.
+      - else: linear in time. Nothing at the station says when it came.
+    f ends at exactly 1 (the last hour is the survey).
+    Returns (f, rule).
+    """
+    s = np.nan_to_num(np.asarray(stn_hs_series.values, dtype=float), nan=0.0)
+    s = np.maximum(s, 0.0)
+    n = len(s)
+    if n == 0:
+        return np.zeros(0), "empty"
+    if s[-1] >= BARE_GROUND_MIN_STATION_HS_M:
+        return np.clip(s / s[-1], 0.0, BARE_GROUND_MAX_FACTOR), "station_hs"
+    c = np.concatenate([[0.0], np.cumsum(np.maximum(np.diff(s), 0.0))])
+    if c[-1] > 0:
+        return c / c[-1], "station_snowfall"
+    return (np.linspace(0.0, 1.0, n) if n > 1 else np.ones(1)), "linear"
+
+
+def gap_fill_from_bare_ground(hs_end: np.ndarray,
+                              stn_hs_series: pd.Series) -> tuple:
+    """Hourly HS grids from bare ground at the series' first hour to hs_end
+    (the season's first survey) at its last: grid(t) = hs_end * f(t), with
+    f from bare_ground_fraction. NaN cells stay NaN. Returns (grids, rule).
+    """
+    f, rule = bare_ground_fraction(stn_hs_series)
+    grids = {ts: (hs_end * fi).astype(hs_end.dtype)
+             for ts, fi in zip(stn_hs_series.index, f)}
+    return grids, rule
+
+
 def gap_fill_station_only(hs_start: np.ndarray,
                            stn_hs_series: pd.Series,
                            valid_mask: np.ndarray) -> dict:

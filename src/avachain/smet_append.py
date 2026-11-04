@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import re
+from functools import partial
 from datetime import timezone
 from pathlib import Path
 
@@ -165,7 +166,8 @@ def _format_smet_row(ts: pd.Timestamp, row: dict, fields: list[str]) -> str:
 
     Values go out in the file's own units, unconverted — TA in °C, RH in
     percent, HS in cm — matching smet_writer.write_smet (the only producer of
-    these files) and nwp_ingest._format_nwp_row. The header declares
+    these files), and the convention nwp_ingest declares in its forecast SMETs
+    (FC_OFFSET / FC_MULT). The header declares
     units_offset=273.15 for TA and units_multiplier=0.01 for RH and HS, and
     SNOWPACK applies them on read, so converting here as well double-converts:
     a -10.7 °C row became 262.4 in the file and 535.6 K inside SNOWPACK.
@@ -184,6 +186,27 @@ def _format_smet_row(ts: pd.Timestamp, row: dict, fields: list[str]) -> str:
 # Met data loader
 # ---------------------------------------------------------------------------
 
+_STATION_FRAMES: dict = {}
+
+
+def _station_frame(sid: str) -> pd.DataFrame | None:
+    """The station's whole weather cache, read once per process.
+
+    Every cluster appends from the same station, so append_all loads it
+    before forking its workers; they share it instead of re-reading the
+    parquet 6565 times.
+    """
+    cache = WEATHER_CACHE_DIR / f"{sid}.parquet"
+    key = str(cache)
+    if key not in _STATION_FRAMES:
+        if not cache.exists():
+            return None
+        df = pd.read_parquet(cache)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        _STATION_FRAMES[key] = df
+    return _STATION_FRAMES[key]
+
+
 def _load_met_for_period(since: pd.Timestamp,
                          until: pd.Timestamp,
                          station_id: str | None = None,
@@ -194,17 +217,14 @@ def _load_met_for_period(since: pd.Timestamp,
     callers can compute the first ΔHS delta against the anchor station value.
     """
     sid = station_id or PRIMARY_STATION
-    cache = WEATHER_CACHE_DIR / f"{sid}.parquet"
-    if not cache.exists():
+    df = _station_frame(sid)
+    if df is None:
         # Not a no-op: an empty frame here used to die further on, on a
         # TypeError that named nothing about the cause.
         raise FileNotFoundError(
-            f"weather cache not found at {cache}. Seed it once with "
-            f"`aws_ingest.py --toml <slope_config.toml> --from-csv`; the "
-            f"daily aws_ingest only appends to it")
-
-    df = pd.read_parquet(cache)
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+            f"weather cache not found at {WEATHER_CACHE_DIR / f'{sid}.parquet'}. "
+            f"Seed it once with `aws_ingest.py --toml <slope_config.toml> --from-csv`; "
+            f"the daily aws_ingest only appends to it")
     if include_anchor:
         mask = (df["timestamp"] >= since) & (df["timestamp"] <= until)
     else:
@@ -297,15 +317,23 @@ def append_all(smet_dir: Path,
         print(f"    No SMET files found in {smet_dir}")
         return {}
 
-    total = 0
-    updated = 0
-    counts = {}
-    for p in smet_files:
-        n = append_cluster_smet(p, until=until, dry_run=dry_run, station_id=station_id)
-        counts[p.stem] = n
-        total += n
-        if n:
-            updated += 1
+    # Files are independent, so they append in parallel (dry runs stay
+    # serial to keep their report in order). fork shares the station frame.
+    _station_frame(station_id or PRIMARY_STATION)
+    work = partial(append_cluster_smet, until=until, dry_run=dry_run,
+                   station_id=station_id)
+    if dry_run:
+        ns = [work(p) for p in smet_files]
+    else:
+        import multiprocessing as mp
+        from concurrent.futures import ProcessPoolExecutor
+        from config import SMET_WORKERS
+        with ProcessPoolExecutor(max_workers=SMET_WORKERS,
+                                 mp_context=mp.get_context('fork')) as pool:
+            ns = list(pool.map(work, smet_files, chunksize=32))
+    counts = {p.stem: n for p, n in zip(smet_files, ns)}
+    total = sum(ns)
+    updated = sum(1 for n in ns if n)
 
     print(f"    SMET append: {updated}/{len(smet_files)} files updated, "
           f"{total} total rows written")

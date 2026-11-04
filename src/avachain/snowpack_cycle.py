@@ -337,11 +337,20 @@ def events_between(cfg: ProjectConfig, t0: pd.Timestamp,
 # Actions (replaceable in tests)
 # ---------------------------------------------------------------------------
 
-def run_snowpack(cfg: ProjectConfig, end: pd.Timestamp, restart_from: str) -> None:
+def run_snowpack(cfg: ProjectConfig, end: pd.Timestamp, restart_from: str,
+                 forecast: bool = False) -> None:
+    """Observed passes read cfg.smet_dir with the HS-driven master config. The
+    forecast pass reads the NWP forecast SMETs with master_config_forecast.ini
+    (precipitation-driven), because WRF has no HS."""
     script = cfg.slopes_config_dir / "run_snowpack.sh"
     env = dict(os.environ, RESTART_FROM=restart_from, SKIP_ZARR="1",
                SLOPE_DIR=str(cfg.slope_dir), SMET_DIR=str(cfg.smet_dir))
-    print(f"    SNOWPACK {restart_from} -> {end:{TS_FMT}}", flush=True)
+    if forecast:
+        env["SMET_DIR"] = str(cfg.smet_forecast_dir)
+        env["MASTER_CFG"] = str(cfg.slopes_config_dir / "config" /
+                                "master_config_forecast.ini")
+    print(f"    SNOWPACK {restart_from} -> {end:{TS_FMT}}"
+          f"{' (forecast, precipitation-driven)' if forecast else ''}", flush=True)
     r = subprocess.run(["bash", str(script), "", end.strftime(TS_FMT)], env=env)
     if r.returncode != 0:
         raise CycleError(f"run_snowpack.sh exited {r.returncode} "
@@ -569,7 +578,7 @@ def survey_cycle(cfg: ProjectConfig, new_survey: pd.Timestamp,
               anchor_check_fn=anchor_check_fn)
 
     if nwp_edate is not None:
-        snowpack(cfg, nwp_edate, "anchor")
+        snowpack(cfg, nwp_edate, "anchor", forecast=True)
         _require_coherent(cfg, "res", nwp_edate, n)   # a stalled forecast is not silent
         forecast_fn(cfg, obs_end)
     return {"survey_prev": s_prev, "survey_new": new_survey, "obs_end": obs_end,
@@ -602,7 +611,7 @@ def daily_cycle(cfg: ProjectConfig, obs_end: Optional[pd.Timestamp] = None,
     else:
         print("    No new observations since the anchor; state unchanged")
     if nwp_edate is not None:
-        snowpack(cfg, nwp_edate, "anchor")
+        snowpack(cfg, nwp_edate, "anchor", forecast=True)
         _require_coherent(cfg, "res", nwp_edate, n)   # a stalled forecast is not silent
         forecast_fn(cfg, max(obs_end, a))
     return {"anchor_prev": a, "obs_end": obs_end, "clusters": n}

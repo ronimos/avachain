@@ -187,29 +187,25 @@ class TestFormatSmetRow:
         val = float(parts[vw_idx])
         assert val == pytest.approx(3.1416, abs=1e-4)
 
-    def test_agrees_with_nwp_ingest_convention(self):
-        """Both writers append to the SAME file, so they must agree.
+    def test_forecast_smets_declare_the_same_unit_convention(self):
+        """Observed and forecast forcing must mean the same thing to SNOWPACK.
 
-        This replaces an earlier guard asserting the two conventions had to
-        stay DIFFERENT (smet_append K/fraction vs nwp_ingest C/percent). That
-        cannot be right: one SMET file carries one units_offset /
-        units_multiplier header, so only one convention survives SNOWPACK's
-        read. nwp_ingest matched smet_writer.write_smet -- the sole producer
-        of these files, whose output holds C/percent/cm -- so smet_append was
-        the side that was wrong.
+        The two writers used to append to one file. Since forecast rows moved
+        to their own SMETs, each file carries its own units header, and the
+        forecast header must declare the observed convention: TA in degC
+        (offset 273.15), RH in % and HS in cm (multiplier 0.01). Otherwise
+        SNOWPACK would read the forecast in different units.
         """
-        from nwp_ingest import _format_nwp_row as nwp_fmt
+        from nwp_ingest import FC_FIELDS, FC_OFFSET, FC_MULT
+        conv = {"TA": (273.15, 1), "RH": (0, 0.01), "HS": (0, 0.01)}
+        for name, (off, mult) in conv.items():
+            i = FC_FIELDS.index(name)
+            assert (FC_OFFSET[i], FC_MULT[i]) == (off, mult), name
         ts = pd.Timestamp("2020-01-01T06:00", tz="UTC")
-        fields = ["timestamp", "TA", "RH"]
-        row = {"TA": 0.0, "RH": 80.0}
-
-        smet_parts = _format_smet_row(ts, row, fields).split("\t")
-        nwp_parts = nwp_fmt(ts, row, fields).split("\t")
-
-        for name in ("TA", "RH"):
-            i = fields.index(name)
-            assert float(smet_parts[i]) == pytest.approx(float(nwp_parts[i])), \
-                f"{name}: both writers target one file and must share a unit"
+        parts = _format_smet_row(ts, {"TA": -10.0, "RH": 80.0},
+                                 ["timestamp", "TA", "RH"]).split("\t")
+        assert float(parts[1]) == pytest.approx(-10.0)      # degC, not K
+        assert float(parts[2]) == pytest.approx(80.0)       # %, not fraction
 
 
 # ---------------------------------------------------------------------------

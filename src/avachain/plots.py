@@ -89,9 +89,10 @@ def plot_gap_fill_validation(all_metrics: list, cfg: ProjectConfig):
     n_scatter = min(n, 12)
     n_cols = min(4, n_scatter)
     n_rows = (n_scatter + n_cols - 1) // n_cols
-    fig, axes = plt.subplots(n_rows + 1, n_cols, figsize=(5 * n_cols, 4 * (n_rows + 1)))
-    if n_rows + 1 == 1:
-        axes = axes[np.newaxis, :]
+    # Always 2-D: with one period (a season's first survey pair) subplots(2, 1)
+    # returned a 1-D array and axes[0, j] failed the survey (rehearsal 251129).
+    fig, axes = plt.subplots(n_rows + 1, n_cols, figsize=(5 * n_cols, 4 * (n_rows + 1)),
+                             squeeze=False)
 
     ax_rmse = fig.add_subplot(n_rows + 1, 2, 1)
     ax_r2 = fig.add_subplot(n_rows + 1, 2, 2)

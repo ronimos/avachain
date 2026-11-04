@@ -101,8 +101,18 @@ sql_columns = ["pcpac", "depth", "snow24h"]
 
 | Field | Notes |
 |-------|-------|
+| `season_start` | YYYY-MM-DD, snow-free, and on or after the first row of the season's WRF file. Surveys before it are ignored. |
 | `season_end` | YYYY-MM-DD date after which SNOWPACK stops (e.g. `"2026-04-30"`). |
+| `start_from_bare_ground` | `true` for a season started before its first survey (`season_start.py bootstrap`, see `docs/season_start.md`). |
 | `binary` | Path to the SNOWPACK executable. |
+
+**`[scenarios]`**
+
+`explosive_trigger_points = [[lat, lon], ...]` (WGS84) lists the slope's
+explosive-control shot locations. They are the triggers on a day when no
+cluster passes the trigger gates. Without them that day publishes an empty
+scenario set. Give points rather than cluster IDs, because they stay valid when the
+cluster map changes.
 
 **`[wrf]`**
 
@@ -205,6 +215,11 @@ and writes `data/weather/weather_data.csv`.
 ---
 
 ## Step 5 — Run the full pipeline
+
+> **No surveys yet?** `forcing_pipeline cluster` needs a season of surveys. A
+> slope starting before its first survey uses terrain-only clusters
+> (`cluster_terrain.py`) and a bare-ground bootstrap (`season_start.py
+> bootstrap`) instead of this step. See `docs/season_start.md`.
 
 The first run builds the cluster map, WindNinja library, transport features, and
 SNOWPACK restart files.  Subsequent runs (after new surveys) use the operational

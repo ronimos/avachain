@@ -42,7 +42,9 @@ snin=$(awk -F'= *' '/^\[Input\]/{i=1} i && /^SNOWPATH/{print $2; exit}' "$ini")
 if [[ -n "${STUB_FAIL:-}" && "$exp" == "$STUB_FAIL" ]]; then echo "stub failure"; exit 1; fi
 pin=$(awk -F'= *' '/^ProfileDate/{print $2}' "$snin/$exp.sno")
 sc=$(grep -q SCOURED "$snin/$exp.sno" && echo yes || echo no)
-echo "$b $e $pin $sc" >> "$out/$exp.hist"
+cfg=$(basename "$(awk -F'= *' '/^IMPORT_BEFORE/{print $2}' "$ini")")
+met=$(basename "$(awk -F'= *' '/^\[Input\]/{i=1} i && /^METEOPATH/{print $2; exit}' "$ini")")
+echo "$b $e $pin $sc $cfg $met" >> "$out/$exp.hist"
 printf 'ProfileDate      = %s\n' "$e" > "$out/${exp}_${exp}.sno"
 echo "FINISHED running stub"
 """
@@ -58,7 +60,10 @@ def cfg(tmp_path, monkeypatch):
     for d in ("input/smet", "input/snow", "output"):
         (slope / d).mkdir(parents=True)
     (slope / "input/snow/template.sno").write_text("ProfileDate = WRFDATE\n")
+    (slope / "input/smet_forecast").mkdir(parents=True)
     for cid in CIDS:
+        (slope / "input/smet_forecast" / f"{cid}.smet").write_text(
+            f"SMET 1.1 ASCII\n[HEADER]\nstation_id = {cid}\nfields = timestamp TA PSUM\n[DATA]\n")
         (slope / "input/smet" / f"{cid}.smet").write_text(
             f"SMET 1.1 ASCII\n[HEADER]\nstation_id = {cid}\nslope_angle = 31\n"
             "slope_azi = 120\nfields = timestamp TA\n[DATA]\n"
@@ -79,6 +84,7 @@ def cfg(tmp_path, monkeypatch):
     analysis.mkdir()
     return SimpleNamespace(
         slope_dir=slope, pro_dir=slope / "output", smet_dir=slope / "input/smet",
+        smet_forecast_dir=slope / "input/smet_forecast",
         analysis_dir=analysis, boundaries_dir=tmp_path / "boundaries",
         slopes_config_dir=REPO / "slopes" / "little_prof_replay",
         flight_hour_utc=18, toml_path=None,
@@ -473,3 +479,12 @@ def test_replay_tick_resuming_a_cycle_is_measured_from_where_it_started(cfg):
     assert rr.tick_baseline(cfg) == a                    # not the moved anchor
     sc.daily_cycle(cfg, obs, zarr_fn=Rec().zarr, forecast_fn=Rec().forecast)
     assert rr.tick_baseline(cfg) == obs
+
+
+def test_forecast_pass_is_precipitation_driven_and_observed_passes_are_not(cfg):
+    """WRF has no HS: the observed config stops at the first forecast step."""
+    rec = Rec()
+    _survey(cfg, rec, pd.Timestamp("2026-02-11T00:00"), pd.Timestamp("2026-02-13T00:00"))
+    h = _hist(cfg, "cluster_0001")
+    assert [r[4:6] for r in h[:2]] == [["master_config.ini", "smet"]] * 2
+    assert h[2][4:6] == ["master_config_forecast.ini", "smet_forecast"]

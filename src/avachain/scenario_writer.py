@@ -99,12 +99,17 @@ def write_trigger_locations(triggers: pd.DataFrame,
         x = transform.c + c * transform.a
         y = transform.f + r * transform.e
 
+        def _num(v):
+            # NaN is not JSON; a shot-location trigger on a thin pack often
+            # has no features at all.
+            v = float(v)
+            return v if np.isfinite(v) else None
         props = {
             'cluster_id': int(cid),
             'sk38_rank':  rank,
-            'min_sk38':   float(row.get('min_sk38', np.nan)),
-            'tau_p_pa':   float(row.get('wl_shear_strength',
-                                         row.get('tau_p', np.nan))),
+            'min_sk38':   _num(row.get('min_sk38', np.nan)),
+            'tau_p_pa':   _num(row.get('wl_shear_strength',
+                                       row.get('tau_p', np.nan))),
         }
         features.append({
             'type': 'Feature',
@@ -354,9 +359,14 @@ def write_metadata(out_path: Path,
                    depth_percentiles: list,
                    mu: float,
                    xi: float,
-                   a_ca_stats: Optional[dict] = None) -> None:
+                   a_ca_stats: Optional[dict] = None,
+                   trigger_source: str = 'model') -> None:
     """
     Write run metadata JSON for the scenario ensemble.
+
+    trigger_source is 'model' (gated, Sk38-ranked triggers) or
+    'explosive_fallback' (the slope's shot locations, used when no cluster
+    passed the trigger gates).
     """
     import subprocess, datetime
     try:
@@ -372,6 +382,7 @@ def write_metadata(out_path: Path,
         'git_hash':         git_hash,
         'n_scenarios':      n_scenarios,
         'n_trigger_locations': n_triggers,
+        'trigger_source':   trigger_source,
         'size_factors':     size_factors,
         'depth_percentiles':depth_percentiles,
         'voellmy_mu':       mu,

@@ -63,6 +63,10 @@ def resolve_wrf_smet(wrf: dict, season_start: Optional[str]) -> Optional[Path]:
 # Environment variable holding the simulated "now" for operational replay.
 AS_OF_ENV = "AVACHAIN_AS_OF"
 
+# Worker processes for per-cluster SMET generation (forcing_pipeline smet).
+# The step runs before SNOWPACK, so it does not compete with MAX_JOBS there.
+SMET_WORKERS = 16
+
 
 def replay_as_of(explicit: "str | _dt.datetime | None" = None) -> Optional[_dt.datetime]:
     """Simulated UTC 'now' for operational replay, or None in live operation.
@@ -131,6 +135,12 @@ class ProjectConfig:
     mu: float = 0.155           # Voellmy dry friction (uncalibrated default)
     xi: float = 1500.0          # Voellmy turbulent friction m/s² (uncalibrated default)
     stauchwall_deg: float = 29.0   # Ron, 2026-10-27 (was 28.0)
+    # The slope's explosive-control shot locations, (lat, lon) WGS84. When no
+    # cluster passes the trigger gates (thin early-season pack), scenarios
+    # trigger at the clusters containing these points instead of failing
+    # (Ron, 2026-11-04). Points, not cluster IDs: the shot locations are
+    # fixed on the ground, while cluster IDs change with every new map.
+    explosive_trigger_points: list = field(default_factory=list)
 
     # --- Survey file pattern ---
     # Expected format: YYMMDD_*_snowHeight.tif
@@ -170,6 +180,22 @@ class ProjectConfig:
     # clips, as before 1e71ebb. [processing] clean_survey_pixels in the TOML;
     # off only for ablations.
     clean_survey_pixels: bool = True
+
+    # --- Season (season_start.py) ---
+    # [snowpack] season_start / season_end. When set, only surveys dated
+    # inside the window count (pipeline_io.discover_surveys), so last
+    # season's rasters in survey_dir cannot leak into this season's pairs.
+    season_start: Optional[_dt.date] = None
+    season_end: Optional[_dt.date] = None
+    # [snowpack] start_from_bare_ground: gap_fill writes a segment from
+    # season_start (HS 0) to the season's first survey, so SNOWPACK runs the
+    # early season from bare ground instead of starting at the first survey
+    # with its whole depth deposited at once. Off by default: it changes the
+    # forcing of every cluster, and 2025-26 acceptance was run without it.
+    start_from_bare_ground: bool = False
+    # [weather] source: "csv" reads weather_csv (archived season), "cache"
+    # reads the station cache that aws_ingest keeps current (live season).
+    weather_source: str = "csv"
 
     # --- Domain mask ---
     min_slope_deg: float = 15.0
@@ -327,6 +353,13 @@ class ProjectConfig:
         return self._dir("resampled_dir", self.output_dir / "resampled_1m")
 
     @property
+    def smet_forecast_dir(self) -> Path:
+        """Per-cluster NWP forecast SMETs (nwp_ingest), read only by the
+        forecast pass. Kept apart from smet_dir so observed forcing never
+        carries forecast rows."""
+        return self.slope_dir / "input" / "smet_forecast"
+
+    @property
     def pro_dir(self) -> Path:
         return self.slope_dir / "output"
 
@@ -416,6 +449,12 @@ class ProjectConfig:
                             if "validation_dir" in paths else None),
             windninja_library_dir=Path(paths.get("windninja_library_dir", "windninja/library")),
             clean_survey_pixels=bool(processing.get("clean_survey_pixels", True)),
+            season_start=(_dt.date.fromisoformat(str(snowpack["season_start"]))
+                          if snowpack.get("season_start") else None),
+            season_end=(_dt.date.fromisoformat(str(snowpack["season_end"]))
+                        if snowpack.get("season_end") else None),
+            start_from_bare_ground=bool(snowpack.get("start_from_bare_ground", False)),
+            weather_source=_weather_source(data.get("weather", {})),
             survey_markers=bool(surveys.get("markers", False)),
             slope_name=slope_name,
             slope_dir=Path(paths.get("slope_dir", f"snowpack/{slope_name}")),
@@ -432,12 +471,36 @@ class ProjectConfig:
             size_factors=list(scenarios.get("size_factors", [0.70, 0.85, 1.00, 1.15, 1.30])),
             depth_percentiles=list(scenarios.get("depth_percentiles", [10, 50, 90])),
             stauchwall_deg=float(scenarios.get("stauchwall_deg", 29.0)),
+            explosive_trigger_points=_lat_lon_points(
+                scenarios.get("explosive_trigger_points", [])),
             stations=data.get("stations", []),
             wrf_smet_file=wrf_smet,
             wrf_smet_dir=wrf_smet.parent if wrf_smet else None,
             dir_overrides={k: paths[k] for k in OVERRIDABLE_DIRS if k in paths},
         )
             
+
+def _lat_lon_points(points) -> list:
+    """[[lat, lon], ...] from the TOML, checked for range and order."""
+    out = []
+    for pt in points:
+        if len(pt) != 2:
+            raise ValueError(f"explosive_trigger_points entry {pt!r} is not [lat, lon]")
+        lat, lon = float(pt[0]), float(pt[1])
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            raise ValueError(f"explosive_trigger_points entry {pt!r}: "
+                             f"lat must be in [-90, 90], lon in [-180, 180] "
+                             f"(order is [lat, lon])")
+        out.append((lat, lon))
+    return out
+
+
+def _weather_source(weather: dict) -> str:
+    src = str(weather.get("source", "csv"))
+    if src not in ("csv", "cache"):
+        raise ValueError(f"[weather] source must be \"csv\" or \"cache\", got {src!r}")
+    return src
+
 
 def shell_paths(cfg: ProjectConfig) -> dict:
     """Directories the shell scripts need, as AVA_<NAME> -> absolute path.

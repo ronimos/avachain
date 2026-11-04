@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-SLOPES = ["little_prof", "little_prof_replay"]
+SLOPES = ["little_prof", "little_prof_replay", "little_prof_replay_jan"]
 
 
 @pytest.fixture(scope="module")
@@ -346,3 +346,29 @@ def test_cron_poll_skips_while_a_run_holds_the_lock(install, tmp_path):
         os.killpg(holder.pid, signal.SIGKILL); holder.wait()
     subprocess.run(["bash", "-c", command], check=True)
     assert (tmp_path / "ran").read_text() == "run_P.sh\n"
+
+
+class TestForecastConfig:
+    """The NWP forecast pass is precipitation-driven; the observed passes are not."""
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    def test_forecast_ini_matches(self, install, slope):
+        on_disk = (REPO / "slopes" / slope / "config" / "master_config_forecast.ini").read_text()
+        assert on_disk == install._render_master_forecast_ini(_cfg(slope))
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    def test_forecast_ini_imports_shared_physics_and_drops_hs_forcing(self, install, slope):
+        ini = install._render_master_forecast_ini(_cfg(slope))
+        assert f"slopes/{slope}/config/master_config.ini" in ini.split("IMPORT_BEFORE = ")[1].split("\n")[0]
+        # master_config.ini sets it in BOTH sections; one override would leave HS forcing on.
+        assert ini.count("ENFORCE_MEASURED_SNOW_HEIGHTS = FALSE") == 2
+        assert "[SNOWPACK]" in ini and "[SNOWPACKADVANCED]" in ini
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    def test_observed_config_still_enforces_hs(self, install, slope):
+        assert "ENFORCE_MEASURED_SNOW_HEIGHTS = TRUE" in install._render_master_ini(_cfg(slope))
+
+    @pytest.mark.parametrize("slope", SLOPES)
+    def test_master_cfg_is_overridable(self, install, slope):
+        sh = install._render_run_snowpack(_cfg(slope))
+        assert f"MASTER_CFG=${{MASTER_CFG:-$REPO_DIR/slopes/{slope}/config/master_config.ini}}" in sh

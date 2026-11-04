@@ -86,6 +86,16 @@ n_triggers        = 5
 size_factors      = [0.70, 0.85, 1.00, 1.15, 1.30]
 depth_percentiles = [10, 50, 90]
 stauchwall_deg    = 29.0
+# Explosive-control shot locations, [lat, lon] WGS84. On a day when no cluster
+# passes the trigger gates, the clusters containing these points are the
+# triggers. Fixed on the ground, so they hold for any season's cluster map.
+# Centres of 2025-26 clusters 3500, 2568, 2480 and 4137 (Ron, 2026-11-04).
+explosive_trigger_points = [
+    [39.6488366, -105.8788572],
+    [39.6487075, -105.8782511],
+    [39.6484944, -105.8791514],
+    [39.6481336, -105.8787209],
+]
 
 [wrf]
 fcst_base_dir = "/ssd/snowpack/fcst"

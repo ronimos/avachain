@@ -129,7 +129,13 @@ python src/avachain/survey_markers.py --toml slopes/Professor_PTC/slope_config.t
 |---|---|---|
 | Station archive (CAIC A-Basin summit CAABT + base CAABM) | `data/weather/weather_data.csv` | Raw CAIC units: tenths of °F, mph and W/m². Converted only by `smet_writer.load_and_convert`. |
 | Station cache | `work/weather/<station>.parquet` | Built from the CSV, then appended daily by `aws_ingest`. HS is stored in **cm**. |
-| WRF forecast | `/ssd/snowpack/fcst/<season>/zone055/077963/0779632_res.smet` | Same host. It extends forcing 48 h past the last observation and refills station gaps. The season is the year of `[snowpack] season_start`. A missing or short file stops the run (`RefillError`); the run does not continue on bad forcing. |
+| WRF forecast | `/ssd/snowpack/fcst/<season>/zone055/077963/0779632_res.smet` | Same host. It refills station gaps and drives the 48 h forecast past the last observation. The season is the year of `[snowpack] season_start`. A missing or short file stops the run (`RefillError`); the run does not continue on bad forcing. |
+
+The forecast has its own forcing. `nwp_ingest` writes one SMET per cluster to
+`work/snowpack/<path>/input/smet_forecast/`, with WRF precipitation as PSUM
+and HS as nodata. The forecast pass reads them with
+`slopes/<path>/config/master_config_forecast.ini`, which drops HS forcing.
+Observed SMETs never carry forecast rows. See `docs/season_start.md` §5.
 
 The SMET files the chain writes (`work/snowpack/<path>/input/smet/`) hold
 **°C, % and cm**, because SNOWPACK applies the header's offsets and multipliers
@@ -162,7 +168,7 @@ handoff/<path>/release/<YYYY-MM-DD>/<horizon>/
   scenarios/scenario_NNN/
     release.geojson           release polygon (EPSG:6342)
     depth.asc + depth.prj     release depth raster for AvaFrame (also depth.tif)
-    density.json              slab density
+    density.json              slab density: median over the polygon's clusters, 280 kg/m³ if none
     params.json               trigger, size factor, depth percentile, physics settings
   scenario_weights.json       probability weight of each scenario
   scour_depth.tif             entrainable snow depth for com1DFA (m)
@@ -173,8 +179,17 @@ handoff/<path>/release/<YYYY-MM-DD>/<horizon>/
 The ensemble is `n_triggers` × `size_factors` × `depth_percentiles`. The values
 are in the TOML's `[scenarios]` table; today that is 5 × 5 × 3.
 
+On a day when no cluster passes the trigger gates (a thin early-season pack),
+the triggers are the slope's explosive-control shot locations
+(`[scenarios] explosive_trigger_points`). A shot-location scenario holding
+< 0.10 m of snow on average is dropped. If nothing is left, the set is
+published **empty**: `manifest.json` and `READY`, no `scenarios/`.
+
 `manifest.json` records:
 - `producer`, `snapshot_date` and `horizon`;
+- `status`: `"ok"`, or `"no_scenarios"` for an empty set; and `n_scenarios`;
+- `trigger_source`: `"model"`, `"explosive_fallback"` (shot locations), or null
+  when there were no triggers at all;
 - `created_utc`;
 - the code `commit` and `commit_dirty`, which is true if the code differed from
   that commit;
@@ -195,8 +210,9 @@ dropped.
 **What a runout consumer must do:**
 1. Act only on directories that contain `READY`.
 2. Verify the files against `manifest.json`.
-3. Write only under `work/runout/<path>/` and `handoff/<path>/runout/`.
-4. Never modify the release set.
+3. Treat `status: "no_scenarios"` as "nothing to run today", not as an error.
+4. Write only under `work/runout/<path>/` and `handoff/<path>/runout/`.
+5. Never modify the release set.
 
 ### 2.6 Runout → forecast (planned)
 
@@ -215,7 +231,7 @@ from the slope TOML.
 
 | Script | When | What it does |
 |---|---|---|
-| `run_Professor_PTC.sh` | A survey has arrived | Claims the oldest `READY` survey, then runs resample → transport → avalanche → gap_fill → cluster_update → smet → smet_append → nwp_ingest → SNOWPACK survey cycle → analyze → scenarios (publishes §2.5). Its EXIT trap marks the survey `DONE` or `FAILED`. If nothing is `READY`, it exits without doing anything. |
+| `run_Professor_PTC.sh` | A survey has arrived | Claims the oldest `READY` survey, then runs resample → transport → avalanche → gap_fill → cluster_update → smet → smet_append → nwp_ingest → SNOWPACK survey cycle → analyze → scenarios (publishes §2.5). Its EXIT trap marks the survey `DONE` or `FAILED`. A run killed by SIGTERM, SIGINT or SIGHUP (reboot, OOM, kill) exits 143 / 130 / 129 and is marked `FAILED`, so the survey is retried. Before 2026-11-04 it was marked `DONE`. If nothing is `READY`, it exits without doing anything. |
 | `run_daily_Professor_PTC.sh` | Every morning, between surveys | aws_ingest → smet_append → nwp_ingest → SNOWPACK daily cycle (from yesterday's anchor to today, plus a 48 h forecast) → analyze → scenarios. It does not touch surveys, clusters or SMET rewrites. |
 | `run_full_pipeline.sh` | Setup, or after a change to static inputs, physics or forcing | Full rebuild: all forcing steps, full-season SNOWPACK with the two-pass avalanche reinit (`--reinit`), a single Zarr build. Takes about 6–8 h. Run it detached (`setsid nohup …`) so it survives a logout. |
 
@@ -295,10 +311,13 @@ in §2.1. Nothing else is needed.
   `scratch/ron/install/acceptance.sh`; cron is added only after it compares
   byte-identical. The old `/home/avachain/avachain` clone and Val's empty
   `intermediate/` skeleton were removed on 2026-11-01.
-- **Live station fetch is a stub.** `aws_ingest._fetch_station` returns nothing
-  until the CAIC API or CDOT RWIS endpoint and token are confirmed. Until then,
-  the daily run's station forcing comes only from the seeded CSV cache, so the
-  daily path cannot run unattended on live data.
+- **Live station fetch** from the CAIC database has been deployed since
+  2026-11-03 (`64a0d4b`). Stations come from the TOML, and credentials are in
+  `~/.config/avachain/db.env`.
+- **Season start (2026-11-04).** The season-start code, the NWP forecast pass,
+  the thin-day shot-location triggers and the per-polygon density were merged
+  after the season-start rehearsal passed. See `docs/season_start.md`, and the
+  tick list in `GO_LIVE_CHECKLIST.md`.
 - **No runout consumer yet.** Nothing reads `handoff/<path>/release/` yet. The
   com1DFA runner (Ron, since 2026-10-28) must follow §2.5–2.6.
 - **Path name.** The dev tree keeps `little_prof` until the deployment passes

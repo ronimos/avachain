@@ -45,7 +45,21 @@ binary            = "/home/caic/caic/rtsys/snowpack/exe/snowpack"
 lib_dir           = "/home/caic/caic/rtsys/snowpack/src/snowpack/lib"
 season_start      = "YYYY-MM-DD"               # SNOWPACK season start date; sets ProfileDate in template.sno
 season_end        = "YYYY-MM-DD"               # SNOWPACK runs stop at this date (e.g. "2026-03-31")
+                                                # Surveys outside [season_start, season_end] are ignored.
 max_parallel_jobs = 30                          # max simultaneous SNOWPACK processes
+# true for a live season started with `season_start.py bootstrap`: SNOWPACK
+# runs from bare ground at season_start, and the first survey's gap_fill
+# rebuilds the pre-survey forcing ending at that survey. season_start must
+# be snow-free and inside the WRF refill file. false (default) starts each
+# cluster at the season's first survey, as every 2025-26 run did.
+start_from_bare_ground = false
+
+# ---------------------------------------------------------------------------
+# [weather] — where station weather is read from
+# ---------------------------------------------------------------------------
+[weather]
+source = "csv"          # "csv": [paths] weather_csv (an archived season);
+                        # "cache": the aws_ingest station cache (a live season)
 
 # ---------------------------------------------------------------------------
 # [[stations]] — weather stations used for SMET forcing
@@ -79,6 +93,12 @@ n_triggers         = 5
 size_factors       = [0.70, 0.85, 1.00, 1.15, 1.30]
 depth_percentiles  = [10, 50, 90]
 stauchwall_deg     = 29.0
+# Explosive-control shot locations, [lat, lon] WGS84. On a day when no cluster
+# passes the trigger gates (thin early-season pack), the clusters containing
+# these points are the triggers; a shot release holding < 0.10 m of snow is
+# dropped, and if none is left an empty scenario set is published. Leave
+# empty for a slope with no explosive control.
+explosive_trigger_points = []
 
 # ---------------------------------------------------------------------------
 # [wrf] — WRF forecast forcing

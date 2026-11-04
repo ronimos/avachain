@@ -40,6 +40,7 @@ import json
 import pickle
 import datetime
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -105,7 +106,8 @@ from spatial_model import (
     compute_terrain_features, compute_transport_field,
     smooth_field, compute_wind_stats,
     train_transport_model,
-    gap_fill_period, gap_fill_station_only, validate_prediction,
+    gap_fill_period, gap_fill_station_only, gap_fill_from_bare_ground,
+    validate_prediction,
     load_wind_library, interpolate_wind_field,
     resample_wind_to_dem, build_windninja_feature_array,
 )
@@ -964,6 +966,9 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
         print("Survey validity: no cluster map yet, surveys used as is")
     prev_end = None          # (date, predicted grid at that survey)
 
+    if cfg.start_from_bare_ground:
+        total_grids += _gap_fill_bare_ground(cfg, wx, cluster_map)
+
     for meta in transport_meta:
         pair_id = meta['pair_id']
         d_a = datetime.date.fromisoformat(meta['date_a'])
@@ -1079,6 +1084,62 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
         plot_gap_fill_validation(all_metrics, cfg)
 
 
+BOOTSTRAP_GRID_GLOB = "hourly_*__bootstrap.npz"
+
+
+def bare_ground_start_ts(cfg: ProjectConfig) -> pd.Timestamp:
+    """The first hour of a bare-ground season: season_start, 00:00 UTC."""
+    if cfg.season_start is None:
+        raise ValueError("[snowpack] season_start is not set in the slope TOML")
+    return pd.Timestamp(cfg.season_start)
+
+
+def _gap_fill_bare_ground(cfg: ProjectConfig, wx: pd.DataFrame,
+                          cluster_map) -> int:
+    """gap_fill's segment from season_start (bare ground) to the season's
+    first survey (spatial_model.gap_fill_from_bare_ground). It replaces the
+    station-only grids that season_start.py bootstrap wrote before any
+    survey existed. Returns the number of hourly grids written (0 when the
+    season has no survey yet).
+    """
+    from survey_validity import fill_nodata
+    t0 = bare_ground_start_ts(cfg)
+    surveys = discover_surveys(cfg)
+    if not surveys:
+        print("\nBare-ground segment: no survey this season yet; "
+              "the bootstrap grids stay")
+        return 0
+    d1 = surveys[0][0]
+    t1 = pd.Timestamp(datetime.datetime.combine(d1, datetime.time(cfg.flight_hour_utc)))
+    if t1 <= t0:
+        raise ValueError(f"first survey {t1} is not after season_start {t0}")
+    hs_1 = np.load(str(cfg.resampled_dir / f"hs_{d1.isoformat()}.npy"))
+    if cluster_map is not None:
+        hs_1, _, _ = fill_nodata(hs_1, cluster_map)
+    stn = wx.loc[t0:t1, 'HS'] / 100.0           # cm -> m
+    if len(stn) < 2 or stn.index[0] > t0 + pd.Timedelta(hours=1) \
+            or stn.index[-1] < t1 - pd.Timedelta(hours=1):
+        raise ValueError(f"station HS covers {stn.index.min()} .. {stn.index.max()}, "
+                         f"not the bare-ground segment {t0} .. {t1}")
+    if stn.iloc[0] > 0.05:
+        print(f"  WARNING: station HS is {100 * stn.iloc[0]:.0f} cm at season_start "
+              f"{t0}; the segment assumes bare ground there")
+    grids, rule = gap_fill_from_bare_ground(hs_1, stn)
+    pair_id = f"{t0.date().isoformat()}__{d1.isoformat()}"
+    print(f"\nBare-ground segment {pair_id}: {len(grids)} hours, ramp from "
+          f"{rule}, station HS {100 * stn.iloc[0]:.0f} -> {100 * stn.iloc[-1]:.0f} cm")
+    out_path = cfg.grids_dir / f"hourly_{pair_id}.npz"
+    timestamps = list(grids.keys())
+    np.savez_compressed(str(out_path),
+                        grids=np.stack([grids[ts] for ts in timestamps]),
+                        timestamps=np.array([str(ts) for ts in timestamps]))
+    print(f"  Saved to {out_path}")
+    for stale in cfg.grids_dir.glob(BOOTSTRAP_GRID_GLOB):
+        stale.unlink()
+        print(f"  Removed the pre-survey bootstrap grids {stale.name}")
+    return len(grids)
+
+
 # =====================================================================
 # Step 8: Write SMET files
 # =====================================================================
@@ -1122,8 +1183,16 @@ def check_refill_covers(refill_df: pd.DataFrame, start, end, path) -> None:
                           f"but the SMETs run {start} .. {end}")
 
 
-def step_smet(cfg: ProjectConfig):
-    """Generate per-cluster SMET forcing files from hourly grids + saved clusters."""
+def step_smet(cfg: ProjectConfig, since: Optional[pd.Timestamp] = None):
+    """Generate per-cluster SMET forcing files from hourly grids + saved clusters.
+
+    since: rewrite only the rows from this time on and keep each file's
+    earlier rows (smet_writer.build_cluster_smet). A survey tick passes the
+    previous survey: rows before it do not change when a new survey
+    arrives, and the survey cycle restarts SNOWPACK from it. A file that
+    cannot be spliced (missing, different header, rows not reaching
+    `since`) is written whole. None writes every file whole.
+    """
     cfg.ensure_dirs()
     refill_path = refill_source(cfg)    # fail before the SMETs are written, not after
 
@@ -1193,6 +1262,13 @@ def step_smet(cfg: ProjectConfig):
     smet_dir = cfg.smet_dir
     smet_dir.mkdir(parents=True, exist_ok=True)
 
+    # --- NWP refill (refill_source; it is required): augmentation and gap
+    # fill happen in the same pass, so check its coverage before any write ---
+    from smet_writer import read_smet
+    refill_header, refill_df = read_smet(str(refill_path))
+    check_refill_covers(refill_df, all_timestamps[0], all_timestamps[-1], refill_path)
+
+    tasks = []
     for cid, rep in representatives.items():
         cr, cc = rep['centroid_row'], rep['centroid_col']
         ri = max(0, min(int(round(cr)), dem.shape[0] - 1))
@@ -1218,58 +1294,65 @@ def step_smet(cfg: ProjectConfig):
             slope_azi=float(aspect[ri, ci]),
             tz_offset=0,
         )
-
-        cell_df = wx_forcing.copy()
-        cell_df['HS'] = pd.Series(rep['hs_series'] * 100.0, index=all_timestamps)
-        cell_df['HS'] = cell_df['HS'].interpolate(method='time').bfill().ffill()
-
         out_path = smet_dir / f"{cell_config.station_id}.smet"
-        write_smet(cell_df, str(out_path), cell_config)
+        tasks.append((str(out_path), cell_config, rep['hs_series'], since))
+
+    # Clusters are independent files, so they write in parallel. fork shares
+    # the weather and refill frames with the workers instead of pickling them
+    # once per cluster.
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    from config import SMET_WORKERS
+    with ProcessPoolExecutor(
+            max_workers=SMET_WORKERS, mp_context=mp.get_context('fork'),
+            initializer=_init_smet_worker,
+            initargs=(wx_forcing, all_timestamps, refill_header, refill_df)) as pool:
+        results = list(pool.map(_write_cluster_smet, tasks, chunksize=16))
 
     sizes = [r['n_cells'] for r in representatives.values()]
     n_domain = int(np.sum(cluster_map > 0))
-    print(f"\n{len(representatives)} SMET files written to {smet_dir}")
+    n_spliced = sum(r['spliced'] for r in results)
+    print(f"\n{len(representatives)} SMET files written to {smet_dir} "
+          f"({SMET_WORKERS} workers)")
+    if since is not None:
+        print(f"  From {since:%Y-%m-%dT%H:%M} only: {n_spliced} spliced, "
+              f"{len(results) - n_spliced} written whole")
     print(f"  Coverage: {sum(sizes)} / {n_domain} domain cells")
     print(f"  Cluster sizes: min={min(sizes)}, median={np.median(sizes):.0f}, "
           f"max={max(sizes)}")
 
-    # --- Augment with NWP refill (refill_source; it is required) ---
-    from smet_writer import read_smet, augment_smet_with_refill, fill_smet_gaps_from_refill
-    print(f"\nAugmenting SMET files from {refill_path} ...")
-    refill_header, refill_df = read_smet(str(refill_path))
-    first = next(smet_dir / f"cluster_{cid:04d}.smet" for cid in representatives
-                 if (smet_dir / f"cluster_{cid:04d}.smet").exists())
-    _, first_df = read_smet(str(first))
-    check_refill_covers(refill_df, first_df.index.min(), first_df.index.max(), refill_path)
-    added_fields = None
-    n_augmented = 0
-    for cid in representatives:
-        smet_file = smet_dir / f"cluster_{cid:04d}.smet"
-        if smet_file.exists():
-            added = augment_smet_with_refill(
-                str(smet_file), refill_header, refill_df)
-            if added_fields is None and added:
-                added_fields = added
-            n_augmented += 1
+    added_fields = next((r['added'] for r in results if r['added']), None)
+    print(f"\nAugmented from {refill_path.name}:")
     if added_fields:
+        n_augmented = sum(1 for r in results if r['added'])
         print(f"  {n_augmented} files augmented, "
               f"{len(added_fields)} fields added: {', '.join(added_fields)}")
     else:
         print("  No new fields to add (all refill fields already present).")
+    print(f"Filled SMET gaps from {refill_path.name} (max 48h):")
+    print(f"  Rows inserted: {sum(r['n_rows_inserted'] for r in results)}, "
+          f"cells filled: {sum(r['n_rows_filled'] for r in results)}")
 
-    # --- Fill temporal gaps from refill (e.g. Dec 18 station outage) ---
-    print(f"\nFilling SMET gaps from {refill_path.name} (max 48h)...")
-    total_inserted = total_filled = 0
-    for cid in representatives:
-        smet_file = smet_dir / f"cluster_{cid:04d}.smet"
-        if smet_file.exists():
-            result = fill_smet_gaps_from_refill(
-                str(smet_file), refill_header, refill_df,
-                max_gap_hours=48)
-            total_inserted += result['n_rows_inserted']
-            total_filled += result['n_rows_filled']
-    print(f"  Rows inserted: {total_inserted}, "
-          f"cells filled: {total_filled}")
+
+_SMET_WORKER: dict = {}
+
+
+def _init_smet_worker(wx_forcing, timestamps, refill_header, refill_df):
+    _SMET_WORKER.update(wx_forcing=wx_forcing, timestamps=timestamps,
+                        refill_header=refill_header, refill_df=refill_df)
+
+
+def _write_cluster_smet(task) -> dict:
+    """Build one cluster's SMET: weather forcing + its representative HS."""
+    from smet_writer import build_cluster_smet
+    out_path, cell_config, hs_series, since = task
+    w = _SMET_WORKER
+    cell_df = w['wx_forcing'].copy()
+    cell_df['HS'] = pd.Series(hs_series * 100.0, index=w['timestamps'])
+    cell_df['HS'] = cell_df['HS'].interpolate(method='time').bfill().ffill()
+    return build_cluster_smet(cell_df, out_path, cell_config,
+                              w['refill_header'], w['refill_df'],
+                              max_gap_hours=48, since=since)
 
 
 # =====================================================================
@@ -1450,6 +1533,10 @@ def main():
                              "(ignores --event-date/--date-before/--date-after)")
     parser.add_argument('--toml', default=None,
                         help="Path to slope_config.toml; overrides --project-dir when provided")
+    parser.add_argument('--since-survey-anchor', action='store_true',
+                        help="smet: rewrite only the rows from the survey anchor "
+                             "(the previous survey) on, keeping the earlier rows. "
+                             "Without it every file is written whole.")
 
     args = parser.parse_args()
 
@@ -1480,6 +1567,15 @@ def main():
     elif args.step == 'cluster_update':
         from cluster_update import step_cluster_update
         step_cluster_update(cfg, args)
+    elif args.step == 'smet':
+        since = None
+        if args.since_survey_anchor:
+            from snowpack_cycle import read_survey_anchor, CycleError
+            try:
+                since = read_survey_anchor(cfg)
+            except CycleError as exc:
+                print(f"  {exc}\n  -> writing every SMET whole")
+        step_smet(cfg, since=since)
     elif args.step == 'reinit':
         # Stash args on cfg for step_reinit to access
         cfg._reinit_args = args
