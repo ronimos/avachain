@@ -125,6 +125,10 @@ observation (`T_stable`), forced by the WRF column at the slope.
 Before 1cc40e2 the forecast pass stopped every cluster at `T_stable` with
 `[E] missing { HS }`, and the survey was marked FAILED.
 
+Every WRF cycle is archived (`wrf_archive.py`, hourly cron, see
+`docs/deployment.md` §2.2), because the CAIC run overwrites the file each
+morning. Without the archive a forecast cannot be checked afterwards.
+
 ## 6. Thin early-season days: release scenarios
 
 Early in the season no cluster passes the trigger gates (τ_g ≥ 40 Pa, slope,

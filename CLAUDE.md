@@ -340,7 +340,13 @@ state needs a seed run, and post-reinit restart coherence is worth asserting.
 There is no per-cycle WRF archive for this season, only one rolling file, so
 rows after a historical `T_stable` were written later than that date. The NWP
 path can be exercised for plumbing but **cannot support a forecast-skill
-claim**.
+claim**. From 2026-27
+on, `src/avachain/wrf_archive.py` (hourly cron) keeps every cycle of the
+slope's grid cell under `work/weather/wrf_archive/<season>/<zone>/<cell>/
+<cycle UTC>/`. Read a historical forecast from there, never from
+`/ssd/snowpack/fcst/`: the CAIC run **deletes and rebuilds that tree every
+morning (~07:40–07:55 local)**, so the live file is always today's cycle, and
+it is briefly absent while the rebuild runs.
 
 ## Avalanche events and the reinit — Jan 18 is the only avalanche
 
