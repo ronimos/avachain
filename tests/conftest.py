@@ -1,6 +1,14 @@
 """Suite-wide fixtures."""
+import os
 import sys
 from pathlib import Path
+
+# No test may send real mail, including the scripts tests run as
+# subprocesses (they inherit the environment): sendmail points nowhere and
+# the operator's recipients file is never read. Tests of the mail itself set
+# their own fake sendmail and recipients.
+os.environ["AVACHAIN_SENDMAIL"] = "/nonexistent/sendmail-disabled-in-tests"
+os.environ["AVACHAIN_ALERTS_FILE"] = "/nonexistent/alerts-disabled-in-tests.toml"
 
 import pytest
 

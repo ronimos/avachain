@@ -1256,7 +1256,8 @@ def _cron_lines(cfg: dict, project_dir: Path) -> list[str]:
     if not cfg.get("surveys", {}).get("markers", False):
         return [_cron_line(cron_cfg.get("hour_utc", 20), survey, log_path)]
     poll  = int(cron_cfg.get("poll_minutes", 10))
-    daily = cron_cfg.get("daily_hour_utc", 13)
+    # In [cron] timezone (the cron.d file's CRON_TZ, default UTC).
+    daily = cron_cfg.get("daily_hour", cron_cfg.get("daily_hour_utc", 13))
     lock  = log_path.parent / f".cron_{name}.lock"
     return [
         f"*/{poll} * * * * umask 002; flock -n {lock} {survey} >> {log_path} 2>&1",
@@ -1282,16 +1283,24 @@ def _wrf_archive_line(cfg: dict, project_dir: Path, toml_path: Path) -> str | No
 
 
 def _alerts_check_line(cfg: dict, project_dir: Path, toml_path: Path) -> str | None:
-    """Once a day (17 UTC, ~4 h after the daily run): alert if no daily run
-    has logged for 26 h in the season, which no run can report itself (cron
-    or the host down). Only with [alerts] in the TOML and survey markers on
-    (without markers there is no separate daily run)."""
+    """Once a day, the check no run can do itself (cron or the host down).
+
+    With [runout]: at [cron] report_check (HH:MM in the cron timezone,
+    default 03:15), alert if today's runout report is not published (Ron,
+    2026-11-04: the report is due at 03:00 local). Without runout: at 17:00,
+    alert if no daily run logged for 26 h. Only with [alerts] in the TOML and
+    survey markers on (without markers there is no separate daily run)."""
     if "alerts" not in cfg or not cfg.get("surveys", {}).get("markers", False):
         return None
     log = _cron_log_path(cfg).parent / "alerts.log"
-    return (f"0 17 * * * umask 002; {project_dir / '.venv' / 'bin' / 'python'} "
+    if "runout" in cfg:
+        hh, mm = str(cfg.get("cron", {}).get("report_check", "03:15")).split(":")
+        when, what = f"{int(mm)} {int(hh)}", "check-report"
+    else:
+        when, what = "0 17", "check-daily"
+    return (f"{when} * * * umask 002; {project_dir / '.venv' / 'bin' / 'python'} "
             f"{project_dir / 'src' / 'avachain' / 'alerts.py'} --toml {toml_path} "
-            f"check-daily >> {log} 2>&1")
+            f"{what} >> {log} 2>&1")
 
 
 def _all_cron_lines(cfg: dict, project_dir: Path, toml_path: Path) -> list[str]:
@@ -1338,6 +1347,9 @@ def _render_crond(cfg: dict, project_dir: Path, toml_path: Path) -> str:
         f"# Do not edit here or in {dest}: change the TOML [cron] and rerun install.py,",
         f"# then: sudo install -m 644 -o root -g root {_crond_path(cfg, project_dir)} {dest}",
         "SHELL=/bin/bash",
+        # cron reads /etc/cron.d in the HOST's local time (America/Denver on
+        # this server). Without this line a "13 UTC" job ran at 13:00 MST.
+        f"CRON_TZ={cfg.get('cron', {}).get('timezone', 'UTC')}",
         "",
     ]
     for line in _all_cron_lines(cfg, project_dir, toml_path):
@@ -1708,9 +1720,11 @@ def _render_admin_doc(
     # --- Cron ---
     h2("Cron Schedule")
     if cfg.get("surveys", {}).get("markers", False):
+        tz = cron_cfg.get("timezone", "UTC")
+        daily = cron_cfg.get("daily_hour", cron_cfg.get("daily_hour_utc", 13))
         lines.append(f"\nThe survey script polls for READY surveys every "
                      f"**{cron_cfg.get('poll_minutes', 10)} min**; the daily run fires at "
-                     f"**{cron_cfg.get('daily_hour_utc', 13):02d}:00 UTC**. "
+                     f"**{int(daily):02d}:00 {tz}** (the cron.d file's CRON_TZ). "
                      "Both share one lock, so they never overlap.\n")
     else:
         lines.append(f"\nDaily run fires at **{hour_utc:02d}:00 UTC**.\n")

@@ -417,11 +417,35 @@ class TestCronD:
         cfg["wrf"] = {k: v for k, v in cfg["wrf"].items() if k != "wrf_zone"}
         assert len(self._jobs(self._render(install, cfg))) == 3
 
-    def test_daily_check_job(self, install):
-        # [alerts]: once a day, alert if no daily run logged for 26 h
+    def test_report_check_job(self, install):
+        # [alerts] + [runout]: at 03:15 local, alert if today's report is missing
         chk = self._jobs(self._render(install))[3]
-        assert chk.startswith("0 17 * * * ron umask 002; ")
-        assert "alerts.py --toml " in chk and chk.split("--toml ")[1].split()[1] == "check-daily"
+        assert chk.startswith("15 3 * * * ron umask 002; ")
+        assert "alerts.py --toml " in chk and chk.split("--toml ")[1].split()[1] == "check-report"
+
+    def test_daily_run_at_local_midnight_with_the_zone_declared(self, install):
+        """Ron, 2026-11-04: report due 03:00 local. cron reads /etc/cron.d in
+        the host's local time; the file names its zone, so the hours mean
+        what the TOML says (a '13 UTC' job had been running at 13:00 MST)."""
+        text = self._render(install)
+        assert "CRON_TZ=America/Denver" in text.splitlines()
+        daily = self._jobs(text)[1]
+        assert daily.startswith("0 0 * * * ron ") and "run_daily_Professor_PTC.sh" in daily
+
+    def test_no_timezone_means_utc(self, install):
+        cfg = _cfg("Professor_PTC")
+        cfg["cron"] = {k: v for k, v in cfg["cron"].items()
+                       if k not in ("timezone", "daily_hour")}
+        cfg["cron"]["daily_hour_utc"] = 13
+        text = self._render(install, cfg)
+        assert "CRON_TZ=UTC" in text.splitlines()
+        assert self._jobs(text)[1].startswith("0 13 * * * ron ")
+
+    def test_without_runout_the_check_is_check_daily(self, install):
+        cfg = _cfg("Professor_PTC")
+        cfg.pop("runout")
+        chk = self._jobs(self._render(install, cfg))[3]
+        assert chk.startswith("0 17 * * * ron ") and "check-daily" in chk
 
     def test_no_alerts_table_no_daily_check(self, install):
         cfg = _cfg("Professor_PTC")

@@ -142,3 +142,38 @@ def test_a_failed_daily_run_sends_an_alert(tmp_path):
         else:
             assert r.returncode == 1
             assert _subjects(out) == ["[avachain Professor_PTC] daily run FAILED (exit 1) at Step 4: SNOWPACK daily cycle"]
+
+
+def test_tests_never_reach_real_mail():
+    assert alerts.SENDMAIL.startswith("/nonexistent/")
+    assert str(alerts.DEFAULT_RECIPIENTS_FILE).startswith("/nonexistent/")
+
+
+def test_recipients_file_outside_git_is_added(tmp_path):
+    f = tmp_path / "alerts.toml"
+    f.write_text('email = ["ron@x.org", "a@x.org"]\n')
+    t = _toml(tmp_path, extra=f'recipients_file = "{f}"\n')
+    assert alerts.settings(t)["to"] == ["a@x.org", "b@y.org", "ron@x.org"]
+
+
+class TestCheckReport:
+    NOW = dt.datetime(2026, 12, 2, 3, 15)
+
+    def _t(self, tmp_path):
+        return _toml(tmp_path, extra=f'[runout]\npath_profile = "P"\n'
+                                     f'publish_root = "{tmp_path / "www"}"\n')
+
+    def test_missing_report_at_the_deadline(self, tmp_path):
+        why = alerts.check_report(self._t(tmp_path), now=self.NOW)
+        assert "no report for 20261202 at 03:15" in why
+
+    def test_published_report(self, tmp_path):
+        t = self._t(tmp_path)
+        d = tmp_path / "www" / "forecasts" / "P" / "20261202"
+        d.mkdir(parents=True)
+        (d / "report.html").write_text("x")
+        assert alerts.check_report(t, now=self.NOW) is None
+
+    def test_quiet_outside_the_season_or_without_runout(self, tmp_path):
+        assert alerts.check_report(self._t(tmp_path), now=dt.datetime(2026, 11, 1, 3, 15)) is None
+        assert alerts.check_report(_toml(tmp_path), now=self.NOW) is None
