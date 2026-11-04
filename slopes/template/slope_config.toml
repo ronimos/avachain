@@ -148,3 +148,10 @@ daily_hour_utc = 13
 # work_dir     = "/home/avachain/work/runout/<name>"
 # publish_root = "/home/www/html/ron/runout_forecast"
 # lock_file    = "/home/avachain/work/runout/.runout.lock"
+
+# ---------------------------------------------------------------------------
+# [alerts] — e-mail on a FAILED survey, a runout failure, a failed daily run,
+# and no daily run for 26 h (alerts.py, local sendmail). Empty = print only.
+# ---------------------------------------------------------------------------
+# [alerts]
+# email = ["name@example.org"]

@@ -509,6 +509,8 @@ ANALYSIS="python $PROJECT_DIR/src/avachain/analysis_pipeline.py --toml $TOML"
 NWP="python $PROJECT_DIR/src/avachain/nwp_ingest.py --toml $TOML"
 SMET_APPEND="python $PROJECT_DIR/src/avachain/smet_append.py --toml $TOML"
 CYCLE="python $PROJECT_DIR/src/avachain/snowpack_cycle.py --toml $TOML"
+# Alerts ([alerts] email in the TOML; prints only when none). Never fails.
+ALERT="python $PROJECT_DIR/src/avachain/alerts.py --toml $TOML send"
 VENV=$PROJECT_DIR/.venv/bin/activate
 # Every directory comes from the TOML (config.py --print-paths sets AVA_*),
 # never from $PROJECT_DIR/outputs/...: a deployment relocates them.
@@ -568,6 +570,9 @@ _finish_marker() {{
     else
         $MARKERS finish --survey-date "$CLAIMED" --status FAILED --exit-code $rc \
             --step "$CURRENT_STEP" --log "$LOGFILE"
+        $ALERT --subject "survey $CLAIMED FAILED (exit $rc) at $CURRENT_STEP" \
+            --body "Fix the cause, then rename the survey's .FAILED marker to .READY to retry." \
+            --log "$LOGFILE" || true
     fi
 }}
 trap _finish_marker EXIT
@@ -745,6 +750,9 @@ if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
         RUNOUT_STATUS="FAILED (exit $?)"
         echo "WARNING: runout $RUNOUT_STATUS. The run stays successful. Rerun runout alone:"
         echo "    python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG"
+        $ALERT --subject "runout $RUNOUT_STATUS" \
+            --body "Snowpack and release finished and are published; the run stays successful. Rerun runout alone: python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG" \
+            --log "$LOGFILE" || true
     fi
 else
     echo "    Runout skipped (--no-runout or --no-scenarios)"
@@ -820,6 +828,8 @@ AWS="python $PROJECT_DIR/src/avachain/aws_ingest.py --toml $TOML"
 SMET_APPEND="python $PROJECT_DIR/src/avachain/smet_append.py --toml $TOML"
 NWP="python $PROJECT_DIR/src/avachain/nwp_ingest.py --toml $TOML"
 CYCLE="python $PROJECT_DIR/src/avachain/snowpack_cycle.py --toml $TOML"
+# Alerts ([alerts] email in the TOML; prints only when none). Never fails.
+ALERT="python $PROJECT_DIR/src/avachain/alerts.py --toml $TOML send"
 VENV=$PROJECT_DIR/.venv/bin/activate
 # Every directory comes from the TOML (config.py --print-paths sets AVA_*),
 # never from $PROJECT_DIR/outputs/...: a deployment relocates them.
@@ -852,6 +862,18 @@ mkdir -p "$LOG_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOGFILE="$LOG_DIR/daily_${{TIMESTAMP}}.log"
 exec > >(tee -a "$LOGFILE") 2>&1
+
+# A failed daily run used to leave only its log. Alert on any non-zero exit,
+# naming the last step it reached. Signals exit 128+n so a kill is a failure.
+_daily_exit() {{
+    local rc=$?
+    [[ $rc -eq 0 ]] && return
+    local step
+    step=$(grep '>>> Step' "$LOGFILE" 2>/dev/null | tail -1 | sed 's/^>>> //')
+    $ALERT --subject "daily run FAILED (exit $rc) at ${{step:-start}}" --log "$LOGFILE" || true
+}}
+trap _daily_exit EXIT
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 
 echo "============================================================"
 echo "  {display_name} — Daily Forward Pipeline"
@@ -958,6 +980,9 @@ if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
         RUNOUT_STATUS="FAILED (exit $?)"
         echo "WARNING: runout $RUNOUT_STATUS. The run stays successful. Rerun runout alone:"
         echo "    python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG"
+        $ALERT --subject "runout $RUNOUT_STATUS" \
+            --body "Snowpack and release finished and are published; the run stays successful. Rerun runout alone: python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG" \
+            --log "$LOGFILE" || true
     fi
 else
     echo "    Runout skipped (--no-runout or --no-scenarios)"
@@ -1256,11 +1281,26 @@ def _wrf_archive_line(cfg: dict, project_dir: Path, toml_path: Path) -> str | No
             f"--archive-dir {weather / 'wrf_archive'} >> {log} 2>&1")
 
 
+def _alerts_check_line(cfg: dict, project_dir: Path, toml_path: Path) -> str | None:
+    """Once a day (17 UTC, ~4 h after the daily run): alert if no daily run
+    has logged for 26 h in the season, which no run can report itself (cron
+    or the host down). Only with [alerts] in the TOML and survey markers on
+    (without markers there is no separate daily run)."""
+    if "alerts" not in cfg or not cfg.get("surveys", {}).get("markers", False):
+        return None
+    log = _cron_log_path(cfg).parent / "alerts.log"
+    return (f"0 17 * * * umask 002; {project_dir / '.venv' / 'bin' / 'python'} "
+            f"{project_dir / 'src' / 'avachain' / 'alerts.py'} --toml {toml_path} "
+            f"check-daily >> {log} 2>&1")
+
+
 def _all_cron_lines(cfg: dict, project_dir: Path, toml_path: Path) -> list[str]:
-    """The slope's runs (_cron_lines) plus its WRF archive."""
+    """The slope's runs (_cron_lines) plus its WRF archive and daily-run check."""
     lines = _cron_lines(cfg, project_dir)
-    if (arch := _wrf_archive_line(cfg, project_dir, toml_path)):
-        lines.append(arch)
+    for extra in (_wrf_archive_line(cfg, project_dir, toml_path),
+                  _alerts_check_line(cfg, project_dir, toml_path)):
+        if extra:
+            lines.append(extra)
     return lines
 
 

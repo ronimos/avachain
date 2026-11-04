@@ -197,6 +197,8 @@ class TestRunScripts:
 
     def _run(self, block, rc, no_runout=0):
         script = ("set -euo pipefail\nPROJECT_DIR=/x; TOML=/x/t.toml; SNAPSHOT_ARG=\n"
+                  "LOGFILE=/x/run.log\n"
+                  "alert_stub() { echo ALERTED \"$@\"; }\nALERT=alert_stub\n"
                   f"NO_SCENARIOS=0; NO_RUNOUT={no_runout}\n"
                   f"python() {{ echo called \"$@\"; return {rc}; }}\n"
                   + block + 'echo "STATUS=$RUNOUT_STATUS"\n')
@@ -216,5 +218,7 @@ class TestRunScripts:
         assert bad.returncode == 0, bad.stderr               # the run is not failed
         assert "STATUS=FAILED (exit 3)" in bad.stdout
         assert "Rerun runout alone" in bad.stdout
+        assert "ALERTED --subject runout FAILED (exit 3)" in bad.stdout   # someone is told
+        assert "ALERTED" not in ok.stdout
         skip = self._run(block, 0, no_runout=1)
         assert "STATUS=skipped" in skip.stdout and "called" not in skip.stdout

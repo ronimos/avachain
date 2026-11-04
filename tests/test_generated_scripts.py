@@ -391,7 +391,7 @@ class TestCronD:
 
     def test_every_job_runs_as_the_cron_user(self, install):
         jobs = self._jobs(self._render(install))
-        assert len(jobs) == 3                                # poll, daily, WRF archive
+        assert len(jobs) == 4                                # poll, daily, WRF archive, daily check
         for j in jobs:
             f = j.split()
             assert f[5] == "ron", j                          # user after five schedule fields
@@ -415,7 +415,18 @@ class TestCronD:
     def test_no_wrf_cell_no_archive_job(self, install):
         cfg = _cfg("Professor_PTC")
         cfg["wrf"] = {k: v for k, v in cfg["wrf"].items() if k != "wrf_zone"}
-        assert len(self._jobs(self._render(install, cfg))) == 2
+        assert len(self._jobs(self._render(install, cfg))) == 3
+
+    def test_daily_check_job(self, install):
+        # [alerts]: once a day, alert if no daily run logged for 26 h
+        chk = self._jobs(self._render(install))[3]
+        assert chk.startswith("0 17 * * * ron umask 002; ")
+        assert "alerts.py --toml " in chk and chk.split("--toml ")[1].split()[1] == "check-daily"
+
+    def test_no_alerts_table_no_daily_check(self, install):
+        cfg = _cfg("Professor_PTC")
+        cfg.pop("alerts")
+        assert not any("check-daily" in j for j in self._jobs(self._render(install, cfg)))
 
     def test_file_lands_in_the_deployment_cron_dir(self, install):
         cfg = _cfg("Professor_PTC")

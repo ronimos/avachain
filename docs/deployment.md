@@ -316,6 +316,18 @@ do this. Auto-detection appends candidate periods to that file but does not
 relabel periods that are already listed. The 2025-26 season has one avalanche,
 on 2026-01-18.
 
+**Alerts** (2026-11-04). `src/avachain/alerts.py` e-mails the TOML's
+`[alerts] email` list through the local sendmail on:
+- a survey marked `FAILED`. The mail names the step and carries the last
+  40 log lines, and says to rename the marker to `.READY` once fixed;
+- a runout failure, while the run stays successful;
+- a daily run that exits non-zero, naming the last step it reached;
+- no daily run for 26 h during the season. `check-daily` runs at 17 UTC from
+  cron.d and catches what no run can report itself: cron or the host down.
+
+With an empty list the alert is only printed to the run's log. An alert never
+fails the run that sends it.
+
 **Logs:** one file per run under `logs/<path>/`, and `logs/<path>/cron_<path>.log`
 for cron's own output. The marker body of a failed survey points to its log.
 

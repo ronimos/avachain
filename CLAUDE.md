@@ -440,6 +440,14 @@ scoured clusters.
   `little_professor.yaml`.
 - Slopes without `[runout]` (all the dev slopes) skip the step.
 
+## Alerts
+
+`alerts.py` mails `[alerts] email` (local sendmail) on a FAILED survey, a
+runout failure, a failed daily run, and no daily run for 26 h (cron,
+`check-daily`). A new failure path in the run scripts should call `$ALERT`,
+and never let an alert change the exit status. In tests, `$AVACHAIN_SENDMAIL`
+points at a fake.
+
 ## Output layout
 
 `output_dir` is slope-namespaced: `outputs/<slope_name>/`. For Little
