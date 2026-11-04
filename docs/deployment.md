@@ -137,6 +137,16 @@ and HS as nodata. The forecast pass reads them with
 `slopes/<path>/config/master_config_forecast.ini`, which drops HS forcing.
 Observed SMETs never carry forecast rows. See `docs/season_start.md` §5.
 
+**WRF archive.** The CAIC run deletes `/ssd/snowpack/fcst/<season>/` and
+rebuilds it every morning (about 07:40–07:55 local), so each cycle's forecast
+is overwritten by the next. `src/avachain/wrf_archive.py` runs hourly from cron
+and keeps one snapshot per cycle of the slope's grid cell (all files, about
+1 MB) in `work/weather/wrf_archive/<season>/<zone>/<cell>/<cycle UTC>/`, with a
+`manifest.json` of sha256 sums. It skips files younger than 10 min and cycles
+identical to the last snapshot. This archive is what a 2026-27 forecast-skill
+check needs; 2025-26 has none. A run that reads the live WRF file during the
+rebuild window finds it missing (`RefillError`).
+
 The SMET files the chain writes (`work/snowpack/<path>/input/smet/`) hold
 **°C, % and cm**, because SNOWPACK applies the header's offsets and multipliers
 when it reads them. Never write SI values into them.
