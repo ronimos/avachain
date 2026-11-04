@@ -1684,7 +1684,7 @@ def depth_from_snowpack(cluster_map: np.ndarray,
         warnings.simplefilter('ignore')
         ds_t = ds.isel(time=tidx).compute()
         sq   = [d for d in ['slope', 'realization'] if d in ds_t.dims]
-        hs   = ds_t['HS'].squeeze(sq).values    # cm, (n_locations,)
+        hs   = ds_t['HS'].squeeze(sq).values    # m, (n_locations,)
 
     locs    = ds.coords['location'].values
     loc_ids = np.array([int(str(l).split('_')[-1]) for l in locs])
@@ -1715,7 +1715,12 @@ def depth_from_snowpack(cluster_map: np.ndarray,
                 pass
 
         if slab_depth_m is None:
-            slab_depth_m = h * wl_fraction / 100.0  # cm → m
+            # HS in the Zarr store is in metres (its attrs say so; CLAUDE.md
+            # "Units inside the store"). This divided by 100 as if it were cm,
+            # so every cluster without a slab thickness got a release depth
+            # 100x too small (found 2026-11-04; the same mistake was fixed for
+            # scour depth in 52fe333).
+            slab_depth_m = h * wl_fraction
             n_from_fallback += 1
 
         depth_m[cluster_map == cid] = slab_depth_m
