@@ -39,6 +39,8 @@ AWS="python $PROJECT_DIR/src/avachain/aws_ingest.py --toml $TOML"
 SMET_APPEND="python $PROJECT_DIR/src/avachain/smet_append.py --toml $TOML"
 NWP="python $PROJECT_DIR/src/avachain/nwp_ingest.py --toml $TOML"
 CYCLE="python $PROJECT_DIR/src/avachain/snowpack_cycle.py --toml $TOML"
+# Alerts ([alerts] email in the TOML; prints only when none). Never fails.
+ALERT="python $PROJECT_DIR/src/avachain/alerts.py --toml $TOML send"
 VENV=$PROJECT_DIR/.venv/bin/activate
 # Every directory comes from the TOML (config.py --print-paths sets AVA_*),
 # never from $PROJECT_DIR/outputs/...: a deployment relocates them.
@@ -71,6 +73,18 @@ mkdir -p "$LOG_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOGFILE="$LOG_DIR/daily_${TIMESTAMP}.log"
 exec > >(tee -a "$LOGFILE") 2>&1
+
+# A failed daily run used to leave only its log. Alert on any non-zero exit,
+# naming the last step it reached. Signals exit 128+n so a kill is a failure.
+_daily_exit() {
+    local rc=$?
+    [[ $rc -eq 0 ]] && return
+    local step
+    step=$(grep '>>> Step' "$LOGFILE" 2>/dev/null | tail -1 | sed 's/^>>> //')
+    $ALERT --subject "daily run FAILED (exit $rc) at ${step:-start}" --log "$LOGFILE" || true
+}
+trap _daily_exit EXIT
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 
 echo "============================================================"
 echo "  Little Professor (replay) — Daily Forward Pipeline"
@@ -177,6 +191,7 @@ if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
         RUNOUT_STATUS="FAILED (exit $?)"
         echo "WARNING: runout $RUNOUT_STATUS. The run stays successful. Rerun runout alone:"
         echo "    python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG"
+        $ALERT --subject "runout $RUNOUT_STATUS"             --body "Snowpack and release finished and are published; the run stays successful. Rerun runout alone: python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG"             --log "$LOGFILE" || true
     fi
 else
     echo "    Runout skipped (--no-runout or --no-scenarios)"

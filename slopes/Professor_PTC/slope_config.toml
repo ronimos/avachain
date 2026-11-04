@@ -145,3 +145,12 @@ path_profile = "Professor_PTC"                       # runout/config/paths/<name
 work_dir     = "/home/avachain/work/runout/Professor_PTC"
 publish_root = "/home/www/html/ron/runout_forecast"  # -> forecasts/Professor_PTC/<date>/, latest/
 lock_file    = "/home/avachain/work/runout/.runout.lock"   # one for every slope: 4 sims at most
+
+# ---------------------------------------------------------------------------
+# [alerts] — who is told when the chain needs attention (alerts.py): a survey
+# marked FAILED, a runout failure, a failed daily run, and (cron, 17 UTC) no
+# daily run for 26 h in the season. Sent through the local sendmail. With an
+# empty list alerts are only printed to the run's log.
+# ---------------------------------------------------------------------------
+[alerts]
+email = []          # e.g. ["name@state.co.us", "other@example.org"]
