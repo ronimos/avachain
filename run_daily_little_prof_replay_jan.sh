@@ -17,12 +17,14 @@
 #      today's T_stable, save the new anchor, replace the main Zarr after the
 #      old anchor, run the forecast into the separate forecast store
 #   5. analyze, then scenarios unless --no-scenarios
+#   6. runout on the published set (runout_step.py) unless --no-runout
 #
 # Usage:
 #   ./run_daily_little_prof_replay_jan.sh
 #   ./run_daily_little_prof_replay_jan.sh --snapshot 2026-02-15
 #   ./run_daily_little_prof_replay_jan.sh --no-nwp
 #   ./run_daily_little_prof_replay_jan.sh --no-scenarios
+#   ./run_daily_little_prof_replay_jan.sh --no-runout
 #   ./run_daily_little_prof_replay_jan.sh --dry-run        # report SMET appends only
 #
 # Cron: the lines install.py prints ([cron] daily_hour_utc, under the same
@@ -51,6 +53,7 @@ LOG_DIR=$AVA_LOGS_DIR
 SNAPSHOT_DATE=""
 NO_NWP=0
 NO_SCENARIOS=0
+NO_RUNOUT=0
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -58,6 +61,7 @@ while [[ $# -gt 0 ]]; do
         --snapshot)     SNAPSHOT_DATE="$2"; shift 2 ;;
         --no-nwp)       NO_NWP=1; shift ;;
         --no-scenarios) NO_SCENARIOS=1; shift ;;
+        --no-runout)    NO_RUNOUT=1; shift ;;
         --dry-run)      DRY_RUN=1; shift ;;
         *)              echo "Unknown arg: $1"; exit 1 ;;
     esac
@@ -105,7 +109,12 @@ step3_start=$SECONDS
 NWP_EDATE=""
 STABLE_TS=""
 if [[ $NO_NWP -eq 0 ]]; then
-    $NWP --lead-hours 48 || echo "    WARNING: nwp_ingest failed — continuing without NWP extension"
+    # T_stable only when nwp_ingest wrote the forecast SMETs: otherwise the
+    # forecast pass would run on missing or stale ones.
+    NWP_OK=1
+    $NWP --lead-hours 48 || { NWP_OK=0; echo "    WARNING: nwp_ingest failed — continuing without NWP extension"; }
+    _ts_output=""
+    if [[ $NWP_OK -eq 1 ]]; then
     _ts_output=$(python3 -c "
 import sys; sys.path.insert(0, '$PROJECT_DIR/src/avachain')
 from nwp_ingest import get_stable_ts
@@ -120,6 +129,7 @@ if wrf and wrf.exists():
         print(ts.strftime('%Y-%m-%dT%H:%M'),
               (ts + pd.Timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M'))
 " 2>/dev/null)
+    fi
     if [[ -n "$_ts_output" ]]; then
         STABLE_TS=$(echo "$_ts_output" | cut -d' ' -f1)
         NWP_EDATE=$(echo "$_ts_output" | cut -d' ' -f2)
@@ -153,6 +163,28 @@ fi
 step5_elapsed=$((SECONDS - step5_start))
 echo ""
 
+echo ">>> Step 6: Runout (com1DFA) on the published release set"
+step6_start=$SECONDS
+RUNOUT_STATUS="skipped"
+if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
+    CURRENT_STEP="Step 6: Runout"
+    # A runout failure does not fail the run: snowpack and release succeeded
+    # and are published, and a FAILED survey would redo SNOWPACK to retry
+    # runout (Ron, 2026-11-04). A kill still ends FAILED (signal traps).
+    if python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG; then
+        RUNOUT_STATUS="ok"
+    else
+        RUNOUT_STATUS="FAILED (exit $?)"
+        echo "WARNING: runout $RUNOUT_STATUS. The run stays successful. Rerun runout alone:"
+        echo "    python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG"
+    fi
+else
+    echo "    Runout skipped (--no-runout or --no-scenarios)"
+fi
+step6_elapsed=$((SECONDS - step6_start))
+echo ""
+
+
 total_elapsed=$SECONDS
 echo "============================================================"
 echo "  Daily forward complete"
@@ -163,5 +195,6 @@ echo "  Step 2 (smet_append): $((step2_elapsed / 60))m $((step2_elapsed % 60))s"
 echo "  Step 3 (nwp_ingest):  $((step3_elapsed / 60))m $((step3_elapsed % 60))s"
 echo "  Step 4 (SNOWPACK):    $((step4_elapsed / 60))m $((step4_elapsed % 60))s"
 echo "  Step 5 (analysis):    $((step5_elapsed / 60))m $((step5_elapsed % 60))s"
+echo "  Step 6 (runout):      $((step6_elapsed / 60))m $((step6_elapsed % 60))s  $RUNOUT_STATUS"
 echo "  Log:       $LOGFILE"
 echo "============================================================"

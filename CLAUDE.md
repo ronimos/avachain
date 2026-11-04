@@ -345,8 +345,11 @@ on, `src/avachain/wrf_archive.py` (hourly cron) keeps every cycle of the
 slope's grid cell under `work/weather/wrf_archive/<season>/<zone>/<cell>/
 <cycle UTC>/`. Read a historical forecast from there, never from
 `/ssd/snowpack/fcst/`: the CAIC run **deletes and rebuilds that tree every
-morning (~07:40–07:55 local)**, so the live file is always today's cycle, and
-it is briefly absent while the rebuild runs.
+morning (~07:40–07:55 local)**, so the live file is always today's cycle. In
+that window it is missing, and then present **without its forecast rows**. A
+reader there would build a short forecast without any error. Every reader
+goes through `nwp_ingest.wait_for_wrf`; a new reader must too. In tests,
+`tests/conftest.py` sets the wait to zero.
 
 ## Avalanche events and the reinit — Jan 18 is the only avalanche
 
@@ -417,6 +420,25 @@ scoured clusters.
   remember that bash cannot trap a signal that was ignored when it started:
   a pytest run as a background job (`… &`) ignores SIGINT, so start such
   children with default handlers.
+
+## Runout in the chain
+
+- `runout/` is its own uv project with its own venv (`runout/.venv`, built by
+  `install.py` when the TOML has `[runout]`). AvaFrame 2.1 needs numpy < 2 and
+  xsnow needs numpy >= 2.3, so the two can never share a venv. Don't import
+  runout code from avachain or the other way round: `runout_step.py` calls it
+  as a subprocess. The runout package is named `scripts`, and its `config.py`
+  clashes with avachain's.
+- `runout_step.py` reads a release set only after `handoff.verify`: `READY`
+  present, and every file matching the manifest's sha256.
+- Every runout on the host takes the one `[runout] lock_file`. The 4-sim
+  cap is per run; the lock makes it hold across slopes. More than 4 sims at
+  once ran the 256 GB host out of memory on 2026-11-02.
+- The deployment's runout path profile is `runout/config/paths/Professor_PTC.yaml`,
+  with **absolute** `/home/avachain/data/static` paths, because runout's
+  `avachain_root` is its per-path work dir. Keep its `display:` in step with
+  `little_professor.yaml`.
+- Slopes without `[runout]` (all the dev slopes) skip the step.
 
 ## Output layout
 

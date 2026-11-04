@@ -21,6 +21,7 @@
 #   ./run_little_prof.sh --no-nwp                 # skip NWP forecast extension
 #   ./run_little_prof.sh --no-cluster-update      # keep cluster ids frozen
 #   ./run_little_prof.sh --no-scenarios           # stop after analyze
+#   ./run_little_prof.sh --no-runout              # stop after scenarios
 #
 # Hand-labelled avalanches enter through the known-events file read by the
 # `avalanche` step, not through flags here.
@@ -58,6 +59,7 @@ DEPTH_PCTS="10 50 90"
 NO_NWP=0
 NO_CLUSTER_UPDATE=0
 NO_SCENARIOS=0
+NO_RUNOUT=0
 STABLE_TS=""
 
 while [[ $# -gt 0 ]]; do
@@ -69,6 +71,7 @@ while [[ $# -gt 0 ]]; do
         --no-nwp)            NO_NWP=1; shift ;;
         --no-cluster-update) NO_CLUSTER_UPDATE=1; shift ;;
         --no-scenarios)      NO_SCENARIOS=1; shift ;;
+        --no-runout)         NO_RUNOUT=1; shift ;;
         *)                   echo "Unknown arg: $1"; exit 1 ;;
     esac
 done
@@ -196,7 +199,12 @@ CURRENT_STEP="Step 2d: NWP forecast extension"
 step2d_start=$SECONDS
 NWP_EDATE=""
 if [[ $NO_NWP -eq 0 ]]; then
-    $NWP --lead-hours 48 || echo "    WARNING: nwp_ingest failed — continuing without NWP extension"
+    # T_stable only when nwp_ingest wrote the forecast SMETs: otherwise the
+    # forecast pass would run on missing or stale ones.
+    NWP_OK=1
+    $NWP --lead-hours 48 || { NWP_OK=0; echo "    WARNING: nwp_ingest failed — continuing without NWP extension"; }
+    _ts_output=""
+    if [[ $NWP_OK -eq 1 ]]; then
     _ts_output=$(python3 -c "
 import sys; sys.path.insert(0, '$PROJECT_DIR/src/avachain')
 from nwp_ingest import get_stable_ts
@@ -211,6 +219,7 @@ if wrf and wrf.exists():
         print(ts.strftime('%Y-%m-%dT%H:%M'),
               (ts + pd.Timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M'))
 " 2>/dev/null)
+    fi
     if [[ -n "$_ts_output" ]]; then
         STABLE_TS=$(echo "$_ts_output" | cut -d' ' -f1)
         NWP_EDATE=$(echo "$_ts_output" | cut -d' ' -f2)
@@ -252,6 +261,27 @@ step4_elapsed=$((SECONDS - step4_start))
 echo "    Done: $((step4_elapsed / 60))m $((step4_elapsed % 60))s"
 echo ""
 
+echo ">>> Step 5: Runout (com1DFA) on the published release set"
+step5_start=$SECONDS
+RUNOUT_STATUS="skipped"
+if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
+    CURRENT_STEP="Step 5: Runout"
+    # A runout failure does not fail the run: snowpack and release succeeded
+    # and are published, and a FAILED survey would redo SNOWPACK to retry
+    # runout (Ron, 2026-11-04). A kill still ends FAILED (signal traps).
+    if python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG; then
+        RUNOUT_STATUS="ok"
+    else
+        RUNOUT_STATUS="FAILED (exit $?)"
+        echo "WARNING: runout $RUNOUT_STATUS. The run stays successful. Rerun runout alone:"
+        echo "    python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG"
+    fi
+else
+    echo "    Runout skipped (--no-runout or --no-scenarios)"
+fi
+step5_elapsed=$((SECONDS - step5_start))
+echo ""
+
 total_elapsed=$SECONDS
 echo "============================================================"
 echo "  Little Professor — Operational update complete"
@@ -266,6 +296,7 @@ echo "  Step 2c (smet):            $((step2c_elapsed / 60))m $((step2c_elapsed %
 echo "  Step 2d (nwp_ingest):      $((step2d_elapsed / 60))m $((step2d_elapsed % 60))s"
 echo "  Step 3  (SNOWPACK cycle):  $((step3_elapsed / 60))m $((step3_elapsed % 60))s"
 echo "  Step 4  (analysis):        $((step4_elapsed / 60))m $((step4_elapsed % 60))s"
+echo "  Step 5  (runout):          $((step5_elapsed / 60))m $((step5_elapsed % 60))s  $RUNOUT_STATUS"
 echo ""
 echo "  Scenarios: $AVA_SCENARIOS_DIR/"
 echo "  Log:       $LOGFILE"
