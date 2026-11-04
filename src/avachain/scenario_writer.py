@@ -360,13 +360,15 @@ def write_metadata(out_path: Path,
                    mu: float,
                    xi: float,
                    a_ca_stats: Optional[dict] = None,
-                   trigger_source: str = 'model') -> None:
+                   trigger_source: str = 'model',
+                   n_below_depth_floor: int = 0) -> None:
     """
     Write run metadata JSON for the scenario ensemble.
 
     trigger_source is 'model' (gated, Sk38-ranked triggers) or
     'explosive_fallback' (the slope's shot locations, used when no cluster
-    passed the trigger gates).
+    passed the trigger gates). n_below_depth_floor counts the scenarios
+    dropped because their release held too little snow.
     """
     import subprocess, datetime
     try:
@@ -383,6 +385,7 @@ def write_metadata(out_path: Path,
         'n_scenarios':      n_scenarios,
         'n_trigger_locations': n_triggers,
         'trigger_source':   trigger_source,
+        'n_below_depth_floor': n_below_depth_floor,
         'size_factors':     size_factors,
         'depth_percentiles':depth_percentiles,
         'voellmy_mu':       mu,

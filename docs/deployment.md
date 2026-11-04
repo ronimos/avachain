@@ -181,9 +181,11 @@ are in the TOML's `[scenarios]` table; today that is 5 × 5 × 3.
 
 On a day when no cluster passes the trigger gates (a thin early-season pack),
 the triggers are the slope's explosive-control shot locations
-(`[scenarios] explosive_trigger_points`). A shot-location scenario holding
-< 0.10 m of snow on average is dropped. If nothing is left, the set is
-published **empty**: `manifest.json` and `READY`, no `scenarios/`.
+(`[scenarios] explosive_trigger_points`). Any scenario, model or shot
+location, whose release holds < 0.10 m of snow on average is dropped. If
+nothing is left, the set is published **empty**: `manifest.json` and `READY`,
+no `scenarios/`. `metadata.json` counts the dropped scenarios in
+`n_below_depth_floor`.
 
 `manifest.json` records:
 - `producer`, `snapshot_date` and `horizon`;

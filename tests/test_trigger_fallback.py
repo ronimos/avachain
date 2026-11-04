@@ -33,16 +33,24 @@ POINTS = [(39.6488366, -105.8788572), (39.6487075, -105.8782511),
 SHOTS = [3500, 2568, 2480, 4137]
 
 
-def _thin_day(tmp_path, monkeypatch, depth_m, points=POINTS):
-    """Run _build_scenarios on a thin day with a uniform slab depth."""
+def _thin_day(tmp_path, monkeypatch, depth_m, points=POINTS, model=False,
+             n_triggers=5, no_propagation=False):
+    """Run _build_scenarios with a uniform slab depth.
+
+    By default a thin day (no candidate passes the gates). model=True keeps
+    the real Jan 18 Meloche features, so the model's own triggers are used.
+    """
     d = fx.load()
     an = tmp_path / "analysis"
     an.mkdir()
     np.save(an / "cluster_map.npy", d['cluster_map'])
     snap = "2026-01-18"
     d['snap_features'].to_csv(an / f"all_start_zone_features_{snap}.csv")
-    mel = d['meloche_df'][['tau_g']].copy()
-    mel['tau_g'] = 10.0                       # below MIN_TAU_G: no candidates
+    if model:
+        mel = d['meloche_df']
+    else:
+        mel = d['meloche_df'][['tau_g']].copy()
+        mel['tau_g'] = 10.0                   # below MIN_TAU_G: no candidates
     mel.to_csv(an / f"meloche_features_all_{snap}.csv")
 
     cfg = SimpleNamespace(
@@ -52,8 +60,8 @@ def _thin_day(tmp_path, monkeypatch, depth_m, points=POINTS):
         release_geojsons_for_date=lambda _d: [])
     args = SimpleNamespace(
         snapshot_date=snap, max_slab_thickness=2.0, stauchwall_deg=29.0,
-        restrict_to_release_area=False, n_triggers=5, use_observed_release=False,
-        no_propagation=False, size_factors=[1.0], depth_pcts=[50],
+        restrict_to_release_area=False, n_triggers=n_triggers, use_observed_release=False,
+        no_propagation=no_propagation, size_factors=[1.0], depth_pcts=[50],
         max_clusters=2000, mu=0.155, xi=1500.0, pro_dir=None, zarr_path=None,
         slab_tensile_gate=None)
 
@@ -95,6 +103,25 @@ def test_shallow_shot_releases_are_dropped_and_recorded(tmp_path, monkeypatch):
                     "trigger_source": "explosive_fallback",
                     "n_below_depth_floor": 4}
     assert not (out / "summary.csv").exists()
+
+
+def test_the_depth_floor_applies_to_model_triggers(tmp_path, monkeypatch):
+    # Rehearsal 2025-11-30: both model triggers fell back to rectangles that
+    # averaged 0.01-0.03 m of snow. Ron, 11-04: the floor applies to them too.
+    # The floor is checked on the finished polygon, however it was built, so
+    # the rectangle (no_propagation) keeps the test fast.
+    out, meta = _thin_day(tmp_path, monkeypatch, depth_m=0.05, model=True,
+                          n_triggers=1, no_propagation=True)
+    assert meta["trigger_source"] == "model"
+    assert meta["n_scenarios"] == 0 and meta["n_below_depth_floor"] > 0
+    assert not (out / "summary.csv").exists()
+
+
+def test_model_triggers_above_the_floor_are_kept(tmp_path, monkeypatch):
+    out, meta = _thin_day(tmp_path, monkeypatch, depth_m=0.5, model=True,
+                          n_triggers=1, no_propagation=True)
+    assert meta["trigger_source"] == "model"
+    assert meta["n_scenarios"] > 0 and meta["n_below_depth_floor"] == 0
 
 
 def test_no_candidates_and_no_shot_locations_is_an_empty_set(tmp_path, monkeypatch):

@@ -778,9 +778,12 @@ def _build_scenarios(cfg, args, out_dir: Path):
                                raster_profile, start_zone_mask)
 
 
-# metres — a shot-location (fallback) scenario whose release holds less snow
-# than this on average is dropped. Ron, 2026-11-04.
-MIN_FALLBACK_RELEASE_DEPTH_M = 0.10
+# metres — a scenario whose release holds less snow than this on average is
+# dropped, whatever its trigger. Ron, 2026-11-04: first for the shot-location
+# fallback, then for model triggers too (rehearsal 2025-11-30: both model
+# triggers fell back to rectangles averaging 0.01-0.03 m). No Jan 18 scenario
+# is near it (shallowest 0.79 m of 150).
+MIN_RELEASE_DEPTH_M = 0.10
 # kg/m^3 — release density when no cluster in the polygon has a slab density
 # (the value the old release-group median fell back to).
 DEFAULT_SLAB_DENSITY = 280.0
@@ -1098,14 +1101,14 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
                 release_depth = rasterize_release_polygon(
                     polygon, scaled_depth, dem.shape, transform)
 
-                # A shot location on a thin or scoured pack gives a polygon
-                # with almost no snow in it (11-27: 0-3 mm). Not worth a
-                # com1DFA run, and not a release (Ron, 2026-11-04).
-                if trigger_source == 'explosive_fallback':
-                    _md = _release_mean_depth(release_depth)
-                    if _md < MIN_FALLBACK_RELEASE_DEPTH_M:
-                        n_below_floor += 1
-                        continue
+                # On a thin or patchy pack a release polygon can hold almost
+                # no snow: shot locations on 11-27 (0-3 mm), and model
+                # triggers whose rectangle fallback spans thin cells on 11-30
+                # (10-30 mm). Not a release, and not worth a com1DFA run
+                # (Ron, 2026-11-04).
+                if _release_mean_depth(release_depth) < MIN_RELEASE_DEPTH_M:
+                    n_below_floor += 1
+                    continue
 
                 density_mean, density_std = _polygon_density(
                     polygon, cluster_map, snap_features, transform)
@@ -1166,21 +1169,19 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
                                    'trigger': t_cid}
 
     if n_below_floor:
-        print(f"  Dropped {n_below_floor} shot-location scenarios with mean "
-              f"release depth < {MIN_FALLBACK_RELEASE_DEPTH_M} m")
+        print(f"  Dropped {n_below_floor} scenarios ({trigger_source} triggers) "
+              f"with mean release depth < {MIN_RELEASE_DEPTH_M} m")
     if not rows and n_below_floor:
-        print("  No shot-location release holds enough snow — "
-              "publishing an empty scenario set")
+        print("  No release holds enough snow — publishing an empty scenario set")
     elif not rows:
         print("WARNING: No scenarios generated — check trigger clusters and Meloche features")
     if not rows:
-        if trigger_source != 'model':
-            # Still record why the set is empty: the manifest reads this.
-            (out_dir / "metadata.json").write_text(json.dumps(
-                {'snapshot_date': args.snapshot_date, 'n_scenarios': 0,
-                 'n_trigger_locations': len(triggers),
-                 'trigger_source': trigger_source,
-                 'n_below_depth_floor': n_below_floor}, indent=2))
+        # Still record why the set is empty: the manifest reads this.
+        (out_dir / "metadata.json").write_text(json.dumps(
+            {'snapshot_date': args.snapshot_date, 'n_scenarios': 0,
+             'n_trigger_locations': len(triggers),
+             'trigger_source': trigger_source,
+             'n_below_depth_floor': n_below_floor}, indent=2))
         return out_dir
 
     # Normalise weights to sum to 1
@@ -1199,6 +1200,7 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
         n_scenarios       = len(rows),
         n_triggers        = len(triggers),
         trigger_source    = trigger_source,
+        n_below_depth_floor = n_below_floor,
         size_factors      = args.size_factors,
         depth_percentiles = args.depth_pcts,
         mu                = args.mu,
