@@ -114,3 +114,8 @@ wrf_dist_km   = 0.714
 hour_utc       = 3
 poll_minutes   = 10
 daily_hour_utc = 13
+# The jobs (survey poll, daily run, hourly WRF archive) go to one /etc/cron.d
+# file, not a personal crontab (Ron, 2026-11-04). install.py writes it to
+# crond_dir/avachain-<slope>; install it with the sudo command it prints.
+user           = "ron"
+crond_dir      = "/home/avachain/cron"

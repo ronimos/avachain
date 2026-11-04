@@ -253,17 +253,17 @@ cluster count.
 
 ## Step 6 — Set up the daily cron job
 
-The installer printed a crontab line at the end.  To activate it:
+The installer writes the slope's jobs to `[cron] crond_dir/avachain-<name>`,
+in `/etc/cron.d` format and running as `[cron] user`. That covers the survey
+run (or the survey poll with markers), the daily run, and the hourly WRF
+archive. It prints the command to install the file as root:
 
 ```bash
-crontab -e
+sudo install -m 644 -o root -g root <crond_dir>/avachain-<name> /etc/cron.d/avachain-<name>
 ```
 
-Paste the printed line, for example:
-
-```
-0 3 * * * /home/ron/snowpack_model_feeder/run_<name>.sh >> /home/ron/snowpack_model_feeder/outputs/logs/cron_<name>.log 2>&1
-```
+Reinstall it after every `install.py` run, and do not put the same jobs in a
+personal crontab.
 
 The daily script (`run_<name>.sh`) runs the incremental operational pipeline after
 each afternoon survey flight:

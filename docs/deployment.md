@@ -262,6 +262,21 @@ marker. `run_daily_Professor_PTC.sh` fires once at `[cron] daily_hour_utc`
 files. A poll that finds the lock taken skips that tick, and its survey stays
 `READY` for the next one. The daily run waits for the lock instead.
 
+**Where the cron jobs live** (Ron, 2026-11-04): in one system file per slope,
+`/etc/cron.d/avachain-<path>`, running as the TOML's `[cron] user` (`ron`), not
+in a personal crontab. `install.py` writes the source to `[cron] crond_dir`
+(`/home/avachain/cron/avachain-<path>`): the survey poll, the daily run and the
+hourly WRF archive. It then prints the command to install it:
+
+```bash
+sudo install -m 644 -o root -g root /home/avachain/cron/avachain-Professor_PTC /etc/cron.d/avachain-Professor_PTC
+```
+
+cron reads only root-owned files there, and skips symlinks and names with a
+dot, so it must be a copy, and it must be reinstalled after every
+`install.py`. Edit the TOML, never the installed file. Keep no avachain lines in
+personal crontabs, or the jobs run twice.
+
 A survey run restarts from the previous survey's state. A daily run restarts
 from the daily anchor, never from a forecast state.
 

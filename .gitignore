@@ -86,3 +86,4 @@ ffmpeg*/
 snowpack/*/comparison/
 # Test fixtures are small, synthetic and must be tracked.
 !tests/fixtures/*.pro
+/cron/
