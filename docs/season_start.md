@@ -96,7 +96,9 @@ From then on `run_daily_<slope>.sh` carries the state forward every morning.
 A survey cycle re-runs SNOWPACK from the survey anchor. For the season's first
 survey that anchor is bare ground, so the whole early season is re-run on
 forcing rebuilt from the survey. `gap_fill`'s bare-ground segment ramps from the
-station's HS timing to the survey's HS at the flight hour. The survey anchor then
+station's HS timing to the survey's HS at the flight hour. The timing stays the
+station's, not WRF's (Ron, 2026-11-04), even though the A-Basin base station
+melted out after every October storm while the WRF column kept 11–19 cm. The survey anchor then
 moves to the survey, and later surveys behave as in any season. On a survey,
 the `smet` step rewrites only the rows after the previous survey anchor:
 3–4 min instead of about 1 h 15 min for 6 565 clusters.
@@ -134,8 +136,10 @@ Sk38 < 1, slab 0.5–2.0 m, tensile support). `scenarios` used to raise
   trigger is the cluster that contains the point on the current map, so the
   points hold for any season's map. They get no gate, ranking or Π₁ test, and
   equal weight. The release model still decides what each one releases;
-- a shot-location scenario whose release holds less than **0.10 m** of snow on
-  average is dropped (`MIN_FALLBACK_RELEASE_DEPTH_M`);
+- any scenario, model or shot location, whose release holds less than
+  **0.10 m** of snow on average is dropped (`MIN_RELEASE_DEPTH_M`). A model
+  trigger with a real slab can still give a near-empty polygon on a patchy
+  pack (run 5 below);
 - if none is left, the set is published empty: manifest `status:
   "no_scenarios"`, `n_scenarios: 0`, and the survey ends DONE. The manifest's
   `trigger_source` is `"model"` or `"explosive_fallback"`, so runout and the
@@ -155,7 +159,8 @@ and 4137.
 | 4 | 11-04 | NWP on, with fallback. **251126 DONE**: forecast pass to 11-29 00:00 with no errors. The fallback's 60 releases held 0–3 mm (HS 0 at three of the four points) and were all dropped, so the set was empty. 251129 failed in a gap-fill plot (one period); fixed in 907db7d. |
 | 5 | 11-04 | **251129 DONE, exit 0**, 43 min. This is the first normal survey cycle (11-26 → 11-29) of the season. The auto-detected period is `wind_scour` (transport correction, no reinit). The survey anchor held on 5 334/5 334 clusters (model − survey p1 −9.2 / p99 +1.8 cm). The forecast pass ran to 12-02 00:00 with no errors. The model found 2 triggers (Sk38 0.25 / 0.31, slab 0.68 / 1.11 m) and published 30 scenarios, `trigger_source: "model"`, density 116–117 kg/m³. |
 
-Open from run 5: both triggers fell back to the oriented rectangle (790–1 630
-m²), and those rectangles average only 0.01–0.03 m of snow. The 0.10 m floor
-applies only to shot-location scenarios, so near-empty model scenarios still
-go to runout. `main` behaved the same way before this work.
+In run 5 both triggers fell back to the oriented rectangle (790–1 630 m²), and
+those rectangles averaged only 0.01–0.03 m of snow. Ron, 11-04: the 0.10 m
+floor now applies to model triggers too. Rerun on that day, all 30 are
+dropped and the set publishes as `no_scenarios` with `trigger_source:
+"model"`.

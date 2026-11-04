@@ -398,9 +398,9 @@ scoured clusters.
 - **An empty scenario set is a valid result.** On a no-candidate day the
   triggers are the shot locations, `[scenarios] explosive_trigger_points`.
   These are **[lat, lon] points, never cluster IDs**: IDs change with every
-  cluster map, the shot locations don't. If every shot release holds
-  < 0.10 m, the set publishes as `status: "no_scenarios"` and the run ends
-  DONE. On such a day `meloche_df` has **no arrest-index columns at all**
+  cluster map, the shot locations don't. Any release, model or shot,
+  holding < 0.10 m on average is dropped (`MIN_RELEASE_DEPTH_M`). If none is
+  left, the set publishes as `status: "no_scenarios"` and the run ends DONE. On such a day `meloche_df` has **no arrest-index columns at all**
   (nothing reached `TAU_G_FEATURE_FLOOR`), so guard column access, not just
   row access.
 - **Release density is per polygon.** It comes from the clusters inside the

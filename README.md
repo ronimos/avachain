@@ -266,11 +266,16 @@ leave nothing.
 **No candidate (thin early-season pack).** When steps 1–3 leave nothing, the
 triggers are the slope's explosive-control shot locations,
 `[scenarios] explosive_trigger_points` ([lat, lon] WGS84). Each one is the
-cluster under the point on the current map. They take equal weight, and a
-shot-location scenario whose release holds < 0.10 m of snow on average is
-dropped. If nothing is left, an empty set is published (`status:
-"no_scenarios"`) and the run ends DONE. That is the model's "no release"
-answer. Before 2026-11-04 this case raised `ValueError` and failed the survey.
+cluster under the point on the current map, and they take equal weight.
+Before 2026-11-04 this case raised `ValueError` and failed the survey.
+
+**Release depth floor.** Any scenario, whatever its trigger, whose release
+holds < 0.10 m of snow on average is dropped (`MIN_RELEASE_DEPTH_M`). If
+nothing is left, an empty set is published (`status: "no_scenarios"`) and the
+run ends DONE. That is the model's "no release" answer. On a thin, patchy pack
+a model trigger with a real slab can still give a near-empty polygon: on
+2025-11-30, slabs of 0.68 and 1.11 m gave rectangles averaging 0.01–0.03 m.
+No Jan 18 scenario comes near the floor (shallowest 0.79 m of 150).
 
 **Physics-based BFS model.** A deterministic flood-fill from each trigger
 through the k = 8 cluster neighbour graph. It arrests on:
