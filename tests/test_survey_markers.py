@@ -191,6 +191,29 @@ class TestOperationalScript:
         rec = json.loads(sm.marker_path(tif, "FAILED").read_text())
         assert rec["failed_step"] == "Step 3: SNOWPACK" and rec["exit_code"] == 1
 
+    @pytest.mark.parametrize("sig, rc", [(15, 143), (2, 130), (1, 129)])
+    def test_a_killed_run_is_failed_not_done(self, tmp_path, sig, rc):
+        # Under SIGTERM/INT/HUP bash runs the EXIT trap with $? from the last
+        # command that finished (the step before), usually 0. Without signal
+        # traps a run killed mid-step (reboot, OOM, kill) was marked DONE and
+        # its survey never retried: found 2026-11-03 killing a rehearsal run
+        # in gap_fill, which left 251126 DONE.
+        import signal
+        import time
+        tif = _survey(tmp_path, D1, "READY")
+        script = self._script(tmp_path, 'CURRENT_STEP="Step 2: Gap-fill"\n'
+                                        'echo started\nsleep 30 >/dev/null 2>&1 & wait $!')
+        p = subprocess.Popen(["bash", str(script)], stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+        assert p.stdout.readline().strip() == "started"
+        time.sleep(0.2)
+        p.send_signal(sig)
+        p.communicate(timeout=20)
+        assert p.returncode == rc
+        assert sm.state_of(tif) == "FAILED"
+        rec = json.loads(sm.marker_path(tif, "FAILED").read_text())
+        assert rec["exit_code"] == rc and rec["failed_step"] == "Step 2: Gap-fill"
+
     def test_success_is_recorded_as_done(self, tmp_path):
         tif = _survey(tmp_path, D1, "READY")
         r = self._run(self._script(tmp_path, 'echo "claimed $CLAIMED"'))

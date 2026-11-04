@@ -566,6 +566,10 @@ _finish_marker() {{
     fi
 }}
 trap _finish_marker EXIT
+# A signal must not reach the EXIT trap as success: bash runs it with $? from
+# the last finished command, so a run killed mid-step (reboot, OOM, kill)
+# was marked DONE and its survey never retried. Exit 128+n instead.
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 
 exec > >(tee -a "$LOGFILE") 2>&1
 
