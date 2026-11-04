@@ -1220,7 +1220,14 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
     plot_path = out_dir / f"release_comparison_{mode_str}{args.snapshot_date}_physical_model.png"
     print(f"  Output path: {plot_path}")
     try:
-        obs_poly   = _load_observed_release_polygon(cfg, args.snapshot_date)
+        # A live date has no observed release: plot the model alone. This
+        # used to raise, so every operational run logged a traceback and
+        # wrote no plot.
+        try:
+            obs_poly = _load_observed_release_polygon(cfg, args.snapshot_date)
+        except FileNotFoundError:
+            obs_poly = None
+            print("  No observed release for this date: plotting the model only")
         poly_pairs = [(p, sf) for p, sf, _ in median_polygons]
         t_labels   = [lbl for _, _, lbl in median_polygons]
 
@@ -1253,10 +1260,11 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
             most_likely_polygon = ml_poly,
             most_likely_label   = ml_label,
             out_path         = plot_path,
-            title            = (f"Release polygon comparison — {args.snapshot_date} | "
-                               f"Little Professor | Jan 18 event\n"
-                               f"Blue = Model-derived  Red = Observed  "
-                               f"Green = Start zone  Black dashed = Most likely"),
+            title            = (f"Release polygons — {args.snapshot_date} | {cfg.slope_name}"
+                               + (" | observed release" if obs_poly is not None else "")
+                               + "\nBlue = Model-derived  "
+                               + ("Red = Observed  " if obs_poly is not None else "")
+                               + "Green = Start zone  Black dashed = Most likely"),
         )
     except Exception:
         print("WARNING: comparison plot failed — full traceback:")
