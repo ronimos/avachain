@@ -59,9 +59,19 @@ markers = true
 [snowpack]
 binary     = "/home/caic/caic/rtsys/snowpack/exe/snowpack"
 lib_dir    = "/home/caic/caic/rtsys/snowpack/src/snowpack/lib"
-season_start      = "2025-10-01"
-season_end        = "2026-03-31"
+# 2026-27 (Ron, 2026-11-04, "for now"). The season starts from bare ground on
+# season_start (season_start.py bootstrap): it must be snow-free and on or after
+# the WRF refill file's first row (2026-10-14 12:00). Snow on the ground at
+# season_start is not in the simulation. 2025-26: 2025-10-01 .. 2026-03-31.
+season_start      = "2026-11-20"
+season_end        = "2027-05-15"
+start_from_bare_ground = true
 max_parallel_jobs = 30
+
+# Station data from the database cache (work/weather/<station>.parquet, filled
+# by aws_ingest.py), no CSV this season.
+[weather]
+source = "cache"
 
 [[stations]]
 role        = "summit"
