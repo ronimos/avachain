@@ -313,8 +313,9 @@ def step_analyze(cfg, args):
 
     # Skip if both output CSVs exist and are newer than the Zarr store.
     # Pass --force to bypass this check.
-    feat_csv = cfg.analysis_dir / f"all_start_zone_features_{args.snapshot_date}.csv"
-    mel_csv  = cfg.analysis_dir / f"meloche_features_all_{args.snapshot_date}.csv"
+    fdir     = features_dir(cfg, args)
+    feat_csv = fdir / f"all_start_zone_features_{args.snapshot_date}.csv"
+    mel_csv  = fdir / f"meloche_features_all_{args.snapshot_date}.csv"
     if not getattr(args, 'force', False) and feat_csv.exists() and mel_csv.exists():
         zarr_mtime = zarr_path.stat().st_mtime if zarr_path.exists() else 0
         if feat_csv.stat().st_mtime > zarr_mtime and mel_csv.stat().st_mtime > zarr_mtime:
@@ -327,7 +328,10 @@ def step_analyze(cfg, args):
               '--project-dir', str(cfg.project_dir),
               '--pro-dir',     str(args.pro_dir),
               '--zarr-path',   str(args.zarr_path),
-              '--snapshot-date', args.snapshot_date]
+              '--snapshot-date', args.snapshot_date,
+              '--features-dir', str(fdir)]
+    if getattr(args, 'snapshot_ts', None):
+        cmd += ['--snapshot-ts', str(args.snapshot_ts)]
     if getattr(args, 'toml', None):
         cmd += ['--toml', str(args.toml)]
     if args.classifier:
@@ -535,6 +539,19 @@ def _write_arrest_state(state: dict, sdir: Path):
         rej.to_csv(sdir / 'rejected.csv')
 
 
+def features_dir(cfg, args) -> Path:
+    """Folder of the per-date feature CSVs: --features-dir, else the analysis dir."""
+    d = getattr(args, 'features_dir', None)
+    return Path(d) if d else cfg.analysis_dir
+
+
+def resolve_snapshot_ts(cfg, args) -> None:
+    """--snapshot-ts, else [scenarios] snapshot_hour_utc on the snapshot date,
+    else None (the historical per-read hours)."""
+    if getattr(args, 'snapshot_ts', None) is None and cfg.snapshot_hour_utc is not None:
+        args.snapshot_ts = f"{args.snapshot_date}T{cfg.snapshot_hour_utc:02d}:00"
+
+
 def scenario_set_dir(cfg, args) -> Path:
     """Where a scenario set is published: <scenarios_dir>/<date>[/<horizon>]."""
     base = cfg.scenarios_dir / args.snapshot_date
@@ -602,10 +619,11 @@ def _build_scenarios(cfg, args, out_dir: Path):
     # The analyze step now produces full start zone features by default.
     # Fall back to group-level CSVs for backward compatibility with
     # older analysis outputs.
-    feat_csv_all = cfg.analysis_dir / f"all_start_zone_features_{args.snapshot_date}.csv"
-    feat_csv_grp = cfg.analysis_dir / f"release_zone_features_{args.snapshot_date}.csv"
-    mel_csv_all  = cfg.analysis_dir / f"meloche_features_all_{args.snapshot_date}.csv"
-    mel_csv_grp  = cfg.analysis_dir / f"meloche_features_{args.snapshot_date}.csv"
+    fdir         = features_dir(cfg, args)
+    feat_csv_all = fdir / f"all_start_zone_features_{args.snapshot_date}.csv"
+    feat_csv_grp = fdir / f"release_zone_features_{args.snapshot_date}.csv"
+    mel_csv_all  = fdir / f"meloche_features_all_{args.snapshot_date}.csv"
+    mel_csv_grp  = fdir / f"meloche_features_{args.snapshot_date}.csv"
 
     if feat_csv_all.exists():
         feat_csv = feat_csv_all
@@ -951,7 +969,8 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
 
     # --- Slab depth grid for snapshot ---
     full_depth = depth_from_snowpack(cluster_map, ds, args.snapshot_date,
-                                     snap_features=snap_features)
+                                     snap_features=snap_features,
+                                     snapshot_ts=getattr(args, 'snapshot_ts', None))
 
     # --- Domain-wide entrainable scour depth raster ---
     # Run the failure-plane-to-hard-layer scan for every cluster in the domain
@@ -959,7 +978,8 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
     # com1DFA can use this as a spatially variable entrainable-depth input
     # (each cell caps how deep the flowing avalanche can scour old snow).
     print(f"\nBuilding domain scour depth map ...")
-    snap_ts_sd = np.datetime64(f"{args.snapshot_date}T18:00")
+    snap_ts_sd = np.datetime64(getattr(args, 'snapshot_ts', None)
+                               or f"{args.snapshot_date}T18:00")
     scour_depth_map = _build_scour_depth_map(ds, cluster_map, snap_features, snap_ts_sd)
 
     scour_raster = np.full(cluster_map.shape, np.nan, dtype=np.float32)
@@ -1300,6 +1320,13 @@ def build_parser():
     parser.add_argument('--snapshot-date', default=None,
                         help='SNOWPACK snapshot date YYYY-MM-DD (default: the '
                              'replay clock $AVACHAIN_AS_OF, else today UTC)')
+    parser.add_argument('--snapshot-ts', default=None,
+                        help='Snapshot time YYYY-MM-DDTHH:MM (UTC) for every read '
+                             '(default: [scenarios] snapshot_hour_utc on the snapshot '
+                             'date; without it the historical per-read hours)')
+    parser.add_argument('--features-dir', type=Path, default=None,
+                        help='Folder of the per-date feature CSVs (default: the '
+                             'analysis dir). Forecast days use their own.')
 
     # zarr_build
     parser.add_argument('--batch-size', type=int, default=100)
@@ -1393,6 +1420,7 @@ def main():
     else:
         cfg  = ProjectConfig(project_dir=args.project_dir)
     cfg.ensure_dirs()
+    resolve_snapshot_ts(cfg, args)
 
     # Fill None args from config defaults
     if args.pro_dir is None:

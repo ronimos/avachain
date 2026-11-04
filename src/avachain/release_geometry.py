@@ -1653,7 +1653,8 @@ def depth_from_snowpack(cluster_map: np.ndarray,
                         ds: xr.Dataset,
                         snapshot: str,
                         snap_features: pd.DataFrame = None,
-                        wl_fraction: float = 0.80) -> np.ndarray:
+                        wl_fraction: float = 0.80,
+                        snapshot_ts=None) -> np.ndarray:
     """
     Per-pixel slab depth (m) from SNOWPACK at snapshot date.
 
@@ -1675,7 +1676,9 @@ def depth_from_snowpack(cluster_map: np.ndarray,
     -------
     float32 array, shape = cluster_map.shape, values in metres
     """
-    snap_ts = np.datetime64(f"{snapshot}T12:00")
+    # snapshot_ts (one time for every read of a run) overrides the historical
+    # 12:00 of the snapshot date.
+    snap_ts = np.datetime64(snapshot_ts) if snapshot_ts else np.datetime64(f"{snapshot}T12:00")
     times   = ds.coords['time'].values
     from snowpack_io import snapshot_time_index
     tidx    = snapshot_time_index(times, snap_ts)

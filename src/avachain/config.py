@@ -141,6 +141,11 @@ class ProjectConfig:
     # (Ron, 2026-11-04). Points, not cluster IDs: the shot locations are
     # fixed on the ground, while cluster IDs change with every new map.
     explosive_trigger_points: list = field(default_factory=list)
+    # UTC hour of the snapshot every read of a run uses (features, release
+    # depth, scour). None keeps the historical per-read hours (features 00,
+    # depth 12, scour 18), which the Jan 18 validation runs rely on. Ron,
+    # 2026-11-04: operations use 18 (11:00 MST / 12:00 MDT, on the 6 h grid).
+    snapshot_hour_utc: Optional[int] = None
 
     # --- Survey file pattern ---
     # Expected format: YYMMDD_*_snowHeight.tif
@@ -473,6 +478,8 @@ class ProjectConfig:
             stauchwall_deg=float(scenarios.get("stauchwall_deg", 29.0)),
             explosive_trigger_points=_lat_lon_points(
                 scenarios.get("explosive_trigger_points", [])),
+            snapshot_hour_utc=(int(scenarios["snapshot_hour_utc"])
+                               if scenarios.get("snapshot_hour_utc") is not None else None),
             stations=data.get("stations", []),
             wrf_smet_file=wrf_smet,
             wrf_smet_dir=wrf_smet.parent if wrf_smet else None,
