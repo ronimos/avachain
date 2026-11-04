@@ -59,11 +59,14 @@ markers = true
 [snowpack]
 binary     = "/home/caic/caic/rtsys/snowpack/exe/snowpack"
 lib_dir    = "/home/caic/caic/rtsys/snowpack/src/snowpack/lib"
-# 2026-27 (Ron, 2026-11-04, "for now"). The season starts from bare ground on
+# 2026-27 (Ron, 2026-11-04). The season starts from bare ground on
 # season_start (season_start.py bootstrap): it must be snow-free and on or after
 # the WRF refill file's first row (2026-10-14 12:00). Snow on the ground at
-# season_start is not in the simulation. 2025-26: 2025-10-01 .. 2026-03-31.
-season_start      = "2026-11-20"
+# season_start is not in the simulation. 11-07: the WRF-forced SNOWPACK at the
+# Professor cell melts the October snow out about then; starting there keeps
+# any later snow (a likely basal layer) in the simulation. Operational go-live
+# stays separate (planned for 2026-11-20). 2025-26: 2025-10-01 .. 2026-03-31.
+season_start      = "2026-11-07"
 season_end        = "2027-05-15"
 start_from_bare_ground = true
 max_parallel_jobs = 30
