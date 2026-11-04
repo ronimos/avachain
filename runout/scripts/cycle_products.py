@@ -706,7 +706,8 @@ def release_set_info(raster_path):
     # one (handoff/<path>/release/<date>/<set>/scour_depth.tif with a
     # release manifest.json beside it)
     # @param raster_path: str or None
-    # @returns: dict (set, snapshot_date, created_utc, commit) or None
+    # @returns: dict (set, snapshot_date, snapshot_ts, store, clamped,
+    #          created_utc, commit) or None
     if not raster_path:
         return None
     m = Path(raster_path).parent / 'manifest.json'
@@ -718,6 +719,9 @@ def release_set_info(raster_path):
         return None
     return {'set': man.get('horizon') or Path(raster_path).parent.name,
             'snapshot_date': man.get('snapshot_date'),
+            'snapshot_ts': man.get('snapshot_ts'),
+            'store': man.get('store'),
+            'clamped': bool(man.get('clamped')),
             'created_utc': man.get('created_utc'),
             'commit': (man.get('commit') or '')[:7]}
 
@@ -746,15 +750,27 @@ def inputs_and_caveats(manifest, horizons):
     cfg = horizons[0]['config']
     ent = cfg.get('entrainment') or {}
     rows = []
+    caveats_extra = []
     # each horizon has its own release set (and scour raster) under rule B
     rels = [(hz, release_set_info((hz['config'].get('entrainment') or {})
                                   .get('snow_height_raster'))) for hz in horizons]
     if all(r for _, r in rels):
-        snow_line = ('Snowpack', ', '.join(f"{hz['name']} {r['snapshot_date']}" for hz, r in rels)
-                     + f" (release set {rels[0][1]['set']})")
+        def _when(r):
+            # forecast days: the snapshot time and the store it came from
+            if r.get('snapshot_ts'):
+                return (f"{r['snapshot_ts'].replace('T', ' ')} UTC"
+                        + (f" ({r['store']})" if r.get('store') else ''))
+            return r['snapshot_date']
+        sets = {r['set'] for _, r in rels}
+        snow_line = ('Snowpack', ', '.join(f"{hz['name']} {_when(r)}" for hz, r in rels)
+                     + ('' if len(sets) > 1 else f" (release set {rels[0][1]['set']})"))
         for hz, rel in rels:
+            if rel.get('clamped'):
+                caveats_extra.append(
+                    f"{hz['name']}: the WRF outlook ends before this day's snapshot hour, so "
+                    f"its snowpack is the outlook's last step, {_when(rel)}.")
             rows.append((f"Release scenarios {hz['name']}",
-                         f"set {rel['set']}, snowpack {rel['snapshot_date']}, "
+                         f"set {rel['set']}, snowpack {_when(rel)}, "
                          f"built {(rel['created_utc'] or '').replace('T', ' ').replace('Z', ' UTC')}"
                          f"{', commit ' + rel['commit'] if rel['commit'] else ''}"))
     else:
@@ -769,7 +785,7 @@ def inputs_and_caveats(manifest, horizons):
     rows.append(('Software', f"pipeline v{manifest.get('pipeline_version', PIPELINE_VERSION)}"
                  f"{' (' + manifest['git_commit'] + ')' if manifest.get('git_commit') else ''}"
                  f", AvaFrame {manifest.get('avaframe_version') or 'unknown'}"))
-    caveats = cycle_caveats(manifest)
+    caveats = caveats_extra + cycle_caveats(manifest)
     reasons = {**no_release_reasons(manifest), **pending_days(manifest)}
     done = {hz['label'] for hz in horizons}
     missing = [f"T_{n}" for n in range(3) if f"T_{n}" not in done]

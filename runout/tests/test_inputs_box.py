@@ -51,6 +51,27 @@ class InputsBox(unittest.TestCase):
         self.assertTrue(box['caveats'][0].startswith('No forecast for T+2'))
         self.assertEqual(box['caveats'][1], 'c1')
 
+    def test_forecast_days_show_their_snapshot_time_and_the_clamp(self):
+        # Ron, 2026-11-04: three days at 18 UTC; T+2 clamped to the WRF
+        # outlook's last step must say so.
+        tmp = Path(tempfile.mkdtemp())
+        hzs = []
+        for lab, ts, clamped in (('T_0', '2025-11-30T18:00', False),
+                                 ('T_2', '2025-12-02T00:00', True)):
+            d = Path(tmp) / lab
+            d.mkdir()
+            (d / 'manifest.json').write_text(json.dumps(
+                {'producer': 'release', 'horizon': lab, 'snapshot_date': ts[:10],
+                 'snapshot_ts': ts, 'store': 'forecast', 'clamped': clamped,
+                 'created_utc': '2026-11-04T22:38:16Z', 'commit': '2fe31d6'}))
+            hzs.append(_hz(lab, d / 'scour_depth.tif'))
+        box = cp.inputs_and_caveats({'display': {'caveats': ['c1']}}, hzs)
+        self.assertEqual(box['snow_line'][1],
+                         'T+0 2025-11-30 18:00 UTC (forecast), T+2 2025-12-02 00:00 UTC (forecast)')
+        self.assertNotIn('release set', box['snow_line'][1])      # each day has its own set
+        self.assertTrue(any(c.startswith('T+2: the WRF outlook ends before') for c in box['caveats']))
+        self.assertFalse(any(c.startswith('T+0: the WRF') for c in box['caveats']))
+
     def test_survey_raster_falls_back_to_survey_line(self):
         hz = _hz('T_0', '/nowhere/260114_HS.tif')
         box = cp.inputs_and_caveats({'survey': {'date': '2026-01-14'}}, [hz])
