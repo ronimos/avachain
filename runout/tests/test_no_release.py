@@ -165,3 +165,31 @@ class Report(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Progress(unittest.TestCase):
+    """The report is published after each forecast day (Ron, 2026-11-04);
+    days not run yet show as still running, not as missing."""
+
+    def test_set_raster_is_the_sets_own(self):
+        tmp = Path(tempfile.mkdtemp())
+        s = _set(tmp / 'T_1', *MODEL)
+        (s / 'scour_depth.tif').write_text('r')
+        (s / 'scenarios').mkdir()
+        self.assertEqual(discover.set_raster(s / 'scenarios'), s / 'scour_depth.tif')
+        self.assertEqual(discover.set_raster(s), s / 'scour_depth.tif')
+        self.assertIsNone(discover.set_raster(tmp))
+
+    def test_pending_days_in_the_report(self):
+        tmp = Path(tempfile.mkdtemp())
+        m = _manifest({'T_0': _no_release(tmp, 'T_0', SHOT, '2025-11-30'),
+                       'T_1': {'valid_date': '2025-12-01', 'status': 'pending'},
+                       'T_2': {'valid_date': '2025-12-02', 'status': 'pending'}})
+        self.assertEqual(set(cp.pending_days(m)), {'T_1', 'T_2'})
+        cycle = tmp / 'cycle'
+        cycle.mkdir()
+        (cycle / 'manifest.json').write_text(json.dumps(m))
+        cp.build_cycle_products(cycle, products=('report',))
+        html = (cycle / 'report.html').read_text()
+        self.assertIn('Still running; this page is updated when it finishes.', html)
+        self.assertIn('explosive-control shot locations', html)      # T+0's reason

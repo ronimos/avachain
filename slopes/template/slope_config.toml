@@ -135,6 +135,9 @@ wrf_dist_km   = 0.0  # distance from slope centre to WRF grid cell (km)
 hour_utc       = 3
 poll_minutes   = 10
 daily_hour_utc = 13
+# timezone     = "America/Denver"   # cron.d CRON_TZ (default UTC); then use
+# daily_hour   = 0                  # daily_hour / report_check in that zone
+# report_check = "03:15"
 # user         = "ron"
 # crond_dir    = "/home/avachain/cron"
 
@@ -148,3 +151,13 @@ daily_hour_utc = 13
 # work_dir     = "/home/avachain/work/runout/<name>"
 # publish_root = "/home/www/html/ron/runout_forecast"
 # lock_file    = "/home/avachain/work/runout/.runout.lock"
+
+# ---------------------------------------------------------------------------
+# [alerts] — e-mail on a FAILED survey, a runout failure, a failed daily run,
+# and no daily run for 26 h (alerts.py, local sendmail). Empty = print only.
+# ---------------------------------------------------------------------------
+# Put addresses in ~/.config/avachain/alerts.toml (email = [...]), not here,
+# if the repo is public.
+# [alerts]
+# email = []
+# recipients_file = "~/.config/avachain/alerts.toml"

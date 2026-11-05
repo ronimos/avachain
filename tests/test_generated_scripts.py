@@ -391,7 +391,7 @@ class TestCronD:
 
     def test_every_job_runs_as_the_cron_user(self, install):
         jobs = self._jobs(self._render(install))
-        assert len(jobs) == 3                                # poll, daily, WRF archive
+        assert len(jobs) == 4                                # poll, daily, WRF archive, daily check
         for j in jobs:
             f = j.split()
             assert f[5] == "ron", j                          # user after five schedule fields
@@ -415,7 +415,42 @@ class TestCronD:
     def test_no_wrf_cell_no_archive_job(self, install):
         cfg = _cfg("Professor_PTC")
         cfg["wrf"] = {k: v for k, v in cfg["wrf"].items() if k != "wrf_zone"}
-        assert len(self._jobs(self._render(install, cfg))) == 2
+        assert len(self._jobs(self._render(install, cfg))) == 3
+
+    def test_report_check_job(self, install):
+        # [alerts] + [runout]: at 03:15 local, alert if today's report is missing
+        chk = self._jobs(self._render(install))[3]
+        assert chk.startswith("15 3 * * * ron umask 002; ")
+        assert "alerts.py --toml " in chk and chk.split("--toml ")[1].split()[1] == "check-report"
+
+    def test_daily_run_at_local_midnight_with_the_zone_declared(self, install):
+        """Ron, 2026-11-04: report due 03:00 local. cron reads /etc/cron.d in
+        the host's local time; the file names its zone, so the hours mean
+        what the TOML says (a '13 UTC' job had been running at 13:00 MST)."""
+        text = self._render(install)
+        assert "CRON_TZ=America/Denver" in text.splitlines()
+        daily = self._jobs(text)[1]
+        assert daily.startswith("0 0 * * * ron ") and "run_daily_Professor_PTC.sh" in daily
+
+    def test_no_timezone_means_utc(self, install):
+        cfg = _cfg("Professor_PTC")
+        cfg["cron"] = {k: v for k, v in cfg["cron"].items()
+                       if k not in ("timezone", "daily_hour")}
+        cfg["cron"]["daily_hour_utc"] = 13
+        text = self._render(install, cfg)
+        assert "CRON_TZ=UTC" in text.splitlines()
+        assert self._jobs(text)[1].startswith("0 13 * * * ron ")
+
+    def test_without_runout_the_check_is_check_daily(self, install):
+        cfg = _cfg("Professor_PTC")
+        cfg.pop("runout")
+        chk = self._jobs(self._render(install, cfg))[3]
+        assert chk.startswith("0 17 * * * ron ") and "check-daily" in chk
+
+    def test_no_alerts_table_no_daily_check(self, install):
+        cfg = _cfg("Professor_PTC")
+        cfg.pop("alerts")
+        assert not any("check-daily" in j for j in self._jobs(self._render(install, cfg)))
 
     def test_file_lands_in_the_deployment_cron_dir(self, install):
         cfg = _cfg("Professor_PTC")
@@ -429,3 +464,39 @@ class TestCronD:
     def test_name_is_one_cron_reads(self, install):
         # cron skips /etc/cron.d files with a dot (or other characters) in the name
         assert install._crond_name("loveland.e2 a") == "avachain-loveland_e2_a"
+
+
+def test_runout_venv_uses_the_deployment_interpreter(install, tmp_path, monkeypatch):
+    """Dress rehearsal 11-04: uv linked runout/.venv to its own Python under
+    ~/.local (mode 700), so no other account could run runout."""
+    import subprocess as sp
+    proj = tmp_path / "proj"
+    (proj / "runout").mkdir(parents=True)
+    (proj / "runout" / "pyproject.toml").write_text("")
+    interp = tmp_path / "code" / "python" / "bin" / "python3.12"
+    interp.parent.mkdir(parents=True)
+    interp.write_text("")
+    (proj / ".venv" / "bin").mkdir(parents=True)
+    (proj / ".venv" / "bin" / "python").symlink_to(interp)
+    uv = tmp_path / "uv"
+    uv.write_text("")
+    calls = []
+    monkeypatch.setattr("shutil.which", lambda name: str(uv))
+    monkeypatch.setattr(sp, "run", lambda cmd, **k: calls.append(cmd) or sp.CompletedProcess(cmd, 0))
+    install._ensure_runout_venv({"runout": {}}, proj)
+    assert calls == [[str(uv), "sync", "--frozen", "--python", str(interp.resolve())]]
+
+
+def test_forecast_slopes_run_every_forecast_day(install):
+    """[scenarios] forecast_days: the scripts run `analysis_pipeline forecast`
+    (T_0..T_n); slopes without it keep analyze + scenarios."""
+    cfg = _cfg("Professor_PTC")
+    assert cfg["scenarios"]["forecast_days"] == 3
+    for sh, survey in ((install._render_run_operational(cfg), True),
+                       (install._render_run_daily(cfg), False)):
+        assert "$ANALYSIS forecast $SNAPSHOT_ARG" in sh
+        assert "$ANALYSIS scenarios" not in sh and "$ANALYSIS analyze" not in sh
+        assert ('--n-triggers "$N_TRIGGERS"' in sh) == survey
+    dev = _cfg("little_prof")
+    for sh in (install._render_run_operational(dev), install._render_run_daily(dev)):
+        assert "$ANALYSIS analyze $SNAPSHOT_ARG" in sh and "$ANALYSIS forecast" not in sh

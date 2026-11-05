@@ -89,7 +89,8 @@ def parse_args(argv=None):
                      help='Run only this horizon, e.g. T_0 (repeatable)')
     run.add_argument('--snow-height', default=None,
                      help='Snow height raster for entrainment.mode raster: a file, '
-                          'or latest (newest file in data/surveys/snow_height/<slug>/)')
+                          'latest (newest file in data/surveys/snow_height/<slug>/), '
+                          "or set (each horizon's own release set scour_depth.tif)")
     run.add_argument('--survey-date', default=None,
                      help='Survey date YYYY-MM-DD (default: parsed from the file name)')
     run.add_argument('--event', default=None,
@@ -258,7 +259,10 @@ def run_forecast(args, profile, sections, physics, local, config_dir):
     # front; 'latest' is resolved per path inside the loop.
     snow_height = None
     survey_date = args.survey_date
-    if args.snow_height and args.snow_height != 'latest':
+    # 'set': each horizon entrains its own release set's scour_depth.tif
+    # (T_0, T_1, T_2 each come from a different snowpack state).
+    per_set = args.snow_height == 'set'
+    if args.snow_height and args.snow_height not in ('latest', 'set'):
         snow_height = Path(args.snow_height).resolve()
         if not snow_height.exists():
             logging.error(f"snow height raster not found: {snow_height}")
@@ -350,6 +354,14 @@ def run_forecast(args, profile, sections, physics, local, config_dir):
         mf.write(manifest, manifest_path)
 
         results = {}
+        # Every horizon is listed as pending first, so a report published
+        # after the first one finishes says the rest are still running.
+        for src_dir, label in horizons:
+            mf.add_horizon(manifest, label, src_dir, 0, mf.valid_date_for(cycle_date, label),
+                           cycle_out / label, local_date_dir / label, 'pending',
+                           release=discover.release_info(src_dir))
+        mf.write(manifest, manifest_path)
+
         for src_dir, label in horizons:
             logging.info("")
             logging.info("=" * 70)
@@ -386,14 +398,28 @@ def run_forecast(args, profile, sections, physics, local, config_dir):
                     mf.add_horizon(manifest, label, src_dir, 0, valid, outputs_dir,
                                    work_dir, results[label], release=rel)
                     mf.write(manifest, manifest_path)
+                    _publish_progress(cycle_out, local, slug, cycle_date, profile, args)
                     continue
 
             # Config and run
+            sh = snow_height
+            if per_set:
+                sh = discover.set_raster(src_dir)
+                if sh is None:
+                    logging.error(f"[{label}] --snow-height set: no scour_depth.tif "
+                                  f"in the release set {src_dir}")
+                    results[label] = 'FAILED (no set raster)'
+                    mf.add_horizon(manifest, label, src_dir, n, valid, outputs_dir,
+                                   work_dir, results[label],
+                                   release=discover.release_info(src_dir))
+                    mf.write(manifest, manifest_path)
+                    continue
+                logging.info(f"[{label}] entrainment raster: {sh}")
             try:
                 cfg = cfgmod.assemble(
                     sections, path_profile,
                     scenarios_dir=work_dir, outputs_dir=outputs_dir,
-                    work_dir=work_dir, snow_height=snow_height,
+                    work_dir=work_dir, snow_height=sh,
                 )
             except cfgmod.ConfigError as e:
                 logging.error(f"[{label}] {e}")
@@ -414,6 +440,7 @@ def run_forecast(args, profile, sections, physics, local, config_dir):
                            work_dir, results[label],
                            release=discover.release_info(src_dir))
             mf.write(manifest, manifest_path)
+            _publish_progress(cycle_out, local, slug, cycle_date, profile, args)
 
         # Path summary
         logging.info("")
@@ -453,6 +480,22 @@ def run_forecast(args, profile, sections, physics, local, config_dir):
         overall.append(status in ('ok', 'dry-run'))
 
     return 0 if overall and all(overall) else 1
+
+
+def _publish_progress(cycle_out, local, slug, cycle_date, profile, args):
+    # Publish the report after each horizon (Ron, 2026-11-04: the report is
+    # due at 03:00; whatever is done by then is out, the rest follows).
+    # Report, details and table only; the viewer is built once at the end.
+    # Never fails the run.
+    if args.dry_run or 'report' not in (profile.get('products') or []):
+        return
+    try:
+        from . import cycle_products
+        cycle_products.build_cycle_products(cycle_out, products=('report',))
+        if local.get('publish_root'):
+            cycle_products.publish(cycle_out, local['publish_root'], slug, cycle_date)
+    except Exception as e:
+        logging.warning(f"[{slug}] progress report not published: {e}")
 
 
 def cmd_run(args):

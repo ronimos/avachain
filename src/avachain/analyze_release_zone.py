@@ -635,6 +635,12 @@ def main():
                         help='Also extract features for clusters within this distance '
                              '(m) of the start zone, for the BFS mask-diagnostic mode. '
                              '0 (default) is the start zone only, as before.')
+    parser.add_argument('--snapshot-ts', default=None,
+                        help='Snapshot time YYYY-MM-DDTHH:MM (UTC). Default: the '
+                             'snapshot date at 00:00. Output files keep the date in their name.')
+    parser.add_argument('--features-dir', default=None,
+                        help='Where the per-date feature CSVs go (default: the '
+                             'analysis dir). Forecast days use their own folder.')
     parser.add_argument('--snapshot-date', default='2026-01-18',
                         help='Date for snapshot analysis (default: day before event)')
     parser.add_argument('--classifier', action='store_true',
@@ -713,8 +719,10 @@ def main():
 
     location_names = ds.coords['location'].values
 
-    snap_ts = pd.Timestamp(args.snapshot_date)
-    print(f"Snapshot: {snap_ts.date()}")
+    snap_ts = pd.Timestamp(args.snapshot_ts or args.snapshot_date)
+    print(f"Snapshot: {args.snapshot_date} (profiles at {snap_ts})")
+    feat_dir = Path(args.features_dir) if args.features_dir else cfg.analysis_dir
+    feat_dir.mkdir(parents=True, exist_ok=True)
     # Every read below is sel(time=snap_ts, method='nearest'), which silently
     # returns the last step when the date is past the end of the store: on
     # 2026-10-25 a 2026-03-07 run read 2026-01-18 18:00 profiles and wrote them
@@ -806,7 +814,7 @@ def main():
             snap_data, cluster_map, dem, transform, snap_ts)
 
         if not meloche_df.empty:
-            out_meloche = cfg.analysis_dir / f"meloche_features_{snap_ts.date()}.csv"
+            out_meloche = feat_dir / f"meloche_features_{args.snapshot_date}.csv"
             meloche_df.to_csv(str(out_meloche))
             print(f"Meloche features saved: {out_meloche}")
 
@@ -830,7 +838,7 @@ def main():
                 plot_meloche_comparison(meloche_df, cfg.plots_dir, snap_ts)
 
         # --- Save feature table (release + adjacent + reference groups) ---
-        out_csv = cfg.analysis_dir / f"release_zone_features_{snap_ts.date()}.csv"
+        out_csv = feat_dir / f"release_zone_features_{args.snapshot_date}.csv"
         rows = []
         for grp, df in snap_data.items():
             if df.empty:
@@ -913,8 +921,8 @@ def main():
         # Deduplicate — existing group assignments take priority
         all_features_df = all_features_df[
             ~all_features_df.index.duplicated(keep='first')]
-        out_all = (cfg.analysis_dir /
-                   f"all_start_zone_features_{snap_ts.date()}.csv")
+        out_all = (feat_dir /
+                   f"all_start_zone_features_{args.snapshot_date}.csv")
         all_features_df.to_csv(str(out_all))
         print(f"  All start zone features saved: {out_all}")
         print(f"  Total clusters: {len(all_features_df)}")
@@ -931,8 +939,8 @@ def main():
         meloche_full = compute_meloche_features(
             snap_data_full, cluster_map, dem, transform, snap_ts)
         if not meloche_full.empty:
-            out_mel_all = (cfg.analysis_dir /
-                           f"meloche_features_all_{snap_ts.date()}.csv")
+            out_mel_all = (feat_dir /
+                           f"meloche_features_all_{args.snapshot_date}.csv")
             meloche_full.to_csv(str(out_mel_all))
             print(f"  Full Meloche features saved: {out_mel_all} "
                   f"({len(meloche_full)} clusters)")

@@ -313,8 +313,9 @@ def step_analyze(cfg, args):
 
     # Skip if both output CSVs exist and are newer than the Zarr store.
     # Pass --force to bypass this check.
-    feat_csv = cfg.analysis_dir / f"all_start_zone_features_{args.snapshot_date}.csv"
-    mel_csv  = cfg.analysis_dir / f"meloche_features_all_{args.snapshot_date}.csv"
+    fdir     = features_dir(cfg, args)
+    feat_csv = fdir / f"all_start_zone_features_{args.snapshot_date}.csv"
+    mel_csv  = fdir / f"meloche_features_all_{args.snapshot_date}.csv"
     if not getattr(args, 'force', False) and feat_csv.exists() and mel_csv.exists():
         zarr_mtime = zarr_path.stat().st_mtime if zarr_path.exists() else 0
         if feat_csv.stat().st_mtime > zarr_mtime and mel_csv.stat().st_mtime > zarr_mtime:
@@ -327,7 +328,10 @@ def step_analyze(cfg, args):
               '--project-dir', str(cfg.project_dir),
               '--pro-dir',     str(args.pro_dir),
               '--zarr-path',   str(args.zarr_path),
-              '--snapshot-date', args.snapshot_date]
+              '--snapshot-date', args.snapshot_date,
+              '--features-dir', str(fdir)]
+    if getattr(args, 'snapshot_ts', None):
+        cmd += ['--snapshot-ts', str(args.snapshot_ts)]
     if getattr(args, 'toml', None):
         cmd += ['--toml', str(args.toml)]
     if args.classifier:
@@ -535,10 +539,152 @@ def _write_arrest_state(state: dict, sdir: Path):
         rej.to_csv(sdir / 'rejected.csv')
 
 
+def features_dir(cfg, args) -> Path:
+    """Folder of the per-date feature CSVs: --features-dir, else the analysis dir."""
+    d = getattr(args, 'features_dir', None)
+    return Path(d) if d else cfg.analysis_dir
+
+
+def resolve_snapshot_ts(cfg, args) -> None:
+    """--snapshot-ts, else [scenarios] snapshot_hour_utc on the snapshot date,
+    else None (the historical per-read hours)."""
+    if getattr(args, 'snapshot_ts', None) is None and cfg.snapshot_hour_utc is not None:
+        args.snapshot_ts = f"{args.snapshot_date}T{cfg.snapshot_hour_utc:02d}:00"
+
+
 def scenario_set_dir(cfg, args) -> Path:
-    """Where a scenario set is published: <scenarios_dir>/<date>[/<horizon>]."""
-    base = cfg.scenarios_dir / args.snapshot_date
+    """Where a scenario set is published: <scenarios_dir>/<date>[/<horizon>].
+
+    <date> is the cycle date when one is given (a forecast cycle groups its
+    days T_0..T_n under it), else the snapshot date."""
+    base = cfg.scenarios_dir / (getattr(args, 'cycle_date', None) or args.snapshot_date)
     return base / args.forecast_horizon if args.forecast_horizon else base
+
+
+def store_span(zarr_path):
+    """(first, last) time in a Zarr store, or None when there is none."""
+    if not zarr_path or not Path(zarr_path).exists():
+        return None
+    import xarray as xr
+    t = xr.open_zarr(str(zarr_path))['time'].values
+    if len(t) == 0:
+        return None
+    return pd.Timestamp(t.min()), pd.Timestamp(t.max())
+
+
+# One SNOWPACK profile step (PROF_DAYS_BETWEEN = 0.25 d).
+PROFILE_STEP = pd.Timedelta(hours=6)
+
+
+def fresh_forecast_span(main_span, fc_span):
+    """The forecast store's span if it was built from the current observed
+    state, else None.
+
+    The cycle rebuilds the forecast store only when the NWP pass runs; when
+    nwp_ingest fails it keeps the previous cycle's, which still covers the
+    coming days. A store is current when it starts within one profile step
+    after the observed store ends (T_stable).
+    """
+    if not fc_span or not main_span:
+        return None
+    if main_span[1] < fc_span[0] <= main_span[1] + PROFILE_STEP:
+        return fc_span
+    return None
+
+
+def plan_forecast_days(cycle_date: str, n_days: int, hour: int,
+                       main_span, fc_span) -> list:
+    """Which store and time each day T+0..T+n-1 of a cycle reads.
+
+    Day n is <cycle_date + n> at <hour> UTC (Ron, 2026-11-04: 18 UTC). It
+    reads the observed store when that covers the time (an afternoon survey
+    run), else the NWP forecast store. Past the forecast store's end the time
+    is clamped to its last step ("if T+2 is past the WRF outlook, use its last
+    forward-looking timestamp"); a day whose clamped time is not after the
+    previous day's is skipped, as is any day with no store covering it.
+    Returns one dict per day: day, label, date, ts, store ('observed' |
+    'forecast' | None), clamped, reason.
+    """
+    base = pd.Timestamp(cycle_date)
+    out, prev = [], None
+    for n in range(n_days):
+        date = (base + pd.Timedelta(days=n)).strftime("%Y-%m-%d")
+        ts = pd.Timestamp(f"{date}T{hour:02d}:00")
+        d = {"day": n, "label": f"T_{n}", "date": date, "ts": ts,
+             "store": None, "clamped": False, "reason": None}
+        if main_span and ts <= main_span[1]:
+            d["store"] = "observed"
+        elif fc_span and ts <= fc_span[1]:
+            d["store"] = "forecast"
+        elif fc_span and (prev is None or fc_span[1] > prev):
+            d.update(ts=fc_span[1], store="forecast", clamped=True)
+        else:
+            d["reason"] = ("no forecast store" if not fc_span else
+                           f"the WRF outlook ends {fc_span[1]:%Y-%m-%dT%H:%M}, "
+                           f"not after the previous day")
+        if d["store"]:
+            prev = d["ts"]
+        out.append(d)
+    return out
+
+
+def step_forecast(cfg, args):
+    """analyze + scenarios for each day of a forecast cycle (T_0..T_{n-1}).
+
+    The cycle date is the snapshot date. Each day's set goes to
+    <scenarios_dir>/<cycle_date>/T_n/. Days read from the forecast store write
+    their feature CSVs to <analysis_dir>/forecast/<cycle_date>/T_n/, so the
+    observed analysis of that date never finds a forecast's CSVs. A day that
+    fails is reported and the next one still runs; the step fails only if no
+    day published a set.
+    """
+    import copy
+    if cfg.snapshot_hour_utc is None:
+        sys.exit("ERROR: forecast needs [scenarios] snapshot_hour_utc in the TOML")
+    n_days = args.days or cfg.forecast_days or 3
+    main_span = store_span(cfg.zarr_path)
+    fc_span = store_span(cfg.forecast_zarr_path)
+    if fc_span and fresh_forecast_span(main_span, fc_span) is None:
+        print(f"  WARNING: the forecast store ({fc_span[0]} .. {fc_span[1]}) was not "
+              f"built from this cycle (observations end "
+              f"{main_span[1] if main_span else '-'}): not used, so only days the "
+              f"observations cover are produced")
+        fc_span = None
+    plan = plan_forecast_days(args.snapshot_date, n_days, cfg.snapshot_hour_utc,
+                              main_span, fc_span)
+    print(f"\n=== step_forecast  cycle={args.snapshot_date}  days={n_days} ===")
+    print(f"  observed store: {main_span[0] if main_span else '-'} .. {main_span[1] if main_span else '-'}")
+    print(f"  forecast store: {fc_span[0] if fc_span else '-'} .. {fc_span[1] if fc_span else '-'}")
+    published = 0
+    for d in plan:
+        tag = f"{d['label']} {d['date']}"
+        if not d["store"]:
+            print(f"\n  {tag}: skipped ({d['reason']})")
+            continue
+        a = copy.copy(args)
+        a.cycle_date = args.snapshot_date
+        a.snapshot_date = d["date"]
+        a.snapshot_ts = f"{d['ts']:%Y-%m-%dT%H:%M}"
+        a.forecast_horizon = d["label"]
+        a.store_kind = d["store"]
+        a.clamped = d["clamped"]
+        if d["store"] == "forecast":
+            a.zarr_path = cfg.forecast_zarr_path
+            a.features_dir = cfg.analysis_dir / "forecast" / args.snapshot_date / d["label"]
+            a.force = True                       # the forecast store is rebuilt every cycle
+        else:
+            a.zarr_path = cfg.zarr_path
+        print(f"\n  {tag}: {d['store']} store at {a.snapshot_ts} UTC"
+              + (" (clamped to the end of the WRF outlook)" if d["clamped"] else ""), flush=True)
+        try:
+            step_analyze(cfg, a)
+            step_scenarios(cfg, a)
+            published += 1
+        except (Exception, SystemExit) as e:
+            print(f"  {tag}: FAILED: {e}", flush=True)
+    if not published:
+        sys.exit("ERROR: no forecast day published a scenario set")
+    print(f"\n  forecast cycle {args.snapshot_date}: {published} of {n_days} days published")
 
 
 def step_scenarios(cfg, args):
@@ -563,7 +709,11 @@ def step_scenarios(cfg, args):
                     path=cfg.slope_name, snapshot_date=args.snapshot_date,
                     horizon=args.forecast_horizon,
                     status="ok" if n else "no_scenarios", n_scenarios=n,
-                    trigger_source=meta_d.get("trigger_source"))
+                    trigger_source=meta_d.get("trigger_source"),
+                    cycle_date=getattr(args, 'cycle_date', None),
+                    snapshot_ts=getattr(args, 'snapshot_ts', None),
+                    store=getattr(args, 'store_kind', None),
+                    clamped=getattr(args, 'clamped', None))
     print(f"Published scenario set → {final}")
     return final
 
@@ -602,10 +752,11 @@ def _build_scenarios(cfg, args, out_dir: Path):
     # The analyze step now produces full start zone features by default.
     # Fall back to group-level CSVs for backward compatibility with
     # older analysis outputs.
-    feat_csv_all = cfg.analysis_dir / f"all_start_zone_features_{args.snapshot_date}.csv"
-    feat_csv_grp = cfg.analysis_dir / f"release_zone_features_{args.snapshot_date}.csv"
-    mel_csv_all  = cfg.analysis_dir / f"meloche_features_all_{args.snapshot_date}.csv"
-    mel_csv_grp  = cfg.analysis_dir / f"meloche_features_{args.snapshot_date}.csv"
+    fdir         = features_dir(cfg, args)
+    feat_csv_all = fdir / f"all_start_zone_features_{args.snapshot_date}.csv"
+    feat_csv_grp = fdir / f"release_zone_features_{args.snapshot_date}.csv"
+    mel_csv_all  = fdir / f"meloche_features_all_{args.snapshot_date}.csv"
+    mel_csv_grp  = fdir / f"meloche_features_{args.snapshot_date}.csv"
 
     if feat_csv_all.exists():
         feat_csv = feat_csv_all
@@ -951,7 +1102,8 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
 
     # --- Slab depth grid for snapshot ---
     full_depth = depth_from_snowpack(cluster_map, ds, args.snapshot_date,
-                                     snap_features=snap_features)
+                                     snap_features=snap_features,
+                                     snapshot_ts=getattr(args, 'snapshot_ts', None))
 
     # --- Domain-wide entrainable scour depth raster ---
     # Run the failure-plane-to-hard-layer scan for every cluster in the domain
@@ -959,7 +1111,8 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
     # com1DFA can use this as a spatially variable entrainable-depth input
     # (each cell caps how deep the flowing avalanche can scour old snow).
     print(f"\nBuilding domain scour depth map ...")
-    snap_ts_sd = np.datetime64(f"{args.snapshot_date}T18:00")
+    snap_ts_sd = np.datetime64(getattr(args, 'snapshot_ts', None)
+                               or f"{args.snapshot_date}T18:00")
     scour_depth_map = _build_scour_depth_map(ds, cluster_map, snap_features, snap_ts_sd)
 
     scour_raster = np.full(cluster_map.shape, np.nan, dtype=np.float32)
@@ -1220,7 +1373,14 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
     plot_path = out_dir / f"release_comparison_{mode_str}{args.snapshot_date}_physical_model.png"
     print(f"  Output path: {plot_path}")
     try:
-        obs_poly   = _load_observed_release_polygon(cfg, args.snapshot_date)
+        # A live date has no observed release: plot the model alone. This
+        # used to raise, so every operational run logged a traceback and
+        # wrote no plot.
+        try:
+            obs_poly = _load_observed_release_polygon(cfg, args.snapshot_date)
+        except FileNotFoundError:
+            obs_poly = None
+            print("  No observed release for this date: plotting the model only")
         poly_pairs = [(p, sf) for p, sf, _ in median_polygons]
         t_labels   = [lbl for _, _, lbl in median_polygons]
 
@@ -1253,10 +1413,11 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
             most_likely_polygon = ml_poly,
             most_likely_label   = ml_label,
             out_path         = plot_path,
-            title            = (f"Release polygon comparison — {args.snapshot_date} | "
-                               f"Little Professor | Jan 18 event\n"
-                               f"Blue = Model-derived  Red = Observed  "
-                               f"Green = Start zone  Black dashed = Most likely"),
+            title            = (f"Release polygons — {args.snapshot_date} | {cfg.slope_name}"
+                               + (" | observed release" if obs_poly is not None else "")
+                               + "\nBlue = Model-derived  "
+                               + ("Red = Observed  " if obs_poly is not None else "")
+                               + "Green = Start zone  Black dashed = Most likely"),
         )
     except Exception:
         print("WARNING: comparison plot failed — full traceback:")
@@ -1282,7 +1443,7 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="Post-SNOWPACK analysis pipeline (Pipeline B)")
     parser.add_argument('step',
-        choices=['zarr_build', 'analyze', 'scenarios', 'all'],
+        choices=['zarr_build', 'analyze', 'scenarios', 'forecast', 'all'],
         help="Pipeline step to run")
 
     # Common
@@ -1292,6 +1453,13 @@ def build_parser():
     parser.add_argument('--snapshot-date', default=None,
                         help='SNOWPACK snapshot date YYYY-MM-DD (default: the '
                              'replay clock $AVACHAIN_AS_OF, else today UTC)')
+    parser.add_argument('--snapshot-ts', default=None,
+                        help='Snapshot time YYYY-MM-DDTHH:MM (UTC) for every read '
+                             '(default: [scenarios] snapshot_hour_utc on the snapshot '
+                             'date; without it the historical per-read hours)')
+    parser.add_argument('--features-dir', type=Path, default=None,
+                        help='Folder of the per-date feature CSVs (default: the '
+                             'analysis dir). Forecast days use their own.')
 
     # zarr_build
     parser.add_argument('--batch-size', type=int, default=100)
@@ -1312,6 +1480,11 @@ def build_parser():
                              '(analyze: comparison, deviations, Meloche; '
                              'the scenarios release comparison is always written). '
                              'Off by default.')
+
+    # forecast (analyze + scenarios per forecast day)
+    parser.add_argument('--days', type=int, default=None,
+                        help='forecast: number of days T_0.. (default [scenarios] '
+                             'forecast_days, else 3)')
 
     # scenarios
     parser.add_argument('--forecast-horizon', default=None,
@@ -1385,6 +1558,7 @@ def main():
     else:
         cfg  = ProjectConfig(project_dir=args.project_dir)
     cfg.ensure_dirs()
+    resolve_snapshot_ts(cfg, args)
 
     # Fill None args from config defaults
     if args.pro_dir is None:
@@ -1414,6 +1588,9 @@ def main():
 
     if args.step in ('scenarios', 'all'):
         step_scenarios(cfg, args)
+
+    if args.step == 'forecast':
+        step_forecast(cfg, args)
 
 
 if __name__ == '__main__':

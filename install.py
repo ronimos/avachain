@@ -509,6 +509,8 @@ ANALYSIS="python $PROJECT_DIR/src/avachain/analysis_pipeline.py --toml $TOML"
 NWP="python $PROJECT_DIR/src/avachain/nwp_ingest.py --toml $TOML"
 SMET_APPEND="python $PROJECT_DIR/src/avachain/smet_append.py --toml $TOML"
 CYCLE="python $PROJECT_DIR/src/avachain/snowpack_cycle.py --toml $TOML"
+# Alerts ([alerts] email in the TOML; prints only when none). Never fails.
+ALERT="python $PROJECT_DIR/src/avachain/alerts.py --toml $TOML send"
 VENV=$PROJECT_DIR/.venv/bin/activate
 # Every directory comes from the TOML (config.py --print-paths sets AVA_*),
 # never from $PROJECT_DIR/outputs/...: a deployment relocates them.
@@ -568,6 +570,9 @@ _finish_marker() {{
     else
         $MARKERS finish --survey-date "$CLAIMED" --status FAILED --exit-code $rc \
             --step "$CURRENT_STEP" --log "$LOGFILE"
+        $ALERT --subject "survey $CLAIMED FAILED (exit $rc) at $CURRENT_STEP" \
+            --body "Fix the cause, then rename the survey's .FAILED marker to .READY to retry." \
+            --log "$LOGFILE" || true
     fi
 }}
 trap _finish_marker EXIT
@@ -672,29 +677,19 @@ if [[ $NO_NWP -eq 0 ]]; then
     # T_stable only when nwp_ingest wrote the forecast SMETs: otherwise the
     # forecast pass would run on missing or stale ones.
     NWP_OK=1
-    $NWP --lead-hours 48 || {{ NWP_OK=0; echo "    WARNING: nwp_ingest failed — continuing without NWP extension"; }}
+    $NWP --lead-hours {nwp_lead_hours} || {{ NWP_OK=0; echo "    WARNING: nwp_ingest failed — continuing without NWP extension"; }}
     _ts_output=""
     if [[ $NWP_OK -eq 1 ]]; then
-    _ts_output=$(python3 -c "
-import sys; sys.path.insert(0, '$PROJECT_DIR/src/avachain')
-from nwp_ingest import get_stable_ts
-from config import ProjectConfig
-from pathlib import Path
-import pandas as pd
-cfg = ProjectConfig.from_toml(Path('$TOML'))
-wrf = Path(cfg.wrf_smet_file) if cfg.wrf_smet_file else None
-if wrf and wrf.exists():
-    ts = get_stable_ts(wrf)
-    if ts:
-        print(ts.strftime('%Y-%m-%dT%H:%M'),
-              (ts + pd.Timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M'))
-" 2>/dev/null)
+    # The window (T_stable, end) comes from nwp_ingest itself: end is
+    # T_stable + lead, clamped to WRF's last forecast timestamp, so the
+    # forecast pass never runs past the forecast SMETs.
+    _ts_output=$($NWP --lead-hours {nwp_lead_hours} --print-window 2>/dev/null | tail -1)
     fi
     if [[ -n "$_ts_output" ]]; then
         STABLE_TS=$(echo "$_ts_output" | cut -d' ' -f1)
         NWP_EDATE=$(echo "$_ts_output" | cut -d' ' -f2)
         echo "    T_stable  = $STABLE_TS"
-        echo "    NWP EDATE = $NWP_EDATE (T_stable + 48h)"
+        echo "    NWP EDATE = $NWP_EDATE (T_stable + {nwp_lead_hours} h, clamped to the WRF outlook)"
     else
         echo "    WRF not available; observed run only"
     fi
@@ -718,15 +713,7 @@ echo ""
 echo ">>> Step 4: Analysis + scenario generation"
 CURRENT_STEP="Step 4: Analysis + scenario generation"
 step4_start=$SECONDS
-$ANALYSIS analyze $SNAPSHOT_ARG
-if [[ $NO_SCENARIOS -eq 0 ]]; then
-    $ANALYSIS scenarios $SNAPSHOT_ARG \\
-        --n-triggers "$N_TRIGGERS" \\
-        --size-factors $SIZE_FACTORS \\
-        --depth-pcts $DEPTH_PCTS
-else
-    echo "    Scenarios skipped (--no-scenarios)"
-fi
+{analysis_block}
 step4_elapsed=$((SECONDS - step4_start))
 echo "    Done: $((step4_elapsed / 60))m $((step4_elapsed % 60))s"
 echo ""
@@ -745,6 +732,9 @@ if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
         RUNOUT_STATUS="FAILED (exit $?)"
         echo "WARNING: runout $RUNOUT_STATUS. The run stays successful. Rerun runout alone:"
         echo "    python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG"
+        $ALERT --subject "runout $RUNOUT_STATUS" \\
+            --body "Snowpack and release finished and are published; the run stays successful. Rerun runout alone: python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG" \\
+            --log "$LOGFILE" || true
     fi
 else
     echo "    Runout skipped (--no-runout or --no-scenarios)"
@@ -820,6 +810,8 @@ AWS="python $PROJECT_DIR/src/avachain/aws_ingest.py --toml $TOML"
 SMET_APPEND="python $PROJECT_DIR/src/avachain/smet_append.py --toml $TOML"
 NWP="python $PROJECT_DIR/src/avachain/nwp_ingest.py --toml $TOML"
 CYCLE="python $PROJECT_DIR/src/avachain/snowpack_cycle.py --toml $TOML"
+# Alerts ([alerts] email in the TOML; prints only when none). Never fails.
+ALERT="python $PROJECT_DIR/src/avachain/alerts.py --toml $TOML send"
 VENV=$PROJECT_DIR/.venv/bin/activate
 # Every directory comes from the TOML (config.py --print-paths sets AVA_*),
 # never from $PROJECT_DIR/outputs/...: a deployment relocates them.
@@ -852,6 +844,18 @@ mkdir -p "$LOG_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOGFILE="$LOG_DIR/daily_${{TIMESTAMP}}.log"
 exec > >(tee -a "$LOGFILE") 2>&1
+
+# A failed daily run used to leave only its log. Alert on any non-zero exit,
+# naming the last step it reached. Signals exit 128+n so a kill is a failure.
+_daily_exit() {{
+    local rc=$?
+    [[ $rc -eq 0 ]] && return
+    local step
+    step=$(grep '>>> Step' "$LOGFILE" 2>/dev/null | tail -1 | sed 's/^>>> //')
+    $ALERT --subject "daily run FAILED (exit $rc) at ${{step:-start}}" --log "$LOGFILE" || true
+}}
+trap _daily_exit EXIT
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 
 echo "============================================================"
 echo "  {display_name} — Daily Forward Pipeline"
@@ -893,29 +897,19 @@ if [[ $NO_NWP -eq 0 ]]; then
     # T_stable only when nwp_ingest wrote the forecast SMETs: otherwise the
     # forecast pass would run on missing or stale ones.
     NWP_OK=1
-    $NWP --lead-hours 48 || {{ NWP_OK=0; echo "    WARNING: nwp_ingest failed — continuing without NWP extension"; }}
+    $NWP --lead-hours {nwp_lead_hours} || {{ NWP_OK=0; echo "    WARNING: nwp_ingest failed — continuing without NWP extension"; }}
     _ts_output=""
     if [[ $NWP_OK -eq 1 ]]; then
-    _ts_output=$(python3 -c "
-import sys; sys.path.insert(0, '$PROJECT_DIR/src/avachain')
-from nwp_ingest import get_stable_ts
-from config import ProjectConfig
-from pathlib import Path
-import pandas as pd
-cfg = ProjectConfig.from_toml(Path('$TOML'))
-wrf = Path(cfg.wrf_smet_file) if cfg.wrf_smet_file else None
-if wrf and wrf.exists():
-    ts = get_stable_ts(wrf)
-    if ts:
-        print(ts.strftime('%Y-%m-%dT%H:%M'),
-              (ts + pd.Timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M'))
-" 2>/dev/null)
+    # The window (T_stable, end) comes from nwp_ingest itself: end is
+    # T_stable + lead, clamped to WRF's last forecast timestamp, so the
+    # forecast pass never runs past the forecast SMETs.
+    _ts_output=$($NWP --lead-hours {nwp_lead_hours} --print-window 2>/dev/null | tail -1)
     fi
     if [[ -n "$_ts_output" ]]; then
         STABLE_TS=$(echo "$_ts_output" | cut -d' ' -f1)
         NWP_EDATE=$(echo "$_ts_output" | cut -d' ' -f2)
         echo "    T_stable  = $STABLE_TS"
-        echo "    NWP EDATE = $NWP_EDATE (T_stable + 48h)"
+        echo "    NWP EDATE = $NWP_EDATE (T_stable + {nwp_lead_hours} h, clamped to the WRF outlook)"
     else
         echo "    WRF not available; observed run only"
     fi
@@ -935,12 +929,7 @@ echo ""
 
 echo ">>> Step 5: Analysis + scenario generation"
 step5_start=$SECONDS
-$ANALYSIS analyze $SNAPSHOT_ARG
-if [[ $NO_SCENARIOS -eq 0 ]]; then
-    $ANALYSIS scenarios $SNAPSHOT_ARG
-else
-    echo "    Scenarios skipped (--no-scenarios)"
-fi
+{analysis_block}
 step5_elapsed=$((SECONDS - step5_start))
 echo ""
 
@@ -958,6 +947,9 @@ if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
         RUNOUT_STATUS="FAILED (exit $?)"
         echo "WARNING: runout $RUNOUT_STATUS. The run stays successful. Rerun runout alone:"
         echo "    python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG"
+        $ALERT --subject "runout $RUNOUT_STATUS" \\
+            --body "Snowpack and release finished and are published; the run stays successful. Rerun runout alone: python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG" \\
+            --log "$LOGFILE" || true
     fi
 else
     echo "    Runout skipped (--no-runout or --no-scenarios)"
@@ -1231,7 +1223,8 @@ def _cron_lines(cfg: dict, project_dir: Path) -> list[str]:
     if not cfg.get("surveys", {}).get("markers", False):
         return [_cron_line(cron_cfg.get("hour_utc", 20), survey, log_path)]
     poll  = int(cron_cfg.get("poll_minutes", 10))
-    daily = cron_cfg.get("daily_hour_utc", 13)
+    # In [cron] timezone (the cron.d file's CRON_TZ, default UTC).
+    daily = cron_cfg.get("daily_hour", cron_cfg.get("daily_hour_utc", 13))
     lock  = log_path.parent / f".cron_{name}.lock"
     return [
         f"*/{poll} * * * * umask 002; flock -n {lock} {survey} >> {log_path} 2>&1",
@@ -1256,11 +1249,34 @@ def _wrf_archive_line(cfg: dict, project_dir: Path, toml_path: Path) -> str | No
             f"--archive-dir {weather / 'wrf_archive'} >> {log} 2>&1")
 
 
+def _alerts_check_line(cfg: dict, project_dir: Path, toml_path: Path) -> str | None:
+    """Once a day, the check no run can do itself (cron or the host down).
+
+    With [runout]: at [cron] report_check (HH:MM in the cron timezone,
+    default 03:15), alert if today's runout report is not published (Ron,
+    2026-11-04: the report is due at 03:00 local). Without runout: at 17:00,
+    alert if no daily run logged for 26 h. Only with [alerts] in the TOML and
+    survey markers on (without markers there is no separate daily run)."""
+    if "alerts" not in cfg or not cfg.get("surveys", {}).get("markers", False):
+        return None
+    log = _cron_log_path(cfg).parent / "alerts.log"
+    if "runout" in cfg:
+        hh, mm = str(cfg.get("cron", {}).get("report_check", "03:15")).split(":")
+        when, what = f"{int(mm)} {int(hh)}", "check-report"
+    else:
+        when, what = "0 17", "check-daily"
+    return (f"{when} * * * umask 002; {project_dir / '.venv' / 'bin' / 'python'} "
+            f"{project_dir / 'src' / 'avachain' / 'alerts.py'} --toml {toml_path} "
+            f"{what} >> {log} 2>&1")
+
+
 def _all_cron_lines(cfg: dict, project_dir: Path, toml_path: Path) -> list[str]:
-    """The slope's runs (_cron_lines) plus its WRF archive."""
+    """The slope's runs (_cron_lines) plus its WRF archive and daily-run check."""
     lines = _cron_lines(cfg, project_dir)
-    if (arch := _wrf_archive_line(cfg, project_dir, toml_path)):
-        lines.append(arch)
+    for extra in (_wrf_archive_line(cfg, project_dir, toml_path),
+                  _alerts_check_line(cfg, project_dir, toml_path)):
+        if extra:
+            lines.append(extra)
     return lines
 
 
@@ -1298,6 +1314,9 @@ def _render_crond(cfg: dict, project_dir: Path, toml_path: Path) -> str:
         f"# Do not edit here or in {dest}: change the TOML [cron] and rerun install.py,",
         f"# then: sudo install -m 644 -o root -g root {_crond_path(cfg, project_dir)} {dest}",
         "SHELL=/bin/bash",
+        # cron reads /etc/cron.d in the HOST's local time (America/Denver on
+        # this server). Without this line a "13 UTC" job ran at 13:00 MST.
+        f"CRON_TZ={cfg.get('cron', {}).get('timezone', 'UTC')}",
         "",
     ]
     for line in _all_cron_lines(cfg, project_dir, toml_path):
@@ -1323,8 +1342,17 @@ def _ensure_runout_venv(cfg: dict, project_dir: Path) -> None:
         print(f"WARNING: no runout venv and no uv on PATH. Build it with:\n"
               f"    cd {runout} && uv sync --frozen")
         return
-    print(f"Building the runout venv ({runout}, uv sync --frozen) ...")
-    r = subprocess.run([uv, "sync", "--frozen"], cwd=runout)
+    # Build on the main venv's interpreter. Left to itself uv links the venv
+    # to its own managed Python under the installing user's ~/.local, which
+    # is mode 700: Val's account (and any other) could not run runout. The
+    # deployment keeps its interpreter in /home/avachain/code/python for
+    # that reason (dress rehearsal, 2026-11-04).
+    cmd = [uv, "sync", "--frozen"]
+    main_py = project_dir / ".venv" / "bin" / "python"
+    if main_py.exists():
+        cmd += ["--python", str(main_py.resolve())]
+    print(f"Building the runout venv ({runout}, {' '.join(cmd[1:])}) ...")
+    r = subprocess.run(cmd, cwd=runout)
     if r.returncode != 0:
         print(f"WARNING: uv sync failed (exit {r.returncode}); runout will not run "
               f"until it is built: cd {runout} && uv sync --frozen")
@@ -1473,9 +1501,36 @@ def _render_run_daily(cfg: dict) -> str:
     slope      = cfg["slope"]
     slope_name = slope["name"]
     return _RUN_DAILY_TEMPLATE.format(
+        analysis_block = _analysis_block(cfg, survey=False),
+        nwp_lead_hours = int(cfg.get("nwp", {}).get("lead_hours", 48)),
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,
     )
+
+
+def _analysis_block(cfg: dict, survey: bool) -> str:
+    """The run scripts' analysis step.
+
+    With [scenarios] forecast_days: `analysis_pipeline forecast`, analyze +
+    scenarios for each forecast day T_0..T_{n-1} at the TOML snapshot hour
+    (Ron, 2026-11-04). Without it, the single-day analyze + scenarios.
+    """
+    extra = (' \\\n        --n-triggers "$N_TRIGGERS" \\\n        --size-factors $SIZE_FACTORS'
+             ' \\\n        --depth-pcts $DEPTH_PCTS') if survey else ""
+    if cfg.get("scenarios", {}).get("forecast_days"):
+        return ("if [[ $NO_SCENARIOS -eq 0 ]]; then\n"
+                "    # analyze + scenarios for each forecast day T_0..T_n ([scenarios]\n"
+                "    # forecast_days, snapshot_hour_utc); sets in <scenarios>/<date>/T_n/\n"
+                f"    $ANALYSIS forecast $SNAPSHOT_ARG{extra}\n"
+                "else\n"
+                "    echo \"    Analysis and scenarios skipped (--no-scenarios)\"\n"
+                "fi")
+    return ("$ANALYSIS analyze $SNAPSHOT_ARG\n"
+            "if [[ $NO_SCENARIOS -eq 0 ]]; then\n"
+            f"    $ANALYSIS scenarios $SNAPSHOT_ARG{extra}\n"
+            "else\n"
+            "    echo \"    Scenarios skipped (--no-scenarios)\"\n"
+            "fi")
 
 
 def _render_run_operational(cfg: dict) -> str:
@@ -1487,6 +1542,8 @@ def _render_run_operational(cfg: dict) -> str:
     size_factors = sc.get("size_factors", [0.70, 0.85, 1.00, 1.15, 1.30])
     depth_pcts   = sc.get("depth_percentiles", [10, 50, 90])
     return _RUN_OPERATIONAL_TEMPLATE.format(
+        analysis_block = _analysis_block(cfg, survey=True),
+        nwp_lead_hours = int(cfg.get("nwp", {}).get("lead_hours", 48)),
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,
         n_triggers    = sc.get("n_triggers", 5),
@@ -1659,9 +1716,11 @@ def _render_admin_doc(
     # --- Cron ---
     h2("Cron Schedule")
     if cfg.get("surveys", {}).get("markers", False):
+        tz = cron_cfg.get("timezone", "UTC")
+        daily = cron_cfg.get("daily_hour", cron_cfg.get("daily_hour_utc", 13))
         lines.append(f"\nThe survey script polls for READY surveys every "
                      f"**{cron_cfg.get('poll_minutes', 10)} min**; the daily run fires at "
-                     f"**{cron_cfg.get('daily_hour_utc', 13):02d}:00 UTC**. "
+                     f"**{int(daily):02d}:00 {tz}** (the cron.d file's CRON_TZ). "
                      "Both share one lock, so they never overlap.\n")
     else:
         lines.append(f"\nDaily run fires at **{hour_utc:02d}:00 UTC**.\n")

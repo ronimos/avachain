@@ -1049,7 +1049,12 @@ def step_gap_fill(cfg: ProjectConfig, use_model: bool = False,
                     loaded_ts = pd.Timestamp(avy_meta[pair_id]['event_timestamp'])
                     event_ts = loaded_ts.tz_localize(None) if loaded_ts.tzinfo else loaded_ts
             grids = apply_avalanche_event(grids, avy_dhs, event_ts, valid)
-            print(f"  Applied avalanche event at {event_ts}")
+            # The same HS-loss step is applied for every listed period the
+            # events file marks transport_corrected, avalanche or wind_scour;
+            # only an avalanche also gets a reinit. "avalanche event" here
+            # misread a wind-scour period as an avalanche.
+            print(f"  Applied the period's HS-loss correction (avalanche_dhs; "
+                  f"avalanche or wind scour, see the events file) at {event_ts}")
 
         pred_end = grids[t1]
         prev_end = (d_b, pred_end)

@@ -59,9 +59,22 @@ markers = true
 [snowpack]
 binary     = "/home/caic/caic/rtsys/snowpack/exe/snowpack"
 lib_dir    = "/home/caic/caic/rtsys/snowpack/src/snowpack/lib"
-season_start      = "2025-10-01"
-season_end        = "2026-03-31"
+# 2026-27 (Ron, 2026-11-04). The season starts from bare ground on
+# season_start (season_start.py bootstrap): it must be snow-free and on or after
+# the WRF refill file's first row (2026-10-14 12:00). Snow on the ground at
+# season_start is not in the simulation. 11-07: the WRF-forced SNOWPACK at the
+# Professor cell melts the October snow out about then; starting there keeps
+# any later snow (a likely basal layer) in the simulation. Operational go-live
+# stays separate (planned for 2026-11-20). 2025-26: 2025-10-01 .. 2026-03-31.
+season_start      = "2026-11-07"
+season_end        = "2027-05-15"
+start_from_bare_ground = true
 max_parallel_jobs = 30
+
+# Station data from the database cache (work/weather/<station>.parquet, filled
+# by aws_ingest.py), no CSV this season.
+[weather]
+source = "cache"
 
 [[stations]]
 role        = "summit"
@@ -86,6 +99,12 @@ n_triggers        = 5
 size_factors      = [0.70, 0.85, 1.00, 1.15, 1.30]
 depth_percentiles = [10, 50, 90]
 stauchwall_deg    = 29.0
+# One snapshot time for every read (features, release depth, scour): 18 UTC
+# = 11:00 MST / 12:00 MDT, on SNOWPACK's 6 h profile grid (Ron, 2026-11-04).
+snapshot_hour_utc = 18
+# Forecast days per cycle: T_0 (today), T_1, T_2, each from the observed or
+# the NWP forecast store at snapshot_hour_utc (analysis_pipeline forecast).
+forecast_days     = 3
 # Explosive-control shot locations, [lat, lon] WGS84. On a day when no cluster
 # passes the trigger gates, the clusters containing these points are the
 # triggers. Fixed on the ground, so they hold for any season's cluster map.
@@ -96,6 +115,12 @@ explosive_trigger_points = [
     [39.6484944, -105.8791514],
     [39.6481336, -105.8787209],
 ]
+
+# NWP forecast pass: T_stable -> T_stable + lead_hours, clamped to the WRF
+# outlook's last timestamp. 60 h (Ron, 2026-11-04): the daily run at 00:00
+# local has T_stable ~06 UTC, and T+2's 18 UTC snapshot is 60 h later.
+[nwp]
+lead_hours = 60
 
 [wrf]
 fcst_base_dir = "/ssd/snowpack/fcst"
@@ -108,12 +133,16 @@ wrf_smet_file = "/ssd/snowpack/fcst/2025/zone055/077963/0779632_res.smet"
 wrf_dist_km   = 0.714
 
 [cron]
-# With [surveys] markers on, hour_utc is unused: run_Professor_PTC.sh is
-# polled every poll_minutes (a tick with nothing READY exits silently) and
-# run_daily_Professor_PTC.sh fires at daily_hour_utc (13 UTC = 06:00 MST).
+# Times are in `timezone` (written as CRON_TZ into the cron.d file; DST
+# follows). Ron, 2026-11-04: the runout report is due at 03:00 local, so the
+# daily run starts at 00:00 local (~2 h 15 m with three forecast days of
+# runout) and alerts.py check-report runs at 03:15. With [surveys] markers on,
+# hour_utc is unused: run_Professor_PTC.sh is polled every poll_minutes.
+timezone       = "America/Denver"
 hour_utc       = 3
 poll_minutes   = 10
-daily_hour_utc = 13
+daily_hour     = 0
+report_check   = "03:15"
 # The jobs (survey poll, daily run, hourly WRF archive) go to one /etc/cron.d
 # file, not a personal crontab (Ron, 2026-11-04). install.py writes it to
 # crond_dir/avachain-<slope>; install it with the sudo command it prints.
@@ -132,3 +161,15 @@ path_profile = "Professor_PTC"                       # runout/config/paths/<name
 work_dir     = "/home/avachain/work/runout/Professor_PTC"
 publish_root = "/home/www/html/ron/runout_forecast"  # -> forecasts/Professor_PTC/<date>/, latest/
 lock_file    = "/home/avachain/work/runout/.runout.lock"   # one for every slope: 4 sims at most
+
+# ---------------------------------------------------------------------------
+# [alerts] — who is told when the chain needs attention (alerts.py): a survey
+# marked FAILED, a runout failure, a failed daily run, and (cron, 17 UTC) no
+# daily run for 26 h in the season. Sent through the local sendmail. With an
+# empty list alerts are only printed to the run's log.
+# ---------------------------------------------------------------------------
+# Addresses go in the recipients file, NOT here: this repo is public.
+# Default file ~/.config/avachain/alerts.toml (email = [...]) of the user cron
+# runs as; override with recipients_file.
+[alerts]
+email = []

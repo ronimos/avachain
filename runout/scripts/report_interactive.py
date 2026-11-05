@@ -364,7 +364,7 @@ def _horizon_number(label):
     return int(label.split('_', 1)[1])
 
 
-def build_payload(horizons, cycle_date, reasons=None):
+def build_payload(horizons, cycle_date, reasons=None, pending=None):
     # Everything the interactive map and histogram need, as one dict
     # @param horizons: completed horizon dicts from cycle_products.load_cycle
     # @param cycle_date: 'YYYYMMDD'
@@ -396,6 +396,8 @@ def build_payload(horizons, cycle_date, reasons=None):
             slot['missing'] = True
             if reasons and reasons.get(slot['label']):
                 slot['reason'] = reasons[slot['label']]
+            if pending and slot['label'] in pending:
+                slot['pending'] = True
             slots.append(slot)
             continue
         slot['valid'] = hz['manifest'].get('valid_date', valid)
@@ -710,7 +712,7 @@ JS = r"""
     for (const s of D.slots) {
       const m = maps.find(q => q.slot === s);
       h += '<tr><td class="l"><b>' + s.day + '</b> (' + s.name + ')</td>';
-      if (!m) { h += '<td colspan="' + (2 + IL.length) + '" class="c">' + (s.reason ? 'no release' : 'no forecast') + '</td></tr>'; continue; }
+      if (!m) { h += '<td colspan="' + (2 + IL.length) + '" class="c">' + (s.pending ? 'running' : s.reason ? 'no release' : 'no forecast') + '</td></tr>'; continue; }
       const p = pAt(m, cursor.x, cursor.y);
       const cnt = (m.count && i >= 0) ? m.count[i] : (m.count ? 0 : null);
       h += '<td>' + (p === null ? '-' : p.toFixed(2)) + '</td>';
@@ -732,13 +734,14 @@ JS = r"""
     const cell = document.createElement('div'); cell.className = 'imap-cell';
     const title = document.createElement('div'); title.className = 'imap-title';
     title.innerHTML = '<b>' + s.day + '</b> (' + s.name + '), valid ' + s.valid +
-      (s.missing ? (s.reason ? '<br>no release' : '<br>no forecast') : '<br>P(reach road) = ' + s.p_road.toFixed(2) +
+      (s.missing ? (s.pending ? '<br>still running' : s.reason ? '<br>no release' : '<br>no forecast') : '<br>P(reach road) = ' + s.p_road.toFixed(2) +
        ', ' + s.n_reached + ' of ' + s.n_scen + ' scenarios reach');
     const bx = document.createElement('div'); bx.className = 'imap-box';
     cell.append(title, bx); row.append(cell);
     if (s.missing) {
       bx.classList.add('imap-none');
-      bx.textContent = s.reason ? 'No forecast for ' + s.valid + '. ' + s.reason
+      bx.textContent = s.pending ? s.name + ' (' + s.valid + ') is still running; this page is updated when it finishes.'
+                     : s.reason ? 'No forecast for ' + s.valid + '. ' + s.reason
                                 : 'No forecast for ' + s.valid + ': no scenarios were delivered for ' + s.name + '.';
       new ResizeObserver(() => bx.style.height = boxHeight(bx) + 'px').observe(bx);
       return;

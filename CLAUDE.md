@@ -440,6 +440,33 @@ scoured clusters.
   `little_professor.yaml`.
 - Slopes without `[runout]` (all the dev slopes) skip the step.
 
+## Forecast days, snapshot time, cron time zone
+
+- **cron reads `/etc/cron.d` in the host's local time** (America/Denver), not
+  UTC. The generated file declares `CRON_TZ=` from `[cron] timezone` (default
+  UTC). A "13 UTC" job written without it fired at 13:00 MST.
+- **One snapshot time per run.** `[scenarios] snapshot_hour_utc` (or
+  `--snapshot-ts`) sets the time features, release depth and scour are all
+  read at. Without it the historical per-read hours stay (features 00:00,
+  depth 12:00, scour 18:00), which the Jan 18 validation path relies on. Do
+  not "unify" those without the setting.
+- **Forecast-day feature CSVs live in `analysis/forecast/<date>/T_n/`.** CSV
+  names carry only the date. If a forecast day's CSVs sat in the analysis dir,
+  the observed run of that date could reuse them (analyze skips when its CSVs
+  are newer than the store).
+- **HS in the store is metres everywhere.** `depth_from_snowpack`'s 0.8 × HS
+  fallback divided by 100 until 2026-11-04 (the second time this unit
+  mistake was made, after the scour depth). Every fallback release was 100×
+  too thin.
+
+## Alerts
+
+`alerts.py` mails the recipients in `~/.config/avachain/alerts.toml` (never
+in the TOML: the repo is public) on a FAILED survey, a runout failure, a
+failed daily run, and no report by 03:15 local (cron, `check-report`). A new failure path in the run scripts should call `$ALERT`,
+and never let an alert change the exit status. In tests, `$AVACHAIN_SENDMAIL`
+points at a fake.
+
 ## Output layout
 
 `output_dir` is slope-namespaced: `outputs/<slope_name>/`. For Little

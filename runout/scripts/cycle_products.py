@@ -76,6 +76,18 @@ def no_release_reasons(manifest):
     return out
 
 
+PENDING_NOTE = "Still running; this page is updated when it finishes."
+
+
+def pending_days(manifest):
+    # Horizons listed but not run yet (the report is published after each
+    # horizon, Ron 2026-11-04)
+    # @param manifest: cycle manifest
+    # @returns: dict {label: note}
+    return {label: PENDING_NOTE for label, h in (manifest.get('horizons') or {}).items()
+            if h.get('status') == 'pending'}
+
+
 def load_cycle(cycle_dir):
     # Read manifest.json and every completed horizon's outputs
     # @param cycle_dir: Path to outputs/forecasts/<slug>/<YYYYMMDD>/
@@ -96,7 +108,9 @@ def load_cycle(cycle_dir):
         hdir = cycle_dir / label
         if not (hdir / 'probability.tif').exists() or \
                 not (hdir / 'road_impact_summary.json').exists():
-            if (manifest['horizons'][label].get('status') == 'no release'):
+            if manifest['horizons'][label].get('status') == 'pending':
+                logging.info(f"[{label}] still running; shown as pending")
+            elif manifest['horizons'][label].get('status') == 'no release':
                 logging.info(f"[{label}] no release scenarios; reported with the reason")
             else:
                 logging.warning(f"[{label}] no ensemble outputs; left out of products")
@@ -543,6 +557,7 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 </table></div>
 
 {% if failed %}<div class="warn">Horizons not run: {{ failed }}</div>{% endif %}
+{% if pending %}<div class="warn"><b>{{ pending }} still running.</b> This page is updated as each day finishes.</div>{% endif %}
 {% for name, valid, reason in no_release %}<div class="warn"><b>No forecast for {{ name }}{% if valid %} ({{ valid }}){% endif %}.</b> {{ reason }}</div>
 {% endfor %}
 
@@ -691,7 +706,8 @@ def release_set_info(raster_path):
     # one (handoff/<path>/release/<date>/<set>/scour_depth.tif with a
     # release manifest.json beside it)
     # @param raster_path: str or None
-    # @returns: dict (set, snapshot_date, created_utc, commit) or None
+    # @returns: dict (set, snapshot_date, snapshot_ts, store, clamped,
+    #          created_utc, commit) or None
     if not raster_path:
         return None
     m = Path(raster_path).parent / 'manifest.json'
@@ -703,6 +719,9 @@ def release_set_info(raster_path):
         return None
     return {'set': man.get('horizon') or Path(raster_path).parent.name,
             'snapshot_date': man.get('snapshot_date'),
+            'snapshot_ts': man.get('snapshot_ts'),
+            'store': man.get('store'),
+            'clamped': bool(man.get('clamped')),
             'created_utc': man.get('created_utc'),
             'commit': (man.get('commit') or '')[:7]}
 
@@ -731,15 +750,27 @@ def inputs_and_caveats(manifest, horizons):
     cfg = horizons[0]['config']
     ent = cfg.get('entrainment') or {}
     rows = []
+    caveats_extra = []
     # each horizon has its own release set (and scour raster) under rule B
     rels = [(hz, release_set_info((hz['config'].get('entrainment') or {})
                                   .get('snow_height_raster'))) for hz in horizons]
     if all(r for _, r in rels):
-        snow_line = ('Snowpack', ', '.join(f"{hz['name']} {r['snapshot_date']}" for hz, r in rels)
-                     + f" (release set {rels[0][1]['set']})")
+        def _when(r):
+            # forecast days: the snapshot time and the store it came from
+            if r.get('snapshot_ts'):
+                return (f"{r['snapshot_ts'].replace('T', ' ')} UTC"
+                        + (f" ({r['store']})" if r.get('store') else ''))
+            return r['snapshot_date']
+        sets = {r['set'] for _, r in rels}
+        snow_line = ('Snowpack', ', '.join(f"{hz['name']} {_when(r)}" for hz, r in rels)
+                     + ('' if len(sets) > 1 else f" (release set {rels[0][1]['set']})"))
         for hz, rel in rels:
+            if rel.get('clamped'):
+                caveats_extra.append(
+                    f"{hz['name']}: the WRF outlook ends before this day's snapshot hour, so "
+                    f"its snowpack is the outlook's last step, {_when(rel)}.")
             rows.append((f"Release scenarios {hz['name']}",
-                         f"set {rel['set']}, snowpack {rel['snapshot_date']}, "
+                         f"set {rel['set']}, snowpack {_when(rel)}, "
                          f"built {(rel['created_utc'] or '').replace('T', ' ').replace('Z', ' UTC')}"
                          f"{', commit ' + rel['commit'] if rel['commit'] else ''}"))
     else:
@@ -754,8 +785,8 @@ def inputs_and_caveats(manifest, horizons):
     rows.append(('Software', f"pipeline v{manifest.get('pipeline_version', PIPELINE_VERSION)}"
                  f"{' (' + manifest['git_commit'] + ')' if manifest.get('git_commit') else ''}"
                  f", AvaFrame {manifest.get('avaframe_version') or 'unknown'}"))
-    caveats = cycle_caveats(manifest)
-    reasons = no_release_reasons(manifest)
+    caveats = caveats_extra + cycle_caveats(manifest)
+    reasons = {**no_release_reasons(manifest), **pending_days(manifest)}
     done = {hz['label'] for hz in horizons}
     missing = [f"T_{n}" for n in range(3) if f"T_{n}" not in done]
     for label in missing:
@@ -791,7 +822,8 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
     # @returns: Path to report.html
     try:
         payload = ri.build_payload(horizons, manifest['cycle_date'],
-                                   reasons=no_release_reasons(manifest))
+                                   reasons={**no_release_reasons(manifest), **pending_days(manifest)},
+                                   pending=set(pending_days(manifest)))
         imap = ri.render_parts(payload)
     except Exception as e:
         # the static maps still render; the interactive part is a bonus
@@ -838,9 +870,10 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
         ref_rows.append({'name': n, 'dist': _fmt(names[n], 0), 'cells': vals})
 
     reasons = no_release_reasons(manifest)
+    pend = pending_days(manifest)
     failed = [f"{horizon_label(k)} ({v['status']})"
               for k, v in manifest.get('horizons', {}).items()
-              if k not in {hz['label'] for hz in horizons} and k not in reasons]
+              if k not in {hz['label'] for hz in horizons} and k not in reasons and k not in pend]
     no_release = [(horizon_label(k), manifest['horizons'][k].get('valid_date'), r)
                   for k, r in sorted(reasons.items(),
                                      key=lambda kv: int(kv[0].split('_', 1)[1]))]
@@ -860,6 +893,7 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
         issued=manifest.get('issued', '').replace('T', ' '),
         survey_date=(manifest.get('survey') or {}).get('date'),
         horizons=rows, failed=', '.join(failed), no_release=no_release,
+        pending=', '.join(horizon_label(k) for k in sorted(pend, key=lambda l: int(l.split('_', 1)[1]))),
         maps_b64=plot_small_multiples(horizons, dpi),
         exceed_b64=plot_road_approach(horizons, dpi, dists),
         nm_ref=' to the road crossing' if dists else '',
@@ -1152,7 +1186,8 @@ def build_no_release_report(cycle_dir, manifest):
     for label, h in sorted((manifest.get('horizons') or {}).items(),
                            key=lambda kv: int(kv[0].split('_', 1)[1])):
         days.append({'name': horizon_label(label), 'valid': h.get('valid_date'),
-                     'reason': reasons.get(label) or f"not run ({h.get('status')})"})
+                     'reason': reasons.get(label) or pending_days(manifest).get(label)
+                     or f"not run ({h.get('status')})"})
     cd = manifest['cycle_date']
     html = Template(NO_RELEASE_TEMPLATE).render(
         css=CSS, days=days, caveats=cycle_caveats(manifest),

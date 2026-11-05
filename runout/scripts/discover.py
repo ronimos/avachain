@@ -145,6 +145,18 @@ def no_release_reason(info):
             f"trigger locations.")
 
 
+def set_raster(src_dir):
+    # The release set's own entrainment raster for one horizon
+    # @param src_dir: Path to the horizon folder, or its scenarios/ subfolder
+    # @returns: Path to <set>/scour_depth.tif, or None
+    src_dir = Path(src_dir)
+    for d in (src_dir, src_dir.parent):
+        f = d / 'scour_depth.tif'
+        if f.exists() and (d / 'manifest.json').exists():
+            return f
+    return None
+
+
 def discover_horizons(date_dir):
     # List the horizons present for one cycle, in numeric order
     # @param date_dir: Path to the dated folder (source, or the local copy)

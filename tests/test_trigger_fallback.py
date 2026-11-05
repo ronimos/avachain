@@ -55,6 +55,7 @@ def _thin_day(tmp_path, monkeypatch, depth_m, points=POINTS, model=False,
 
     cfg = SimpleNamespace(
         analysis_dir=an, resampled_dir=fx.DATA, start_zone_kml=fx.START_ZONE_KML,
+        slope_name="Professor_PTC",
         depth_scales={50: 1.0}, explosive_trigger_points=list(points),
         release_geojson=tmp_path / "none.geojson",
         release_geojsons_for_date=lambda _d: [])
@@ -229,3 +230,13 @@ def test_toml_rejects_lon_lat_order(tmp_path):
     from config import _lat_lon_points
     with pytest.raises(ValueError, match=r"\[lat, lon\]"):
         _lat_lon_points([[-105.8788572, 39.6488366]])
+
+
+def test_a_live_date_gets_its_comparison_plot(tmp_path, monkeypatch, capsys):
+    # No observed release on a live date: the plot used to raise
+    # FileNotFoundError, log a traceback and not be written.
+    out, meta = _thin_day(tmp_path, monkeypatch, depth_m=0.5)
+    log = capsys.readouterr().out
+    assert "comparison plot failed" not in log
+    assert "plotting the model only" in log
+    assert list(out.glob("release_comparison_*_physical_model.png"))

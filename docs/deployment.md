@@ -129,7 +129,7 @@ python src/avachain/survey_markers.py --toml slopes/Professor_PTC/slope_config.t
 |---|---|---|
 | Station archive (CAIC A-Basin summit CAABT + base CAABM) | `data/weather/weather_data.csv` | Raw CAIC units: tenths of °F, mph and W/m². Converted only by `smet_writer.load_and_convert`. |
 | Station cache | `work/weather/<station>.parquet` | Built from the CSV, then appended daily by `aws_ingest`. HS is stored in **cm**. |
-| WRF forecast | `/ssd/snowpack/fcst/<season>/zone055/077963/0779632_res.smet` | Same host. It refills station gaps and drives the 48 h forecast past the last observation. The season is the year of `[snowpack] season_start`. A missing or short file stops the run (`RefillError`); the run does not continue on bad forcing. |
+| WRF forecast | `/ssd/snowpack/fcst/<season>/zone055/077963/0779632_res.smet` | Same host. It refills station gaps and drives the forecast (`[nwp] lead_hours`, 60 h, clamped to the outlook's last timestamp) past the last observation. The season is the year of `[snowpack] season_start`. A missing or short file stops the run (`RefillError`); the run does not continue on bad forcing. |
 
 The forecast has its own forcing. `nwp_ingest` writes one SMET per cluster to
 `work/snowpack/<path>/input/smet_forecast/`, with WRF precipitation as PSUM
@@ -149,9 +149,15 @@ check needs; 2025-26 has none.
 **The rebuild window.** During the rebuild the WRF file is missing, then present
 without its forecast rows, then being written. Every reader waits it out
 (`nwp_ingest.wait_for_wrf`). It needs the file present and unchanged for
-10 min, and for `nwp_ingest` the data must reach `T_stable` + 48 h. It polls
-every minute for up to 30 min, then fails as before. The run scripts take
-`T_stable` only after `nwp_ingest` has succeeded.
+10 min, and for `nwp_ingest` the data must reach at least 24 h past
+`T_stable`. It polls every minute for up to 30 min, then fails as before.
+
+**The forecast window** (Ron, 2026-11-04) is `T_stable` → `T_stable` +
+`[nwp] lead_hours` (60 h), clamped to the WRF outlook's last timestamp
+(`nwp_ingest.forecast_window`). A 00:00-local run uses the previous morning's
+cycle and reaches exactly T+2 at 18 UTC. The run scripts take `T_stable` and
+the forecast end from `nwp_ingest --print-window`, and only after `nwp_ingest`
+has succeeded, so the forecast pass never runs past its forcing.
 
 The SMET files the chain writes (`work/snowpack/<path>/input/smet/`) hold
 **°C, % and cm**, because SNOWPACK applies the header's offsets and multipliers
@@ -234,30 +240,57 @@ dropped.
 
 ### 2.6 Release → runout → forecast
 
-`src/avachain/runout_step.py` is the last step of both run scripts
-(Ron, 2026-11-04). It runs inline, after `scenarios` has published the day's set:
+**Forecast days** (Ron, 2026-11-04). A slope with `[scenarios]
+forecast_days` (Professor_PTC: 3) runs `analysis_pipeline forecast` in place
+of `analyze` + `scenarios`. Day n of cycle date D is read at D+n,
+`[scenarios] snapshot_hour_utc` (18 UTC = 11:00 MST / 12:00 MDT, on
+SNOWPACK's 6 h profile grid). One snapshot time is used for every read:
+features, release depth and scour. Each day reads:
+- the observed store when it covers that time (an afternoon survey run's T+0);
+- otherwise the NWP forecast store. The 00:00 run's observations end at
+  `T_stable` ≈ 06 UTC, so all three days come from the forecast;
+- past the forecast store's end, its last step (`clamped: true` in the manifest).
 
-1. It reads `handoff/<path>/release/<date>/` only when `READY` exists and every
-   file matches the manifest's size and sha256 (`handoff.verify`). Otherwise it
-   exits 2.
+The forecast store is used only if it was built in this cycle, i.e. it starts
+within one 6 h profile step after the observations end. When `nwp_ingest`
+fails, the cycle keeps the previous forecast store, which would otherwise be
+read silently as today's forecast.
+
+A day nothing reaches is skipped. Sets go to
+`handoff/<path>/release/<D>/T_0..T_2/`; their manifests add `cycle_date`,
+`snapshot_ts`, `store` and `clamped`. Forecast days write their feature CSVs
+to `analysis/forecast/<D>/T_n/`, never next to the observed analysis of that
+date.
+
+`src/avachain/runout_step.py` is the last step of both run scripts
+(Ron, 2026-11-04). It runs inline, after the sets are published:
+
+1. It reads every `handoff/<path>/release/<date>/T_n/` set (a single-day set at
+   `<date>/` runs as T_0) only when `READY` exists and every file matches the
+   manifest's size and sha256 (`handoff.verify`). A damaged day is left out
+   with an error, and the others run; with none readable it exits 2.
 2. It builds runout's tree under the TOML's `[runout] work_dir`
    (`work/runout/<path>/`). It writes `config/local.yaml`, links the repo's
-   `runout/config/{paths,physics,profiles.yaml}`, and links the set as
-   `scen/<profile>/<YYYYMMDD>/T_0`.
+   `runout/config/{paths,physics,profiles.yaml}`, and links each set as
+   `scen/<profile>/<YYYYMMDD>/T_n`.
 3. It takes `[runout] lock_file` (`work/runout/.runout.lock`, one for every
    slope), waiting if it must. com1DFA sims can reach >10 GB each, and the
    4-sim cap has to hold across slopes, not only per run.
-4. It runs the runout venv (`runout/.venv`, built by `install.py`) with the
-   `forecast` profile and the set's `scour_depth.tif` (entrainment rule B).
+4. It runs the runout venv (`runout/.venv`, built by `install.py` on the
+   deployment's interpreter) with the `forecast` profile and
+   `--snow-height set`: each day entrains its own set's `scour_depth.tif`
+   (entrainment rule B).
    Runout writes its work tree, logs and products under `work_dir`. It
    publishes `report.html`, `details.html`, `viewer.html` and
    `scenarios.xlsx` to `[runout] publish_root`
    (`/home/www/html/ron/runout_forecast/forecasts/<path>/<date>/`, plus
    `latest/` and `index.html`).
+5. **The report is published after each day finishes**, T+0 first (Ron: due
+   at 03:00 local, partial if need be). Days not run yet show as "still
+   running", and the viewer is built once at the end.
 
 An empty release set (`status: "no_scenarios"`) needs no sims: the report says
-why there is no forecast. Only T+0 exists today. Release sets for T+1 and T+2
-wait for the NWP-forced release side.
+why there is no forecast.
 
 **A runout failure does not fail the survey.** Snowpack and release succeeded
 and are published, and a FAILED survey would redo about 40 min of SNOWPACK to
@@ -274,7 +307,7 @@ from the slope TOML.
 | Script | When | What it does |
 |---|---|---|
 | `run_Professor_PTC.sh` | A survey has arrived | Claims the oldest `READY` survey, then runs resample → transport → avalanche → gap_fill → cluster_update → smet → smet_append → nwp_ingest → SNOWPACK survey cycle → analyze → scenarios (publishes §2.5) → runout (§2.6). Its EXIT trap marks the survey `DONE` or `FAILED`. A run killed by SIGTERM, SIGINT or SIGHUP (reboot, OOM, kill) exits 143 / 130 / 129 and is marked `FAILED`, so the survey is retried. Before 2026-11-04 it was marked `DONE`. If nothing is `READY`, it exits without doing anything. |
-| `run_daily_Professor_PTC.sh` | Every morning, between surveys | aws_ingest → smet_append → nwp_ingest → SNOWPACK daily cycle (from yesterday's anchor to today, plus a 48 h forecast) → analyze → scenarios → runout (§2.6). It does not touch surveys, clusters or SMET rewrites. |
+| `run_daily_Professor_PTC.sh` | Every night at 00:00 local, between surveys | aws_ingest → smet_append → nwp_ingest → SNOWPACK daily cycle (from yesterday's anchor to today, plus the forecast to T_stable + 60 h, clamped) → forecast days T_0..T_2 (analyze + scenarios each) → runout (§2.6), report published as each day finishes. It does not touch surveys, clusters or SMET rewrites. |
 | `run_full_pipeline.sh` | Setup, or after a change to static inputs, physics or forcing | Full rebuild: all forcing steps, full-season SNOWPACK with the two-pass avalanche reinit (`--reinit`), a single Zarr build. Takes about 6–8 h. Run it detached (`setsid nohup …`) so it survives a logout. |
 
 The SNOWPACK state carries over between runs as restart files in
@@ -286,8 +319,12 @@ The SNOWPACK state carries over between runs as restart files in
 **Cron** (Ron, 2026-10-29). `run_Professor_PTC.sh` is polled every
 `[cron] poll_minutes` (10). A tick with nothing `READY` exits before its log
 opens, so polling costs nothing, and a survey starts within minutes of its
-marker. `run_daily_Professor_PTC.sh` fires once at `[cron] daily_hour_utc`
-(13 UTC = 06:00 MST). Both run under one `flock` on
+marker. `run_daily_Professor_PTC.sh` fires once a day at `[cron] daily_hour`,
+which is **00:00 America/Denver** (Ron, 2026-11-04: the report is due at
+03:00). The run takes about 2 h 15 m with three days of runout. cron reads
+`/etc/cron.d` in the host's local time, so the generated file declares
+`CRON_TZ=` from `[cron] timezone` (default UTC), and DST is followed. Both run
+under one `flock` on
 `logs/<path>/.cron_<path>.lock`, because they write the same SMETs and restart
 files. A poll that finds the lock taken skips that tick, and its survey stays
 `READY` for the next one. The daily run waits for the lock instead.
@@ -315,6 +352,23 @@ from the daily anchor, never from a forecast state.
 do this. Auto-detection appends candidate periods to that file but does not
 relabel periods that are already listed. The 2025-26 season has one avalanche,
 on 2026-01-18.
+
+**Alerts** (2026-11-04). `src/avachain/alerts.py` e-mails the recipients in
+`~/.config/avachain/alerts.toml` (`email = [...]`, of the user cron runs as;
+mode 600, outside git, because the repo is public) plus any in the TOML's
+`[alerts] email`, through the local sendmail, on:
+- a survey marked `FAILED`. The mail names the step and carries the last
+  40 log lines, and says to rename the marker to `.READY` once fixed;
+- a runout failure, while the run stays successful;
+- a daily run that exits non-zero, naming the last step it reached;
+- no report by the deadline. `check-report` runs at `[cron] report_check`
+  (03:15 local) from cron.d. During the season it alerts when today's
+  `report.html` is not published, which also catches what no run can report
+  itself: cron or the host down. Slopes without runout get `check-daily`
+  instead (no daily run for 26 h, at 17:00).
+
+With an empty list the alert is only printed to the run's log. An alert never
+fails the run that sends it.
 
 **Logs:** one file per run under `logs/<path>/`, and `logs/<path>/cron_<path>.log`
 for cron's own output. The marker body of a failed survey points to its log.
