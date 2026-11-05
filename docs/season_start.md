@@ -22,7 +22,21 @@ python src/avachain/cluster_carry.py --toml T \
        --from-map <last season archive>/cluster_map.tif [--max-fill-m 3]
 ```
 
-The TOML's `[paths] dem` must already be the new ground surface.
+The TOML's `[paths] dem` must already be the new ground surface. Check it first:
+
+```bash
+python src/avachain/dem_check.py --toml T --dem NEW.tif \
+       --compare <old snowpack DEM> <old runout DEM> --json dem_check.json
+```
+
+It fails on a horizontal CRS other than EPSG:6342, or on less than 99.5 % data
+in the boundary KML, the start-zone KML, the runout path footprint (the
+runout profile's current `terrain.dem`) or the road inside it. It reports
+the sha256 and the elevation and slope difference against each old surface.
+On last season's pair, 260605 passes and 251110 fails: 251110 has no data on
+the road and covers 39 % of the path. 260605 − 251110 is a median −0.87 m in
+the start zone and −1.23 m over the boundary.
+
 `cluster_carry.py` resamples last season's cluster IDs onto the new DEM grid in
 the map frame. It rebuilds the domain mask, fills cells within `--max-fill-m`
 of an old cluster, and reports cells farther away. Those cells are left out,
