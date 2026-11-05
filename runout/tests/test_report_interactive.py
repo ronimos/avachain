@@ -197,5 +197,21 @@ class ScenarioFields(unittest.TestCase):
         self.assertIsNone(ri.scenario_fields(hz, (2, 2), (5.0,), (1.0,)))
 
 
+
+class Labels(unittest.TestCase):
+    """The line above each map counts scenarios reaching the ROAD; the cursor
+    table counts scenarios reaching the SPOT under the cursor. Both read
+    "N of M", so each must say which (Ron, 2026-11-05: "20 of 75" in the table
+    next to "0 of 75" over the map looked like a contradiction)."""
+
+    def test_map_title_names_the_road(self):
+        self.assertIn("' scenarios reach the road'", ri.JS)
+
+    def test_cursor_table_names_the_spot(self):
+        self.assertIn('<th>Scenarios reaching this spot</th>', ri.JS)
+        self.assertIn('<th>P(reach) here</th>', ri.JS)
+        self.assertNotIn('<th>Scenarios reaching</th>', ri.JS)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -551,8 +551,9 @@ CSS = """
 HTML = """
 <div class="imap-screen">
 <div class="imap-read" id="imap-read">Move over a map: for each day, the probability that flow
-reaches that spot, how many scenarios reach it, and the probability of damaging pressure or depth
-there, with its distance from where the avalanche path crosses the road.</div>
+reaches that spot, how many scenarios reach that spot, and the probability of damaging pressure or depth
+there, with its distance from where the avalanche path crosses the road. The line above each map
+counts the scenarios that reach the road.</div>
 <div class="imap-row" id="imap-row"></div>
 <div class="imap-legend"><span>P(reach)</span><span>0</span><span class="imap-ramp"></span><span>1</span>
 <span style="margin-left:14px"><span class="imap-swatch"></span> road</span>
@@ -707,7 +708,7 @@ JS = r"""
     const i = cellAt(cursor.x, cursor.y);
     const IL = D.impact_labels || [];
     let h = '<table class="imap-tab"><thead><tr><th class="l">' + (pinned ? 'Pinned spot' : 'At the cursor') +
-      '</th><th>P(reach)</th><th>Scenarios reaching</th>' + IL.map(l => '<th>' + l + '</th>').join('') +
+      '</th><th>P(reach) here</th><th>Scenarios reaching this spot</th>' + IL.map(l => '<th>' + l + '</th>').join('') +
       '</tr></thead><tbody>';
     for (const s of D.slots) {
       const m = maps.find(q => q.slot === s);
@@ -735,7 +736,7 @@ JS = r"""
     const title = document.createElement('div'); title.className = 'imap-title';
     title.innerHTML = '<b>' + s.day + '</b> (' + s.name + '), valid ' + s.valid +
       (s.missing ? (s.pending ? '<br>still running' : s.reason ? '<br>no release' : '<br>no forecast') : '<br>P(reach road) = ' + s.p_road.toFixed(2) +
-       ', ' + s.n_reached + ' of ' + s.n_scen + ' scenarios reach');
+       ', ' + s.n_reached + ' of ' + s.n_scen + ' scenarios reach the road');
     const bx = document.createElement('div'); bx.className = 'imap-box';
     cell.append(title, bx); row.append(cell);
     if (s.missing) {
