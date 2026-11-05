@@ -1,31 +1,32 @@
-"""runout_step.py — run com1DFA runout on a published release set.
+"""runout_step.py — run com1DFA runout on a cycle's published release sets.
 
     python src/avachain/runout_step.py --toml slopes/Professor_PTC/slope_config.toml \
            [--snapshot-date YYYY-MM-DD] [--dry-run]
 
 The last step of run_<slope>.sh and run_daily_<slope>.sh (Ron, 2026-11-04:
 chained inline after `scenarios`). It reads the set `scenarios` just published
-at <scenarios_dir>/<snapshot date>/ and runs the runout part (runout/, its own
+at <scenarios_dir>/<cycle date>/ (T_0, T_1, ... from `analysis_pipeline forecast`,
+or one set at the date folder itself) and runs the runout part (runout/, its own
 venv: AvaFrame 2.1 needs numpy < 2) on it:
 
-  1. The set must have READY and match its manifest (handoff.verify): every
-     file present with its recorded size and sha256. Otherwise exit 2.
+  1. Each set must have READY and match its manifest (handoff.verify): every
+     file present with its recorded size and sha256. A set that fails is left
+     out with an error; no readable set at all is exit 2.
   2. The runout tree for the slope, all under [runout] work_dir:
        config/local.yaml          avachain_root = work_dir, scenario_root,
                                   publish_root (generated each run)
        config/{paths,physics,profiles.yaml} -> the repo's runout/config/
-       scen/<path_profile>/<YYYYMMDD>/T_0 -> the release set
+       scen/<path_profile>/<YYYYMMDD>/T_n -> each verified release set
      Runout then writes its work tree, logs and products under work_dir and
      publishes report.html etc. to <publish_root>/forecasts/<path_profile>/.
   3. One global lock ([runout] lock_file) for every runout on the host, taken
      blocking: AvaFrame sims can reach >10 GB each and the 4-sim cap
      (execution.max_workers_cap) must hold across slopes, not only per run.
-  4. runout's forecast profile with --snow-height <set>/scour_depth.tif
-     (entrainment rule B). An empty set (status no_scenarios) needs no sims;
-     runout reports why there is no forecast.
-
-Only T+0 exists operationally: release sets per forecast day (T+1, T+2) wait
-for the NWP-forced release side (GO_LIVE_CHECKLIST section 4).
+  4. runout's forecast profile with --snow-height set: each day entrains its
+     own set's scour_depth.tif (entrainment rule B). runout publishes the
+     report after each day, with the days still running shown as pending. An
+     empty set (status no_scenarios) needs no sims; runout reports why there
+     is no forecast for that day.
 
 Exit status is runout's. The run scripts treat a failure as a warning: the
 survey stays DONE, because snowpack and release succeeded and are published
