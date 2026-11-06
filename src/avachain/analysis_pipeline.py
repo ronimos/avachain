@@ -1181,7 +1181,9 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
 
     rectangle_fallback=False (forced shots): a trigger whose BFS does not
     propagate gives no polygon. Each trigger's outcome is recorded in
-    metadata.json's shot_outcomes when it is False."""
+    metadata.json's shot_outcomes when it is False, and the weights are
+    absolute: each shot holds 1/N over its size x depth grid, nothing is
+    renormalised, and what is not released is p_no_release (Ron, 2026-11-06)."""
     print(f"Trigger clusters ({trigger_source}): {list(triggers.index)} "
           f"Sk38={list(triggers[sk38_col].round(3))}")
 
@@ -1402,6 +1404,7 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
                     scour_depth_m         = hh_depth_m,
                     scour_depth_mid_m     = hh_depth_mid_m,
                     hand_hardness_value   = hh_value,
+                    ensemble_weight_total = None if rectangle_fallback else 1.0,
                 )
                 # Augment row with trigger rank and sk38
                 row['density_kgm3'] = round(density_mean, 1)
@@ -1439,17 +1442,23 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
                  'n_below_depth_floor': n_below_floor}
         if not rectangle_fallback:
             empty['shot_outcomes'] = outcomes
+            empty['p_no_release'] = 1.0
         (out_dir / "metadata.json").write_text(json.dumps(empty, indent=2))
         return out_dir
 
-    # Normalise weights to sum to 1
+    # Normalise weights to sum to 1, except forced shots: their weights are
+    # absolute (1/N per shot), and the share that did not release is
+    # P(no release), not something to spread over the shots that did.
     total_w = sum(weight_map.values())
-    weight_map = {k: v / total_w for k, v in weight_map.items()}
+    if rectangle_fallback:
+        weight_map = {k: v / total_w for k, v in weight_map.items()}
+    p_no_release = max(0.0, 1.0 - total_w)
     for row in rows:
         row['weight'] = weight_map.get(row['scenario_id'], row['weight'])
 
     # Write ensemble outputs
-    write_scenario_weights(weight_map, out_dir / "scenario_weights.json")
+    write_scenario_weights(weight_map, out_dir / "scenario_weights.json",
+                           normalise=rectangle_fallback)
     write_summary_csv(rows, out_dir / "summary.csv",
                       extra_cols=('frac_outside_mask',) if _rg.MASK_MODE == 'diagnostic' else ())
     write_metadata(
@@ -1473,6 +1482,7 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
         meta_p = out_dir / "metadata.json"
         meta_d = json.loads(meta_p.read_text())
         meta_d['shot_outcomes'] = outcomes
+        meta_d['p_no_release'] = round(p_no_release, 6)
         meta_p.write_text(json.dumps(meta_d, indent=2))
 
     # --- Release comparison plot: written on every scenarios run ---

@@ -186,11 +186,54 @@ class TestPublish:
 
 
 def test_toml_key(tmp_path):
-    toml = fx.REPO / "slopes/Professor_PTC/slope_config.toml"
+    # On for the operational slope (Ron, 2026-11-06), off for the dev slope.
+    assert ProjectConfig.from_toml(
+        fx.REPO / "slopes/Professor_PTC/slope_config.toml").force_explosive_triggers is True
+    toml = fx.REPO / "slopes/little_prof/slope_config.toml"
     assert ProjectConfig.from_toml(toml).force_explosive_triggers is False
     src = toml.read_text()
     assert src.count("force_explosive_triggers = false") == 1
-    src = src.replace("force_explosive_triggers = false", "force_explosive_triggers = true")
     p = tmp_path / "slope_config.toml"
-    p.write_text(src)
+    p.write_text(src.replace("force_explosive_triggers = false",
+                             "force_explosive_triggers = true"))
     assert ProjectConfig.from_toml(p).force_explosive_triggers is True
+
+
+
+def test_each_shot_holds_one_nth_and_the_rest_is_no_release(tmp_path, monkeypatch):
+    # Ron, 2026-11-06: 1/N per shot, the shots that do not release count as
+    # P(no release), nothing renormalised. The polygon builder is stubbed:
+    # 4137 does not propagate, the other three release the same box.
+    from shapely.geometry import box
+    d = fx.load()
+    rows, cols = np.nonzero(d['cluster_map'] == 3500)
+    tr = d['transform']
+    x0, y0 = tr * (cols.min(), rows.max() + 1)
+    x1, y1 = tr * (cols.max() + 1, rows.min())
+    poly = box(x0, y0, x1, y1)
+    monkeypatch.setattr(ap, "make_release_polygon_2d",
+                        lambda trigger_cluster_id, **k:
+                        None if trigger_cluster_id == 4137 else poly)
+    out, meta, shot, smeta = _run(tmp_path, monkeypatch,
+                                  size_factors=(0.85, 1.0, 1.15))
+    assert smeta["p_no_release"] == pytest.approx(0.25)
+    s = pd.read_csv(shot / "summary.csv")
+    per_shot = s.groupby("trigger_cluster").weight.sum()
+    assert sorted(per_shot.index) == [2480, 2568, 3500]
+    assert np.allclose(per_shot, 0.25)
+    w = json.loads((shot / "scenario_weights.json").read_text())
+    assert sum(w.values()) == pytest.approx(0.75)                 # not renormalised
+    for f in (shot / "scenarios").glob("*/params.json"):
+        prm = json.loads(f.read_text())
+        assert prm["ensemble_weight_total"] == 1.0
+        assert prm["scenario_probability"] == pytest.approx(w[f.parent.name], abs=1e-6)
+    # the model set is renormalised as before, and carries no total
+    m = json.loads((out / "scenario_weights.json").read_text())
+    assert sum(m.values()) == pytest.approx(1.0)
+    for f in (out / "scenarios").glob("*/params.json"):
+        assert "ensemble_weight_total" not in json.loads(f.read_text())
+
+
+def test_no_shot_releases_is_all_no_release(tmp_path, monkeypatch):
+    out, meta, shot, smeta = _run(tmp_path, monkeypatch, no_propagation=True)
+    assert smeta["n_scenarios"] == 0 and smeta["p_no_release"] == 1.0

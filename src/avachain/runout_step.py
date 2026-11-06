@@ -80,8 +80,10 @@ SHOT_CAVEAT = (
     "Explosive-shot forecast: every scenario starts at one of the slope's "
     "explosive-control shot locations, assumed to initiate a failure. Only "
     "propagation is modelled, and a shot whose crack does not propagate "
-    "releases nothing. Probabilities are over the shots that do propagate, "
-    "each shot weighted equally. The model forecast is published separately.")
+    "releases nothing. Each shot carries 1/N of the probability, and a shot "
+    "that does not release counts as no reach, so P(reach) here is per shot "
+    "fired, not conditional on release. The model forecast is published "
+    "separately.")
 
 
 def shot_settings(rc: dict) -> dict:

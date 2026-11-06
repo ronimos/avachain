@@ -284,6 +284,19 @@ def plot_small_multiples(horizons, dpi=120):
     return fig_to_b64(fig, dpi)
 
 
+def _weight_denominator(df, w):
+    # sum(w), or the set's fixed ensemble_weight_total when its weights are
+    # absolute (forced explosive shots: the rest of 1 is no release)
+    # @param df: scenarios table
+    # @param w: weights array
+    # @returns: float
+    if 'ensemble_weight_total' in df.columns:
+        t = pd.to_numeric(df['ensemble_weight_total'], errors='coerce').max()
+        if pd.notna(t) and t > 0:
+            return float(t)
+    return float(w.sum())
+
+
 def road_approach_curve(df, dist=None):
     # Weighted P(closest approach <= d) as a step curve
     # @param df: scenarios table (distance_to_road_m, reached_road,
@@ -309,8 +322,9 @@ def road_approach_curve(df, dist=None):
         return None
     order = np.argsort(d)
     d, w = d[order], w[order]
-    cum = np.cumsum(w) / w.sum()
-    p0 = float(w[d <= 0].sum() / w.sum())
+    den = _weight_denominator(df, w)
+    cum = np.cumsum(w) / den
+    p0 = float(w[d <= 0].sum() / den)
     return np.concatenate([[0.0], d]), np.concatenate([[p0], cum])
 
 
@@ -379,9 +393,10 @@ def plot_exceedance(horizons, dpi=120):
         r, w = r[order], w[order]
         # P(X >= x) steps down at each scenario's runout: on [r_i, r_i+1)
         # the share of weight with runout >= r_i+1, and 0 past the longest
-        tail = np.cumsum(w[::-1])[::-1] / w.sum()
+        den = _weight_denominator(df, w)
+        tail = np.cumsum(w[::-1])[::-1] / den
         xs = np.concatenate([[0.0], r])
-        ys = np.concatenate([[1.0], tail[1:], [0.0]])
+        ys = np.concatenate([[tail[0]], tail[1:], [0.0]])
         ax.step(xs, ys, where='post', color='black',
                 linestyle=HORIZON_STYLES[i % len(HORIZON_STYLES)],
                 linewidth=1.4, label=f"{hz['name']}  ({len(df)} scenarios)")
@@ -628,7 +643,7 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 Physics {{ physics_name }} [{{ physics_hash }}], {{ friction_model }}{{ friction_params }},
 sim type {{ sim_type }}, reach threshold {{ reach_threshold }} m, entrainment {{ ent_mode }},
 depths {{ depth_convention }}. Pipeline v{{ version }}{% if git %} ({{ git }}){% endif %}{% if avaframe %}, AvaFrame {{ avaframe }}{% endif %}.
-Probabilities are the weighted fraction of snowpack scenarios whose flow reaches a location, conditional on release.
+{% if absolute_weights %}Probabilities are per shot fired: each explosive-control shot carries an equal share, and a shot that does not release counts as not reaching.{% else %}Probabilities are the weighted fraction of snowpack scenarios whose flow reaches a location, conditional on release.{% endif %}
 <a href="details.html">Details</a>, <a href="viewer.html">Viewer</a>, <a href="scenarios.xlsx">Scenario table</a>.
 </div>
 {% if imap_data %}<script type="application/json" id="imap-data">{{ imap_data }}</script>
@@ -884,8 +899,13 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
     fparams = ', '.join(f"{k}={fr[k]}" for k in ('mu', 'xi', 'tau0')
                         if fr.get(k) is not None)
     box = inputs_and_caveats(manifest, horizons)
+    absolute_weights = any(
+        'ensemble_weight_total' in hz['df'].columns
+        and pd.to_numeric(hz['df']['ensemble_weight_total'], errors='coerce').notna().any()
+        for hz in horizons if not hz['df'].empty)
     html = Template(REPORT_TEMPLATE).render(
         css=CSS, **imap, inputs=box['rows'], caveats=box['caveats'],
+        absolute_weights=absolute_weights,
         snow_line=box['snow_line'],
         project=manifest.get('display', {}).get('project_name', manifest['path']),
         subtitle=manifest.get('display', {}).get('subtitle', ''),
