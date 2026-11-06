@@ -115,6 +115,7 @@ def release_info(src_dir):
             'n_below_depth_floor': meta.get('n_below_depth_floor'),
             'min_release_depth_m': meta.get('min_release_depth_m', RELEASE_DEPTH_FLOOR_M),
             'snapshot_date': man.get('snapshot_date'),
+            'shot_outcomes': meta.get('shot_outcomes'),
         }
         info['reason'] = no_release_reason(info) if info['status'] == 'no_scenarios' else None
         return info
@@ -130,6 +131,21 @@ def no_release_reason(info):
     n_trig = info.get('n_trigger_locations')
     floor = f"{info.get('min_release_depth_m', RELEASE_DEPTH_FLOOR_M):.2f} m"
     snap = f" (snowpack {info['snapshot_date']})" if info.get('snapshot_date') else ''
+    if src == 'explosive_forced':
+        # Forced explosive shots: each shot initiates; none propagated
+        why = {'slab_tensile': 'the slab could not carry the crack (slab tensile support below 1)',
+               'no_propagation': 'the crack did not propagate',
+               'no_arrest_indices': 'no snowpack cluster had a weak layer to propagate in'}
+        outcomes = info.get('shot_outcomes') or {}
+        parts = []
+        for cid, o in outcomes.items():
+            reason = why.get(o.get('no_release_reason'))
+            if o.get('n_below_depth_floor') and not reason:
+                reason = f'the release held too little snow (mean depth under {floor})'
+            parts.append(f"cluster {cid}: {reason or 'no release'}")
+        detail = f" ({'; '.join(parts)})" if parts else ''
+        return (f"No release scenarios{snap}: none of the explosive-control shots "
+                f"would release an avalanche{detail}.")
     if src == 'explosive_fallback' and n_low:
         return (f"No release scenarios{snap}: no snowpack cluster met the trigger "
                 f"criteria, and the {n_low} releases tried at the explosive-control "

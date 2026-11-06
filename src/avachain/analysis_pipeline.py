@@ -561,6 +561,27 @@ def scenario_set_dir(cfg, args) -> Path:
     return base / args.forecast_horizon if args.forecast_horizon else base
 
 
+SHOT_SET_NAME = "shots"
+
+
+def shot_set_dir(cfg, args) -> Path:
+    """Where the forced-shot set is published: <scenarios_dir>/<date>/shots[/<horizon>].
+
+    Under the date folder but not named T_n, so runout_step and runout's
+    discover_horizons never take it for a horizon, and handoff.publish of
+    the model set at <date>/ carries it across instead of dropping it."""
+    base = (cfg.scenarios_dir / (getattr(args, 'cycle_date', None) or args.snapshot_date)
+            / SHOT_SET_NAME)
+    return base / args.forecast_horizon if args.forecast_horizon else base
+
+
+def _forcing_shots(cfg, args) -> bool:
+    flag = getattr(args, 'force_explosive_triggers', None)
+    if flag is None:
+        flag = getattr(cfg, 'force_explosive_triggers', False)
+    return bool(flag) and bool(getattr(cfg, 'explosive_trigger_points', None))
+
+
 def store_span(zarr_path):
     """(first, last) time in a Zarr store, or None when there is none."""
     if not zarr_path or not Path(zarr_path).exists():
@@ -697,11 +718,33 @@ def step_scenarios(cfg, args):
     import handoff
     final = scenario_set_dir(cfg, args)
     stage = handoff.staging_dir(final)
+    shot_final = shot_set_dir(cfg, args) if _forcing_shots(cfg, args) else None
+    shot_stage = None
+    if shot_final is not None:
+        shot_final.parent.mkdir(parents=True, exist_ok=True)
+        shot_stage = handoff.staging_dir(shot_final)
     try:
-        _build_scenarios(cfg, args, stage)
+        if shot_stage is None:
+            _build_scenarios(cfg, args, stage)
+        else:
+            _build_scenarios(cfg, args, stage, shot_dir=shot_stage)
     except BaseException:
         handoff.discard(stage)
+        if shot_stage is not None:
+            handoff.discard(shot_stage)
         raise
+    _publish_set(cfg, args, stage, final)
+    print(f"Published scenario set → {final}")
+    if shot_stage is not None:
+        # After the model set: publishing <date>/ moves an existing
+        # <date>/shots across, and the shot set then replaces itself in place.
+        _publish_set(cfg, args, shot_stage, shot_final)
+        print(f"Published forced-shot set → {shot_final}")
+    return final
+
+
+def _publish_set(cfg, args, stage, final):
+    import handoff
     meta = stage / "metadata.json"
     meta_d = json.loads(meta.read_text()) if meta.exists() else {}
     n = meta_d.get("n_scenarios", 0)
@@ -714,11 +757,9 @@ def step_scenarios(cfg, args):
                     snapshot_ts=getattr(args, 'snapshot_ts', None),
                     store=getattr(args, 'store_kind', None),
                     clamped=getattr(args, 'clamped', None))
-    print(f"Published scenario set → {final}")
-    return final
 
 
-def _build_scenarios(cfg, args, out_dir: Path):
+def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
     """
     Generate AvaFrame com1DFA release scenario ensemble into out_dir.
 
@@ -778,6 +819,11 @@ def _build_scenarios(cfg, args, out_dir: Path):
         meloche_df = meloche_df[~meloche_df.index.duplicated(keep='first')]
     print(f"  Features: {len(snap_features)} clusters from {feat_csv.name}")
     print(f"  Meloche:  {len(meloche_df)} clusters from {mel_csv.name}")
+
+    if shot_dir is not None:
+        _build_shot_set(cfg, args, shot_dir, cluster_map, snap_features,
+                        meloche_df, ds, dem, transform, crs_wkt,
+                        raster_profile, start_zone_mask)
 
     # --- Find trigger locations ---
     # Candidate pool: ALL clusters within the start zone that have features.
@@ -971,6 +1017,17 @@ def _polygon_density(polygon, cluster_map, snap_features, transform):
     return float(rho.median()), std
 
 
+def _no_release_reason(cid, meloche_df, snap_features) -> str:
+    """Why a trigger gave no polygon: the slab tensile gate, else no propagation."""
+    if _rg.USE_SLAB_TENSILE_GATE and _rg.ARREST_MODE == 'legacy':
+        s_t = _rg.cluster_tensile_support(cid, meloche_df, snap_features)
+        if np.isfinite(s_t) and s_t < 1.0:
+            return 'slab_tensile'
+    if meloche_df.empty or cid not in meloche_df.index:
+        return 'no_arrest_indices'
+    return 'no_propagation'
+
+
 def _clusters_at_points(points, cluster_map, transform) -> list:
     """Cluster id under each (lat, lon) WGS84 point, in order, no duplicates.
 
@@ -1014,6 +1071,38 @@ def _explosive_triggers(cids, cluster_map, snap_features, sk38_col):
     if sk38_col not in triggers.columns:
         triggers[sk38_col] = np.nan
     return triggers
+
+
+def _build_shot_set(cfg, args, shot_dir, cluster_map, snap_features,
+                    meloche_df, ds, dem, transform, crs_wkt, raster_profile,
+                    start_zone_mask):
+    """The forced-shot scenario set, written into shot_dir.
+
+    A shot always initiates, so the shot clusters take none of the trigger
+    gates (tau_g, slope, Sk38, slab thickness, elevation, Pi1, ranking). What
+    stays is everything that decides propagation: the slab tensile gate on
+    the trigger, the BFS arrest, the start-zone and Stauchwall clip, and the
+    0.10 m release-depth floor. There is no rectangle fallback: a shot whose
+    BFS does not propagate releases nothing, and metadata.json's
+    shot_outcomes says so per shot.
+    """
+    print(f"\n--- Forced explosive triggers → {shot_dir} ---")
+    shot_dir.mkdir(parents=True, exist_ok=True)
+    points = list(cfg.explosive_trigger_points)
+    cids = _clusters_at_points(points, cluster_map, transform)
+    sk38_col = 'min_sk38' if 'min_sk38' in snap_features.columns else 'sk38_min'
+    triggers = _explosive_triggers(cids, cluster_map, snap_features, sk38_col)
+    if triggers.empty:
+        print("  No shot location is on the cluster map — empty shot set")
+        (shot_dir / "metadata.json").write_text(json.dumps(
+            {'snapshot_date': args.snapshot_date, 'n_scenarios': 0,
+             'n_trigger_locations': 0, 'trigger_source': 'explosive_forced',
+             'n_below_depth_floor': 0, 'shot_outcomes': {}}, indent=2))
+        return
+    _write_scenario_set(cfg, args, shot_dir, triggers, 'explosive_forced',
+                        sk38_col, snap_features, meloche_df, ds, cluster_map,
+                        dem, transform, crs_wkt, raster_profile,
+                        start_zone_mask, rectangle_fallback=False)
 
 
 def _model_triggers(candidate_ids, snap_features, meloche_df, sk38_col, args,
@@ -1087,8 +1176,14 @@ def _model_triggers(candidate_ids, snap_features, meloche_df, sk38_col, args,
 def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
                         sk38_col, snap_features, meloche_df, ds, cluster_map,
                         dem, transform, crs_wkt, raster_profile,
-                        start_zone_mask):
-    """Write the scenario ensemble for the chosen triggers into out_dir."""
+                        start_zone_mask, rectangle_fallback=True):
+    """Write the scenario ensemble for the chosen triggers into out_dir.
+
+    rectangle_fallback=False (forced shots): a trigger whose BFS does not
+    propagate gives no polygon. Each trigger's outcome is recorded in
+    metadata.json's shot_outcomes when it is False, and the weights are
+    absolute: each shot holds 1/N over its size x depth grid, nothing is
+    renormalised, and what is not released is p_no_release (Ron, 2026-11-06)."""
     print(f"Trigger clusters ({trigger_source}): {list(triggers.index)} "
           f"Sk38={list(triggers[sk38_col].round(3))}")
 
@@ -1154,7 +1249,11 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
     most_likely     = {'weight': -1.0, 'scenario_id': None, 'polygon': None,
                        'size_factor': None, 'trigger': None}  # highest-weight scenario
 
+    outcomes = {}   # per trigger: scenarios kept / below floor / why none
     for t_rank, (t_cid, _) in enumerate(triggers.iterrows()):
+        outcome = outcomes.setdefault(str(int(t_cid)), {
+            'n_scenarios': 0, 'n_below_depth_floor': 0, 'n_no_release': 0,
+            'no_release_reason': None})
         # A_ca from Meloche features, fallback to 50m
         A_ca    = 50.0   # default fallback (m)
         A_CA_MAX = 300.0 # cap — start zone is ~250m wide; beyond this
@@ -1241,11 +1340,15 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
                         max_clusters       = args.max_clusters,
                         use_propagation    = not args.no_propagation,
                         state_out          = arrest_state,
+                        rectangle_fallback = rectangle_fallback,
                     )
 
                 if polygon is None:
                     print(f"  Skip scenario (degenerate polygon): "
                           f"trigger={t_cid} size_f={size_f}")
+                    outcome['n_no_release'] += 1
+                    outcome['no_release_reason'] = _no_release_reason(
+                        t_cid, meloche_df, snap_features)
                     continue
 
                 # Scale depth by percentile
@@ -1261,6 +1364,7 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
                 # (Ron, 2026-11-04).
                 if _release_mean_depth(release_depth) < MIN_RELEASE_DEPTH_M:
                     n_below_floor += 1
+                    outcome['n_below_depth_floor'] += 1
                     continue
 
                 density_mean, density_std = _polygon_density(
@@ -1300,6 +1404,7 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
                     scour_depth_m         = hh_depth_m,
                     scour_depth_mid_m     = hh_depth_mid_m,
                     hand_hardness_value   = hh_value,
+                    ensemble_weight_total = None if rectangle_fallback else 1.0,
                 )
                 # Augment row with trigger rank and sk38
                 row['density_kgm3'] = round(density_mean, 1)
@@ -1312,6 +1417,7 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
                     _write_arrest_state(arrest_state,
                                         out_dir / "scenarios" / scenario_id)
                 rows.append(row)
+                outcome['n_scenarios'] += 1
                 weight_map[scenario_id] = weight
 
                 # Track the highest-weight scenario for the comparison plot.
@@ -1330,21 +1436,29 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
         print("WARNING: No scenarios generated — check trigger clusters and Meloche features")
     if not rows:
         # Still record why the set is empty: the manifest reads this.
-        (out_dir / "metadata.json").write_text(json.dumps(
-            {'snapshot_date': args.snapshot_date, 'n_scenarios': 0,
-             'n_trigger_locations': len(triggers),
-             'trigger_source': trigger_source,
-             'n_below_depth_floor': n_below_floor}, indent=2))
+        empty = {'snapshot_date': args.snapshot_date, 'n_scenarios': 0,
+                 'n_trigger_locations': len(triggers),
+                 'trigger_source': trigger_source,
+                 'n_below_depth_floor': n_below_floor}
+        if not rectangle_fallback:
+            empty['shot_outcomes'] = outcomes
+            empty['p_no_release'] = 1.0
+        (out_dir / "metadata.json").write_text(json.dumps(empty, indent=2))
         return out_dir
 
-    # Normalise weights to sum to 1
+    # Normalise weights to sum to 1, except forced shots: their weights are
+    # absolute (1/N per shot), and the share that did not release is
+    # P(no release), not something to spread over the shots that did.
     total_w = sum(weight_map.values())
-    weight_map = {k: v / total_w for k, v in weight_map.items()}
+    if rectangle_fallback:
+        weight_map = {k: v / total_w for k, v in weight_map.items()}
+    p_no_release = max(0.0, 1.0 - total_w)
     for row in rows:
         row['weight'] = weight_map.get(row['scenario_id'], row['weight'])
 
     # Write ensemble outputs
-    write_scenario_weights(weight_map, out_dir / "scenario_weights.json")
+    write_scenario_weights(weight_map, out_dir / "scenario_weights.json",
+                           normalise=rectangle_fallback)
     write_summary_csv(rows, out_dir / "summary.csv",
                       extra_cols=('frac_outside_mask',) if _rg.MASK_MODE == 'diagnostic' else ())
     write_metadata(
@@ -1364,6 +1478,12 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
             'max_m':    round(float(np.max(a_ca_list)),  1),
         },
     )
+    if not rectangle_fallback:
+        meta_p = out_dir / "metadata.json"
+        meta_d = json.loads(meta_p.read_text())
+        meta_d['shot_outcomes'] = outcomes
+        meta_d['p_no_release'] = round(p_no_release, 6)
+        meta_p.write_text(json.dumps(meta_d, indent=2))
 
     # --- Release comparison plot: written on every scenarios run ---
     import traceback
@@ -1544,6 +1664,13 @@ def build_parser():
                         help='legacy mode: also arrest where the slab breaks in tension '
                              'before the crack reaches r_c (Schweizer et al. 2014; '
                              'default: release_geometry.USE_SLAB_TENSILE_GATE, on).')
+    parser.add_argument('--force-explosive-triggers', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help='scenarios: also publish a forced-shot set at '
+                             '<date>/shots[/T_n] with a trigger at every '
+                             '[scenarios] explosive_trigger_points location, no '
+                             'initiation gate, propagation physics only (default: '
+                             '[scenarios] force_explosive_triggers, off).')
     parser.add_argument('--energy-delta', type=float, default=_ep.ENERGY_DELTA,
                         help=f"delta in the energy-mode G_c (default: {_ep.ENERGY_DELTA}; "
                              "R was fitted at 0). The Eq. 20 delta is unchanged.")

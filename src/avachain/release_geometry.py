@@ -639,9 +639,15 @@ def make_release_polygon_2d(
         use_propagation: bool = True,
         pixel_index: Optional[dict] = None,
         state_out: Optional[dict] = None,
-        wave_callback=None):
+        wave_callback=None,
+        rectangle_fallback: bool = True):
     """
     Build a 2D release polygon.
+
+    rectangle_fallback=False returns None where the BFS does not propagate,
+    instead of the oriented rectangle. Forced explosive triggers use it: the
+    shot always initiates, so the question is only whether the crack
+    propagates, and a rectangle would answer yes regardless (Ron, 2026-11-06).
 
     MASK_MODE == 'diagnostic' ignores start_zone_mask (no BFS gate, no clip).
     In any ARREST_MODE but 'legacy' there is no rectangle fallback and no
@@ -758,8 +764,21 @@ def make_release_polygon_2d(
                 return polygon
         if energy_mode:
             return None
+        if not rectangle_fallback:
+            print(f"  propagate_release returned None for cluster "
+                  f"{trigger_cluster_id} — no propagation")
+            if state_out is not None:
+                state_out['no_propagation'] = True
+            return None
         print(f"  propagate_release returned None for cluster {trigger_cluster_id}"
               f" — falling back to rectangle")
+
+    if not rectangle_fallback and not energy_mode:
+        # No BFS was run (no arrest indices, or use_propagation off): there
+        # is nothing that says the crack propagates.
+        if state_out is not None:
+            state_out['no_propagation'] = True
+        return None
 
     # --- Fallback: oriented rectangle ---
     _, aspect_grid = compute_slope_aspect(dem)

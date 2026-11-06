@@ -412,6 +412,28 @@ scoured clusters.
   left, the set publishes as `status: "no_scenarios"` and the run ends DONE. On such a day `meloche_df` has **no arrest-index columns at all**
   (nothing reached `TAU_G_FEATURE_FLOOR`), so guard column access, not just
   row access.
+- **Forced shots are a separate set, not a fallback.** With
+  `[scenarios] force_explosive_triggers` (or `--force-explosive-triggers`)
+  every run also publishes `<date>/shots[/T_n]`: no initiation gate, and
+  `make_release_polygon_2d(rectangle_fallback=False)`, so a shot that does not
+  propagate gives nothing (Ron, 2026-11-06: "they will trigger, the question
+  is will it propagate"). The no-candidate fallback above still puts shots
+  into the model set, with rectangles. `shots/` is not a `T_n` folder, so
+  runout's `discover_horizons` never takes it for a horizon, and
+  `handoff.publish` of `<date>/` carries it across. `runout_step` runs it as a
+  **second runout** (`shot_settings`): `<work_dir>/shots/`, `<publish_root>/
+  shots/`, and a generated relabelled path profile. Keeping it a separate run
+  avoids teaching the runout's manifest, report and viewer, which all
+  parse `T_<int>`, a new label. This is avachain-only: it is not in
+  `~/avalanche-release-areas`, and does not belong there.
+- **Shot weights are absolute.** Each shot holds 1/N, and whatever does not
+  release is `p_no_release` (Ron, 2026-11-06), so a shot set's weights sum
+  to P(release) ≤ 1. Its `params.json` carries `ensemble_weight_total = 1.0`.
+  The runout's weighted fractions (`stack_reach_masks`, road and reference
+  point summaries, the report curves, impact P, `rethreshold_reach`) divide by
+  that, never by `sum(w)`. A new weighted average in the runout must do the
+  same, or it silently turns "per shot fired" back into "given release".
+  Model sets carry no total and are unchanged. Professor_PTC has it on.
 - **Release density is per polygon.** It comes from the clusters inside the
   release polygon (see the standalone section). Its old source, the observed
   release group, is empty on every live day.

@@ -144,9 +144,15 @@ def write_scenario(scenario_dir: Path,
                    profile: Optional[dict] = None,
                    scour_depth_m: Optional[float] = None,
                    scour_depth_mid_m: Optional[float] = None,
-                   hand_hardness_value: Optional[float] = None) -> dict:
+                   hand_hardness_value: Optional[float] = None,
+                   ensemble_weight_total: Optional[float] = None) -> dict:
     """
     Write one scenario directory with all AvaFrame com1DFA inputs.
+
+    ensemble_weight_total: set for an ensemble whose weights are absolute
+    (forced explosive shots: each shot holds 1/N, and whatever does not
+    release is P(no release)). params.json carries it, and the runout divides
+    by it instead of by the sum of the weights it has.
 
     Returns a dict of scalar stats for the summary CSV row.
 
@@ -284,6 +290,8 @@ def write_scenario(scenario_dir: Path,
         params['scour_depth_mid_m'] = round(float(scour_depth_mid_m), 3)
     if hand_hardness_value is not None:
         params['hand_hardness_value'] = round(float(hand_hardness_value), 2)
+    if ensemble_weight_total is not None:
+        params['ensemble_weight_total'] = float(ensemble_weight_total)
 
     (out / 'params.json').write_text(json.dumps(params, indent=2))
 
@@ -312,17 +320,20 @@ def write_scenario(scenario_dir: Path,
 # Ensemble-level outputs
 # -----------------------------------------------------------------------
 
-def write_scenario_weights(weights: dict, out_path: Path) -> None:
+def write_scenario_weights(weights: dict, out_path: Path,
+                           normalise: bool = True) -> None:
     """
     Write scenario probability weights as JSON.
 
     Parameters
     ----------
-    weights  : {scenario_id: float} summing to 1.0
-    out_path : output path
+    weights   : {scenario_id: float} summing to 1.0
+    out_path  : output path
+    normalise : False keeps absolute weights (forced shots: the sum is
+                P(release), the rest P(no release))
     """
     total = sum(weights.values())
-    if abs(total - 1.0) > 1e-6 and total > 0:
+    if normalise and abs(total - 1.0) > 1e-6 and total > 0:
         weights = {k: v / total for k, v in weights.items()}
     out_path.write_text(json.dumps(weights, indent=2))
 

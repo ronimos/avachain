@@ -99,6 +99,14 @@ stauchwall_deg     = 29.0
 # average is dropped, and if none is left an empty scenario set is published.
 # Leave empty for a slope with no explosive control.
 explosive_trigger_points = []
+# Also publish a forced-shot set every run at <scenarios>/<date>/shots[/T_n]:
+# a trigger at every point above, no initiation gate (a shot always
+# initiates), and the release model decides only whether it propagates (no
+# rectangle fallback). Each shot holds 1/N; a shot that does not release
+# counts as no release (P per shot fired). The model set is unchanged.
+# runout_step runs it as a second runout, published under
+# <publish_root>/shots/. CLI: --force-explosive-triggers.
+force_explosive_triggers = false
 
 # ---------------------------------------------------------------------------
 # [wrf] — WRF forecast forcing

@@ -269,6 +269,26 @@ triggers are the slope's explosive-control shot locations,
 cluster under the point on the current map, and they take equal weight.
 Before 2026-11-04 this case raised `ValueError` and failed the survey.
 
+**Forced shots (`[scenarios] force_explosive_triggers`, off by default).**
+Every run also publishes a second set at `<date>/shots[/T_n]`, with a trigger
+at every shot location. A shot always initiates, so it skips the
+initiation gates (steps 1–6). It still goes through everything that decides
+propagation: the slab tensile gate, the BFS arrest, the start-zone and
+Stauchwall clip, and the 0.10 m depth floor. There is **no rectangle
+fallback**, so a shot that does not propagate releases nothing.
+`metadata.json` → `shot_outcomes` gives each shot's result and the reason
+(`slab_tensile`, `no_propagation`, `no_arrest_indices`). Each shot holds
+1/N of the probability over its size × depth grid, and nothing is
+renormalised. The share of shots that do not release is `p_no_release`, so
+P(reach) is per shot fired, not conditional on release. Each `params.json`
+carries `ensemble_weight_total = 1.0`, and the runout divides by that instead
+of by the sum of the weights. The model set is unchanged. On by default for
+Professor_PTC.
+`runout_step.py` runs the shot sets as a second runout after the model run,
+under the same lock. That run has its own tree (`<work_dir>/shots/`) and web
+folder (`<publish_root>/shots/forecasts/<path>/`). Its report is titled
+"… — explosive shots", and a caveat says the probabilities are per shot fired.
+
 **Release depth floor.** Any scenario, whatever its trigger, whose release
 holds < 0.10 m of snow on average is dropped (`MIN_RELEASE_DEPTH_M`). If
 nothing is left, an empty set is published (`status: "no_scenarios"`) and the

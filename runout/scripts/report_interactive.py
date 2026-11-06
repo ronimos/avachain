@@ -41,6 +41,7 @@ from io import BytesIO
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import geopandas as gpd
 from matplotlib import colormaps
 from matplotlib.colors import LightSource
@@ -323,6 +324,12 @@ def scenario_fields(hz, shape, pressures_kpa, depths_m):
             k += 1
         wsum += w
         n += 1
+    # absolute weights (forced shots): divide by the fixed total, so the
+    # share that did not release counts as no impact
+    if 'ensemble_weight_total' in df.columns:
+        t = pd.to_numeric(df['ensemble_weight_total'], errors='coerce').max()
+        if pd.notna(t) and t > 0:
+            wsum = float(t)
     labels = [f"P(pressure &ge; {t:g} kPa)" for t in pressures_kpa] + \
              [f"P(depth &ge; {t:g} m)" for t in depths_m]
     return {'count': np.minimum(count, 255).astype(np.uint8), 'n': n,

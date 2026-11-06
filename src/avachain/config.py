@@ -141,6 +141,12 @@ class ProjectConfig:
     # (Ron, 2026-11-04). Points, not cluster IDs: the shot locations are
     # fixed on the ground, while cluster IDs change with every new map.
     explosive_trigger_points: list = field(default_factory=list)
+    # Also publish a forced-shot set every run: one trigger at every shot
+    # location, no initiation gate (a shot always initiates), and the release
+    # model decides only whether it propagates, with no rectangle fallback.
+    # Published beside the model set at <scenarios_dir>/<date>/shots[/T_n],
+    # each shot equally weighted; the model set is unchanged (Ron, 2026-11-06).
+    force_explosive_triggers: bool = False
     # UTC hour of the snapshot every read of a run uses (features, release
     # depth, scour). None keeps the historical per-read hours (features 00,
     # depth 12, scour 18), which the Jan 18 validation runs rely on. Ron,
@@ -481,6 +487,8 @@ class ProjectConfig:
             stauchwall_deg=float(scenarios.get("stauchwall_deg", 29.0)),
             explosive_trigger_points=_lat_lon_points(
                 scenarios.get("explosive_trigger_points", [])),
+            force_explosive_triggers=bool(
+                scenarios.get("force_explosive_triggers", False)),
             snapshot_hour_utc=(int(scenarios["snapshot_hour_utc"])
                                if scenarios.get("snapshot_hour_utc") is not None else None),
             forecast_days=(int(scenarios["forecast_days"])

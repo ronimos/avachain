@@ -163,6 +163,23 @@ class Report(unittest.TestCase):
         self.assertNotIn('20251130/details.html', index)
 
 
+class TestForcedShotReason(unittest.TestCase):
+    # Forced explosive shots (Ron, 2026-11-06): each shot initiates; the
+    # report says, per shot, why none propagated
+    def test_names_each_shot(self):
+        info = {'status': 'no_scenarios', 'n_scenarios': 0,
+                'trigger_source': 'explosive_forced', 'n_below_depth_floor': 0,
+                'shot_outcomes': {
+                    '3500': {'n_scenarios': 0, 'n_below_depth_floor': 0,
+                             'n_no_release': 15, 'no_release_reason': 'slab_tensile'},
+                    '2568': {'n_scenarios': 0, 'n_below_depth_floor': 15,
+                             'n_no_release': 0, 'no_release_reason': None}}}
+        r = discover.no_release_reason(info)
+        self.assertIn('none of the explosive-control shots', r)
+        self.assertIn('cluster 3500: the slab could not carry the crack', r)
+        self.assertIn('cluster 2568: the release held too little snow', r)
+
+
 if __name__ == '__main__':
     unittest.main()
 

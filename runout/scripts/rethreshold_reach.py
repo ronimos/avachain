@@ -323,11 +323,15 @@ def main():
                 continue
             w = float(sc['params'].get('scenario_probability', 0) or 0)
             weights.append(w if w > 0 else 1.0)
-        if not any(w != weights[0] for w in weights):
+        abs_total = stack.ensemble_weight_total(sc['params'] for sc in scenarios)
+        if not abs_total and not any(w != weights[0] for w in weights):
             weights = None  # all equal -> unweighted
+    else:
+        abs_total = None
 
     prob_path = outputs_dir / 'probability.tif'
-    stack.stack_reach_masks(mask_paths, prob_path, weights=weights)
+    stack.stack_reach_masks(mask_paths, prob_path, weights=weights,
+                            total=abs_total if weights is not None else None)
 
     # Stage 3: polygonize envelope + contours
     logging.info("Stage 3: building envelope and contours")
@@ -358,6 +362,7 @@ def main():
         use_weights=bool(
             config['probability'].get('weight_by_scenario_probability', False)
         ),
+        weight_total=abs_total,
     )
 
     # Stage 5: scenarios CSV

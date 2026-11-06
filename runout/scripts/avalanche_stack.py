@@ -36,13 +36,33 @@ import avalanche_helpers as h
 
 
 
-def stack_reach_masks(mask_paths, out_path, weights=None):
+def ensemble_weight_total(params_list):
+    # The fixed denominator for an ensemble with absolute weights, or None
+    # @param params_list: iterable of scenario params dicts
+    # @returns: float or None
+    # Forced explosive shots (avachain, Ron 2026-11-06): each shot holds
+    #       1/N and what does not release is P(no release), so the weights
+    #       sum to P(release) < 1. Dividing by their own sum would spread
+    #       the no-release share over the shots that did release. The
+    #       release side writes ensemble_weight_total (1.0) into params.json
+    #       for such sets; model sets carry none and keep sum(weights).
+    totals = []
+    for prm in params_list:
+        t = (prm or {}).get('ensemble_weight_total')
+        if t is not None and float(t) > 0:
+            totals.append(float(t))
+    return max(totals) if totals else None
+
+
+def stack_reach_masks(mask_paths, out_path, weights=None, total=None):
     # Stack N binary reach masks into a probability raster
     # @param mask_paths: list of Paths to reach mask GeoTIFFs
     # @param out_path: Path to write probability raster
     # @param weights: optional list of float weights matching mask_paths.
     #                 None = equal weighting (simple mean). Otherwise:
     #                     P(reach) = sum(w_i * mask_i) / sum(w_i)
+    # @param total: optional fixed denominator in place of sum(w_i)
+    #               (absolute weights; see ensemble_weight_total)
     # @returns: Path to written raster
     # @raises ValueError: if no masks are given, weights do not match the
     #                     mask count, weights sum to zero, or grids differ
@@ -88,7 +108,11 @@ def stack_reach_masks(mask_paths, out_path, weights=None):
             accum += data.astype('float32')
     
     # Normalize -> probability
-    if weights is not None:
+    if weights is not None and total:
+        probability = accum / total
+        method = (f"weighted by absolute scenario_probability "
+                  f"(sum={sum(weights):.4f} of {total:.4f})")
+    elif weights is not None:
         probability = accum / sum(weights)
         method = f"weighted by scenario_probability (sum={sum(weights):.4f})"
     else:
@@ -202,8 +226,9 @@ def extract_most_likely_path(probability_path, threshold, out_path):
 
 
 def build_road_impact_summary(scenario_summaries, out_path, scenarios=None,
-                                use_weights=False):
+                                use_weights=False, weight_total=None):
     # Aggregate road-reach results across all scenarios
+    # @param weight_total: optional fixed denominator (absolute weights)
     # @param scenario_summaries: list of summary dicts (one per scenario)
     # @param out_path: Path to write JSON
     # @param scenarios: optional list of scenario dicts for weight lookup
@@ -223,6 +248,7 @@ def build_road_impact_summary(scenario_summaries, out_path, scenarios=None,
     weighted_frac = None
     if use_weights and scenarios is not None:
         params_by_id = {sc['scenario_id']: sc['params'] for sc in scenarios}
+        fixed_total = weight_total
         weight_total = 0.0
         weight_reached = 0.0
         for s in scenario_summaries:
@@ -232,6 +258,8 @@ def build_road_impact_summary(scenario_summaries, out_path, scenarios=None,
             weight_total += w
             if s['road']['reached']:
                 weight_reached += w
+        if fixed_total:
+            weight_total = fixed_total
         if weight_total > 0:
             weighted_frac = weight_reached / weight_total
     
@@ -294,6 +322,7 @@ def write_scenarios_csv(scenario_summaries, out_path):
         rows.append({
             'scenario_id': s['scenario_id'],
             'scenario_probability': s['params'].get('scenario_probability'),
+            'ensemble_weight_total': s['params'].get('ensemble_weight_total'),
             'mu': s['params'].get('mu'),
             'xi': s['params'].get('xi'),
             'rho_kgm3': s['params'].get('rho_kgm3'),
@@ -386,8 +415,18 @@ def run_ensemble_stage(scenario_summaries, scenarios, shared_paths, config):
         'weight_by_scenario_probability', False
     )
     weights_vary = len(set(round(w, 6) for w in weights)) > 1
+    abs_total = ensemble_weight_total(params_by_id.values())
     
-    if use_weights and weights_vary:
+    if use_weights and abs_total:
+        # absolute weights: weight even when they are all equal, because
+        # the denominator is fixed, not their sum
+        stack_weights = weights
+        weights_vary = True
+        logging.info(
+            f"Stacking with absolute scenario_probability weights "
+            f"(sum={sum(weights):.4f} of {abs_total:.4f}; the rest is no release)"
+        )
+    elif use_weights and weights_vary:
         stack_weights = weights
         logging.info(
             f"Stacking with scenario_probability weights "
@@ -406,7 +445,8 @@ def run_ensemble_stage(scenario_summaries, scenarios, shared_paths, config):
     
     # 2. Probability raster
     prob_path = outputs_dir / 'probability.tif'
-    stack_reach_masks(mask_paths, prob_path, weights=stack_weights)
+    stack_reach_masks(mask_paths, prob_path, weights=stack_weights,
+                      total=abs_total if stack_weights is not None else None)
     
     # 3. Envelope + contours
     polygonize_probability(
@@ -429,7 +469,8 @@ def run_ensemble_stage(scenario_summaries, scenarios, shared_paths, config):
         scenario_summaries,
         outputs_dir / 'road_impact_summary.json',
         scenarios=scenarios,
-        use_weights=use_weights and weights_vary
+        use_weights=use_weights and weights_vary,
+        weight_total=abs_total if use_weights else None
     )
     
     # 6. Scenarios CSV
@@ -443,7 +484,8 @@ def run_ensemble_stage(scenario_summaries, scenarios, shared_paths, config):
         scenario_summaries,
         outputs_dir / 'reference_points_summary.json',
         scenarios=scenarios,
-        use_weights=use_weights and weights_vary
+        use_weights=use_weights and weights_vary,
+        weight_total=abs_total if use_weights else None
     )
 
     logging.info(f"Ensemble outputs written to {outputs_dir}")
@@ -463,8 +505,10 @@ def run_ensemble_stage(scenario_summaries, scenarios, shared_paths, config):
 
 
 def build_reference_point_summary(scenario_summaries, out_path,
-                                  scenarios=None, use_weights=False):
+                                  scenarios=None, use_weights=False,
+                                  weight_total=None):
     # Aggregate reach results at each reference point across the ensemble
+    # @param weight_total: optional fixed denominator (absolute weights)
     # @param scenario_summaries: list of summary dicts (one per scenario)
     # @param out_path: Path to write JSON (a CSV is written beside it)
     # @param scenarios: optional list of scenario dicts for weight lookup
@@ -513,8 +557,9 @@ def build_reference_point_summary(scenario_summaries, out_path,
         n = p['n_scenarios']
         frac = p['n_reached'] / n if n else 0.0
         ci_low, ci_high = h.wilson_ci(p['n_reached'], n)
-        wfrac = (p['weight_reached'] / p['weight_total']
-                 if use_weights and p['weight_total'] > 0 else None)
+        denom = weight_total or p['weight_total']
+        wfrac = (p['weight_reached'] / denom
+                 if use_weights and denom > 0 else None)
         summary[name] = {
             'ref_name': name,
             'distance_from_release_m': p['distance_from_release_m'],
