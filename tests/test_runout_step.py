@@ -277,3 +277,93 @@ def test_a_damaged_day_is_left_out_and_the_rest_runs(tmp_path, capsys):
         mp.undo()
     out, err = capsys.readouterr()
     assert "T_1 left out" in err and "T_0=" in out and "T_1=" not in out
+
+
+class TestForcedShots:
+    """The forced-shot sets (<date>/shots[/T_n]) get a second runout run with
+    its own tree and web folder, under the same lock, after the model run
+    (Ron, 2026-11-06)."""
+
+    def _sets(self, tmp_path, horizons=None):
+        model = _published_set(tmp_path)
+        out = {}
+        for h in horizons or [None]:
+            stage = tmp_path / f".shots{h}"
+            stage.mkdir()
+            (stage / "scour_depth.tif").write_text("raster")
+            final = model / "shots" / h if h else model / "shots"
+            final.parent.mkdir(parents=True, exist_ok=True)
+            handoff.publish(stage, final, "release", status="ok", n_scenarios=1,
+                            trigger_source="explosive_forced")
+            out[h or "T_0"] = final
+        return model, out
+
+    def test_release_sets_keep_shots_apart(self, tmp_path):
+        model, shots = self._sets(tmp_path)
+        from config import ProjectConfig
+        cfg = ProjectConfig.from_toml(_toml(tmp_path))
+        assert rs.release_sets(cfg, "2026-12-05") == {"T_0": model}
+        assert rs.release_sets(cfg, "2026-12-05", shots=True) == {"T_0": shots["T_0"]}
+
+    def test_forecast_horizons(self, tmp_path):
+        model, shots = self._sets(tmp_path, ["T_0", "T_1"])
+        from config import ProjectConfig
+        cfg = ProjectConfig.from_toml(_toml(tmp_path))
+        assert list(rs.release_sets(cfg, "2026-12-05", shots=True)) == ["T_0", "T_1"]
+
+    def test_own_tree_web_folder_and_label(self, tmp_path):
+        rc = rs.runout_settings(_toml(tmp_path))
+        rc["path_profile"] = "Professor_PTC"           # a real path profile to relabel
+        sr = rs.shot_settings(rc)
+        assert sr["work_dir"] == rc["work_dir"] / "shots"
+        assert sr["publish_root"] == str(tmp_path / "www" / "shots")
+        assert sr["lock_file"] == rc["lock_file"]      # one lock for the host
+        model, shots = self._sets(tmp_path)
+        cfg_dir = rs.prepare_tree(sr, shots, "2026-12-05")
+        cfg_dir = rs.prepare_tree(sr, shots, "2026-12-05")      # rerun
+        local = (cfg_dir / "local.yaml").read_text()
+        assert f"avachain_root: {sr['work_dir']}" in local
+        assert f"publish_root: {tmp_path / 'www' / 'shots'}" in local
+        # the runout's own loader reads the relabelled profile
+        sys.path.insert(0, str(rs.RUNOUT))
+        from scripts import config as runout_cfg
+        prof = runout_cfg.load_path_profile("Professor_PTC", sr["work_dir"], cfg_dir)
+        assert prof["display"]["project_name"] == "Little Professor — explosive shots"
+        assert prof["display"]["caveats"][0] == rs.SHOT_CAVEAT
+        assert prof["terrain"]["dem"].startswith("/home/avachain/data/static")
+        assert "shots_20261205" in " ".join(rs.runout_command(sr, cfg_dir, "2026-12-05", "P"))
+        # the model run's tree still links the repo's paths
+        mdir = rs.prepare_tree(rc, {"T_0": model}, "2026-12-05")
+        assert (mdir / "paths").resolve() == (rs.RUNOUT / "config" / "paths").resolve()
+
+    def test_both_runs_one_lock_model_first(self, tmp_path, monkeypatch):
+        self._sets(tmp_path)
+        fake = tmp_path / "fake_runout"
+        (fake / ".venv" / "bin").mkdir(parents=True)
+        for name in ("paths", "physics"):
+            (fake / "config" / name).mkdir(parents=True)
+        (fake / "config" / "paths" / "P_profile.yaml").write_text("slug: P_profile\n")
+        (fake / "config" / "profiles.yaml").write_text("")
+        log = tmp_path / "ran.log"
+        py = fake / ".venv" / "bin" / "python"
+        py.write_text(f'#!/bin/bash\necho "$@" >> {log}\n')
+        py.chmod(0o755)
+        monkeypatch.setattr(rs, "RUNOUT", fake)
+        assert rs.main(["--toml", str(_toml(tmp_path)), "--snapshot-date", "2026-12-05"]) == 0
+        runs = log.read_text().splitlines()
+        assert len(runs) == 2
+        assert "--run-name P_20261205" in runs[0] and "--run-name P_shots_20261205" in runs[1]
+
+    def test_a_failed_shot_run_fails_the_step(self, tmp_path, monkeypatch):
+        self._sets(tmp_path)
+        fake = tmp_path / "fake_runout"
+        (fake / ".venv" / "bin").mkdir(parents=True)
+        for name in ("paths", "physics"):
+            (fake / "config" / name).mkdir(parents=True)
+        (fake / "config" / "paths" / "P_profile.yaml").write_text("slug: P_profile\n")
+        (fake / "config" / "profiles.yaml").write_text("")
+        py = fake / ".venv" / "bin" / "python"
+        py.write_text('#!/bin/bash\n[[ "$*" == *shots* ]] && exit 3\nexit 0\n')
+        py.chmod(0o755)
+        monkeypatch.setattr(rs, "RUNOUT", fake)
+        assert rs.main(["--toml", str(_toml(tmp_path)), "--snapshot-date", "2026-12-05"]) == 3
