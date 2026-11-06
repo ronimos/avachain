@@ -284,6 +284,21 @@ P(reach) is per shot fired, not conditional on release. Each `params.json`
 carries `ensemble_weight_total = 1.0`, and the runout divides by that instead
 of by the sum of the weights. The model set is unchanged. On by default for
 Professor_PTC.
+
+**A path with no explosive-control shot points** (`explosive_trigger_points =
+[]`, the template default) runs on model triggers only:
+- **Days with model candidates:** unchanged. The model set is built and run
+  as usual.
+- **Days with no model candidate:** there is nothing to fall back to. The
+  set publishes as `status: "no_scenarios"` and the run ends DONE. The
+  runout report gives the reason: no snowpack cluster met the trigger
+  criteria, and no shot locations are configured.
+- **`force_explosive_triggers = true` with no points:** no `shots/` set is
+  built and no shot runout runs. `scenarios` prints a WARNING saying so.
+  The model set and its runout are not affected.
+
+The forced-shot run follows from whether the release side published a shot
+set. `runout_step` needs no setting of its own.
 `runout_step.py` runs the shot sets as a second runout after the model run,
 under the same lock. That run has its own tree (`<work_dir>/shots/`) and web
 folder (`<publish_root>/shots/forecasts/<path>/`). Its report is titled

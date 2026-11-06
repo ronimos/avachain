@@ -169,7 +169,7 @@ class TestPublish:
         assert handoff.is_ready(base / "T_1") and handoff.is_ready(base / "shots" / "T_1")
         assert list(runout_step.release_sets(cfg, "2026-01-18")) == ["T_1"]
 
-    def test_off_by_default_and_needs_points(self, tmp_path, monkeypatch):
+    def test_off_by_default_and_needs_points(self, tmp_path, monkeypatch, capsys):
         calls = []
         monkeypatch.setattr(ap, "_build_scenarios",
                             lambda c, a, o, **k: calls.append(k) or self._fake(c, a, o))
@@ -178,6 +178,9 @@ class TestPublish:
             cfg.explosive_trigger_points = list(pts)
             final = ap.step_scenarios(cfg, args)
             assert not (final / "shots").exists()
+            # a path with no shot points: the model set is published as
+            # usual, and the missing shot set is announced, not silent
+            assert ("explosive_trigger_points is empty" in capsys.readouterr().out) == force
         args.force_explosive_triggers = True                 # CLI overrides TOML
         cfg.explosive_trigger_points = list(POINTS)
         cfg.force_explosive_triggers = False

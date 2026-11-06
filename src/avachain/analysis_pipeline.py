@@ -576,10 +576,20 @@ def shot_set_dir(cfg, args) -> Path:
 
 
 def _forcing_shots(cfg, args) -> bool:
+    """True when a forced-shot set is to be built: asked for, and the path
+    has shot locations. Asked for without any, there is no shot set and no
+    shot runout; say so rather than skip it silently."""
     flag = getattr(args, 'force_explosive_triggers', None)
     if flag is None:
         flag = getattr(cfg, 'force_explosive_triggers', False)
-    return bool(flag) and bool(getattr(cfg, 'explosive_trigger_points', None))
+    if not flag:
+        return False
+    if not getattr(cfg, 'explosive_trigger_points', None):
+        print("  WARNING: force_explosive_triggers is on but [scenarios] "
+              "explosive_trigger_points is empty for this path — no forced-shot "
+              "set (and no shot runout) is published")
+        return False
+    return True
 
 
 def store_span(zarr_path):
