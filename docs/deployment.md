@@ -85,9 +85,27 @@ The crontab line `install.py` prints already starts with `umask 002;`.
 **The producer delivers two files in `data/surveys/snow_height/<path>/`:**
 
 ```
-YYMMDD_<path>_snowHeight.tif      snow height raster, metres, EPSG:6342 (+NAVD88)
+YYMMDD_<path>_snowHeight.tif      snow height raster, metres, EPSG:6342
 YYMMDD_<path>_snowHeight.READY    marker, written AFTER the TIF is complete
 ```
+
+**Snow height is snow DSM − ground DEM, and both must be in one frame.**
+Since 2026-11-07 (Ron) the frame is NAD83(2011) / UTM 13N with NAD83(2011)
+**ellipsoidal** heights, no geoid. A USGS 3DEP check showed every DEM in the
+series was already ellipsoidal, whatever its NAVD88 tag said. At Little
+Professor the geoid separation is −12.42 m (GEOID18), so a snow DSM with a
+geoid applied, differenced against the ellipsoidal ground, reads about 12 m
+of snow everywhere. For each survey the producer:
+
+- processes the snow DSM with the same SiteScan output setting as the ground
+  DEM: horizontal NAD83(2011) UTM 13N, vertical ellipsoidal, no geoid;
+- uses the same control as the ground DEM: the 2026-10 GCPs and the local
+  base station, not last season's distant base or the Kremmling CORS;
+- differences against the path's current ground DEM
+  (`static/<path>/terrain/…-ellipsoid.tif`), never against last season's
+  surfaces or 3DEP;
+- reports any change (receiver, base, SiteScan version or license, geoid
+  setting) before delivering, so the change can be checked first.
 
 The marker's state lives in its file extension. The producer only ever creates
 `READY`; from then on the chain moves it along:

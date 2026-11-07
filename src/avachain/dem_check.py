@@ -11,12 +11,21 @@ whole path to the road. Everything is resampled (average) onto one 1 m grid in
 EPSG:6342 over the union of the inputs, and checked there:
 
   FAIL  horizontal CRS is not EPSG:6342 (config.RASTER_EPSG). A compound
-        CRS (6342 + NAVD88) is normal: rasterio's to_epsg() is None for it.
+        CRS (6342 + a vertical) is read by its horizontal part.
   FAIL  coverage below --min-coverage (default 0.995) of valid cells in the
         boundary KML, the start-zone KML, the runout path footprint (the
         valid cells of --path-dem, default the runout profile's terrain.dem)
         or the road centreline inside that footprint (sampled every 1 m).
-  WARN  vertical datum not NAVD88, or no vertical CRS at all.
+  WARN  the heights are not documented as ellipsoidal. Since 2026-11-07
+        (Ron, option 1) the whole DEM series is NAD83(2011) ellipsoidal
+        heights with no geoid: a 3DEP check put 261018 and 260605 at
+        −12.24 / −12.32 m from NAVD88, where GEOID18 N = −12.42 m. A
+        conforming DEM is tagged horizontal-only EPSG:6342 with a
+        VERTICAL_REFERENCE metadata tag saying "ellipsoidal". Any vertical
+        CRS in the tag (last season's files say NAVD88, falsely) warns.
+  WARN  a --compare DEM differs by more than VERTICAL_MISMATCH_M (median):
+        about the geoid separation here, so the two are in different
+        vertical frames, and snow height between them would be ~12 m off.
   info  sha256, size, resolution, nodata; per --compare DEM the elevation
         difference new − old (median, p05, p95) and the median |slope
         difference| in the start zone and the boundary. Last season's two
@@ -42,6 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import RASTER_EPSG  # noqa: E402
 
 GRID_M = 1.0
+VERTICAL_MISMATCH_M = 5.0   # GEOID18 N at the site is -12.42 m
 MIN_COVERAGE = 0.995
 
 
@@ -71,6 +81,7 @@ def describe(path: Path) -> dict:
                "dtype": s.dtypes[0], "nodata": s.nodata,
                "bounds": [float(b) for b in s.bounds]}
         out.update(crs_parts(s.crs))
+        out["vertical_reference"] = s.tags().get("VERTICAL_REFERENCE")
     return out
 
 
@@ -160,11 +171,14 @@ def check(dem: Path, boundary_kml: Path | None, start_zone_kml: Path | None,
         rep["fail"].append(f"horizontal CRS is EPSG:{rep['dem']['horizontal_epsg']}, "
                            f"not EPSG:{RASTER_EPSG}")
         return rep  # nothing below is meaningful on another grid
-    v = rep["dem"]["vertical"]
-    if v is None:
-        rep["warn"].append("no vertical CRS (expected NAVD88)")
-    elif "NAVD88" not in v:
-        rep["warn"].append(f"vertical CRS is {v}, not NAVD88")
+    v, note = rep["dem"]["vertical"], rep["dem"]["vertical_reference"]
+    if v is not None:
+        rep["warn"].append(f"tagged vertical CRS {v}; the series is NAD83(2011) "
+                           "ellipsoidal heights (no geoid). Check it against 3DEP: a "
+                           "real geoid surface sits ~12.4 m above, a mislabel ~0")
+    elif not note or "ellipsoid" not in note.lower():
+        rep["warn"].append("no VERTICAL_REFERENCE tag saying the heights are "
+                           "ellipsoidal (the series' frame since 2026-11-07)")
 
     others = [p for p in [path_dem, *compare] if p is not None]
     shape, tf = union_grid([dem, *others])
@@ -200,6 +214,12 @@ def check(dem: Path, boundary_kml: Path | None, start_zone_kml: Path | None,
         zo = to_grid(p, shape, tf)
         rep["compare"][Path(p).name] = {
             name: diff_stats(z, zo, m) for name, m in masks.items()}
+        meds = [s["dz_median_m"] for s in rep["compare"][Path(p).name].values()
+                if s.get("cells")]
+        if meds and max(abs(m) for m in meds) > VERTICAL_MISMATCH_M:
+            rep["warn"].append(f"{Path(p).name}: median dz {meds[0]:+.2f} m, more than "
+                               f"{VERTICAL_MISMATCH_M:g} m: different vertical frames "
+                               "(geoid vs ellipsoid?)")
     return rep
 
 
@@ -238,6 +258,8 @@ def print_report(rep: dict) -> None:
           f"{d['dtype']}, nodata {d['nodata']}, {d['bytes'] / 1e6:.0f} MB")
     print(f"  CRS    {d['name']} (horizontal EPSG:{d['horizontal_epsg']}, "
           f"vertical {d['vertical']})")
+    if d.get("vertical_reference"):
+        print(f"  height {d['vertical_reference']}")
     if rep["coverage"]:
         print("Coverage (fraction of cells with data, 1 m grid):")
         for k, v in rep["coverage"].items():

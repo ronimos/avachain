@@ -28,7 +28,9 @@ display:
 terrain:
   # 1 m average of the snowpack side's 261018 0.05 m surface, on 260605's grid
   # alignment (one surface for both parts since 2026-11-07; was 260605).
-  dem: /home/avachain/data/static/Professor_PTC/terrain/261018_Professor_Ground-DSM_1m_6342-NAVD88.tif
+  # Heights are NAD83(2011) ellipsoidal, not NAVD88 (3DEP check, 2026-11-07);
+  # com1DFA uses relief only, so the frame does not change a runout.
+  dem: /home/avachain/data/static/Professor_PTC/terrain/261018_Professor_Ground-DSM_1m_6342-ellipsoid.tif
   dem_feather_cells: 5
   dem_vertical_correction_m: 0.0
 

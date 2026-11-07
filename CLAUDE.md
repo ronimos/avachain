@@ -191,9 +191,21 @@ at known bearings; neither had coverage before, which is how both survived.
 
 ## CRS — one constant, verified against the files
 
-`config.RASTER_EPSG = 6342` (NAD83(2011) / UTM 13N). All rasters on disk are
-**compound** CRS with NAVD88 vertical, so `rasterio` returns `crs.to_epsg() is
+`config.RASTER_EPSG = 6342` (NAD83(2011) / UTM 13N). Last season's rasters are
+**compound** CRS with a NAVD88 vertical, so `rasterio` returns `crs.to_epsg() is
 None` — the horizontal component is 6342. Do not read that `None` as "no CRS".
+
+**That NAVD88 label is false.** Every DEM in the series (251110, 260605, 261018)
+holds NAD83(2011) **ellipsoidal** heights with no geoid applied. A 2026-11-07
+check against USGS 3DEP on US-6 put 261018 at −12.24 m and 260605 at −12.32 m
+from NAVD88, where GEOID18 N = −12.42 m. Ron (option 1): keep the series
+ellipsoidal and fix the tags. From 261018 on, files are 6342 horizontal-only,
+with a `VERTICAL_REFERENCE` tag and `-ellipsoid` in the name. `dem_check`
+warns on a NAVD88 tag and on a > 5 m median offset against a compared DEM,
+which is a mixed geoid/ellipsoid pair. Snow height is DSM − DEM, so a survey in
+the other frame reads ~12 m of snow; the producer's rules are in
+`docs/deployment.md` §2.1. Do not "convert to NAVD88" anything on its own: the
+surveys would have to move with it.
 
 EPSG:32613 (WGS84/UTM 13N) must never appear as a reprojection target;
 `tests/test_raster_crs.py` fails if it does. pyproj treats 6342→32613 as a

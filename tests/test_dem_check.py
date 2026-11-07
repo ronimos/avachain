@@ -20,6 +20,8 @@ import dem_check  # noqa: E402
 X0, Y0 = 424500.0, 4389200.0       # top-left, EPSG:6342
 N = 100                            # 100 x 100 cells of 1 m
 COMPOUND = CRS.from_user_input(f"EPSG:{RASTER_EPSG}+5703")   # + NAVD88 height
+HORIZ = CRS.from_epsg(RASTER_EPSG)
+ELLIPSOID = {"VERTICAL_REFERENCE": "NAD83(2011) ellipsoidal heights, no geoid"}
 
 
 def _plane(n=N, dz=0.0, slope_deg=30.0, ncols=N):
@@ -28,12 +30,14 @@ def _plane(n=N, dz=0.0, slope_deg=30.0, ncols=N):
     return 3500.0 - rows * np.tan(np.radians(slope_deg)) + dz
 
 
-def _write(path, z, crs=COMPOUND, res=1.0, x0=X0, y0=Y0, nodata=-10000.0):
+def _write(path, z, crs=HORIZ, res=1.0, x0=X0, y0=Y0, nodata=-10000.0, tags=ELLIPSOID):
     z = np.where(np.isnan(z), nodata, z).astype("float32")
     with rasterio.open(path, "w", driver="GTiff", height=z.shape[0], width=z.shape[1],
                        count=1, dtype="float32", crs=crs.to_wkt(), nodata=nodata,
                        transform=from_origin(x0, y0, res, res)) as dst:
         dst.write(z, 1)
+        if tags:
+            dst.update_tags(**tags)
     return path
 
 
@@ -56,11 +60,14 @@ def kmls(tmp_path):
     return b, s
 
 
-def test_compound_6342_navd88_passes_with_no_warning(tmp_path, kmls):
+def test_ellipsoidal_6342_passes_with_no_warning(tmp_path, kmls):
+    # The series' frame since 2026-11-07 (Ron, option 1): horizontal-only 6342,
+    # heights documented as ellipsoidal in VERTICAL_REFERENCE.
     dem = _write(tmp_path / "new.tif", _plane())
     rep = dem_check.check(dem, *kmls, with_sha=False)
     assert rep["dem"]["horizontal_epsg"] == RASTER_EPSG
-    assert "NAVD88" in rep["dem"]["vertical"]
+    assert rep["dem"]["vertical"] is None
+    assert "ellipsoidal" in rep["dem"]["vertical_reference"]
     assert rep["fail"] == [] and rep["warn"] == []
     assert rep["coverage"] == {"boundary": 1.0, "start_zone": 1.0}
 
@@ -71,10 +78,32 @@ def test_other_horizontal_crs_fails(tmp_path, kmls):
     assert rep["fail"] and "EPSG:26913" in rep["fail"][0]
 
 
-def test_missing_vertical_crs_warns_only(tmp_path, kmls):
-    dem = _write(tmp_path / "h.tif", _plane(), crs=CRS.from_epsg(RASTER_EPSG))
+def test_navd88_tag_warns_but_passes(tmp_path, kmls):
+    # Last season's files and the first 261018 export say NAVD88, falsely
+    # (3DEP: they sit at the ellipsoid). The tag alone cannot say which.
+    dem = _write(tmp_path / "n.tif", _plane(), crs=COMPOUND, tags=None)
     rep = dem_check.check(dem, *kmls, with_sha=False)
-    assert rep["fail"] == [] and rep["warn"] == ["no vertical CRS (expected NAVD88)"]
+    assert "NAVD88" in rep["dem"]["vertical"]
+    assert rep["fail"] == [] and len(rep["warn"]) == 1 and "ellipsoidal" in rep["warn"][0]
+
+
+def test_undocumented_heights_warn(tmp_path, kmls):
+    dem = _write(tmp_path / "h.tif", _plane(), tags=None)
+    rep = dem_check.check(dem, *kmls, with_sha=False)
+    assert rep["fail"] == [] and len(rep["warn"]) == 1
+    assert "VERTICAL_REFERENCE" in rep["warn"][0]
+
+
+def test_geoid_sized_offset_warns(tmp_path, kmls):
+    # A surface with a geoid applied sits ~12.4 m above the ellipsoidal series
+    # here (GEOID18 N = -12.42 m); a snow survey differenced across the two
+    # would be 12 m off, so the comparison must say so.
+    new = _write(tmp_path / "new.tif", _plane())
+    ortho = _write(tmp_path / "ortho.tif", _plane(dz=12.42))
+    near = _write(tmp_path / "near.tif", _plane(dz=-1.1))
+    rep = dem_check.check(new, *kmls, compare=[ortho, near], with_sha=False)
+    assert rep["fail"] == []
+    assert len(rep["warn"]) == 1 and rep["warn"][0].startswith("ortho.tif")
 
 
 def test_hole_in_start_zone_fails_coverage(tmp_path, kmls):

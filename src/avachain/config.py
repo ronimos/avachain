@@ -12,8 +12,11 @@ from pathlib import Path
 from typing import Optional
 
 # Horizontal CRS of all project rasters (cluster_map.tif, DEM, scenario outputs).
-# NAD83(2011) / UTM zone 13N — the actual files are COMPD with NAVD88 vertical.
-# rasterio returns EPSG=None for compound CRS; the horizontal component is 6342.
+# NAD83(2011) / UTM zone 13N. Last season's files are COMPD with a NAVD88 vertical,
+# for which rasterio returns EPSG=None; the horizontal component is 6342. That
+# NAVD88 label is false: every DEM in the series holds NAD83(2011) ellipsoidal
+# heights (3DEP check 2026-11-07). From 261018 on the files are tagged 6342 only,
+# with a VERTICAL_REFERENCE metadata tag.
 RASTER_EPSG = 6342
 
 # Directories a slope TOML may relocate individually under [paths]. Each
