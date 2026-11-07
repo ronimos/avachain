@@ -17,7 +17,7 @@ display:
   # cycle of that date (Ron, 2026-11-03: the Jan 18 notes are last season's
   # and must not reach a live 2026-27 report).
   caveats:
-    - "τ₀ = 125 Pa was fitted to a single avalanche (2026-01-18), on last season's DEM pair. It has not been tested on any other event."
+    - "τ₀ = 125 Pa was fitted to a single avalanche (2026-01-18), on last season's DEM pair. It has not been tested on any other event, or on this season's ground DEM (2026-10-18, surveyed ground control), which sits a median 0.2 m above last season's runout DEM with slopes within 0.3°."
     - "Entrainment depth comes from the release side's scour_depth.tif, which covers only the snowpack model's domain. Below that domain the flow entrains nothing."
   # Keyed by cycle date (YYYY-MM-DD); shown before the general caveats.
   event_caveats:

@@ -26,7 +26,9 @@ project_dir           = "/home/avachain/code/avachain"   # stamped by install.py
 # --- arrivals (data/) ---
 survey_dir            = "/home/avachain/data/surveys/snow_height/Professor_PTC"
 weather_csv           = "/home/avachain/data/weather/weather_data.csv"
-dem                   = "/home/avachain/data/static/Professor_PTC/251110_Professor_Ground-DSM_aligned.tiff"
+# 2026-10-18 snow-free ground DEM with surveyed GCPs (Zarter), NAD83(2011) + NAVD88,
+# 0.05 m; replaced 251110 on 2026-11-07. The runout's terrain.dem is its 1 m average.
+dem                   = "/home/avachain/data/static/Professor_PTC/terrain/261018_Professor_Ground-DSM_5cm_6342-NAVD88.tif"
 boundary_kml          = "/home/avachain/data/static/Professor_PTC/Little_Proff.kml"
 start_zone_kml        = "/home/avachain/data/static/Professor_PTC/Litte_prof_start_zone.kml"
 # boundary_kml's folder is also where mapped crowns (avalanche_release_area_<YYYYMMDD>.geojson) are read

@@ -16,7 +16,7 @@ display:
   # cycle of that date (Ron, 2026-11-03: the Jan 18 notes are last season's
   # and must not reach a live 2026-27 report).
   caveats:
-    - "τ₀ = 125 Pa was fitted to a single avalanche (2026-01-18), on last season's DEM pair. It has not been tested on any other event."
+    - "τ₀ = 125 Pa was fitted to a single avalanche (2026-01-18), on last season's DEM pair. It has not been tested on any other event, or on this season's ground DEM (2026-10-18, surveyed ground control), which sits a median 0.2 m above last season's runout DEM with slopes within 0.3°."
     - "Entrainment depth comes from the release side's scour_depth.tif, which covers only the snowpack model's domain. Below that domain the flow entrains nothing."
   # Keyed by cycle date (YYYY-MM-DD); shown before the general caveats.
   event_caveats:
@@ -26,7 +26,9 @@ display:
       - "Last season's surveys had no shared ground control, so the snow-free surfaces differ by about 1 m (the runout DEM, 260605, sits a median 1.1 m below the snowpack DEM, 251110). This does not enter com1DFA: snow height is a thickness laid onto 260605, and τ₀ was fitted with the same pairing."
 
 terrain:
-  dem: /home/avachain/data/static/Professor_PTC/terrain/260605_Professor_Bare_Ground_Full_Path-DSM_1m.tiff
+  # 1 m average of the snowpack side's 261018 0.05 m surface, on 260605's grid
+  # alignment (one surface for both parts since 2026-11-07; was 260605).
+  dem: /home/avachain/data/static/Professor_PTC/terrain/261018_Professor_Ground-DSM_1m_6342-NAVD88.tif
   dem_feather_cells: 5
   dem_vertical_correction_m: 0.0
 
