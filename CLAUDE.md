@@ -579,8 +579,11 @@ avalanches occur, under these rules:
 - **One free parameter, two at most.** One polygon constrains roughly size
   and maybe position; more knobs fit noise.
 - **Pick a knob that changes area smoothly and has a physical reading** —
-  e.g. arrest strictness (`C_FIT` in Eq. 20, or the Λ factor), or a size scaling
-  on A_ca. **Not** the Stauchwall angle or the slab-thickness cap: they move
+  e.g. arrest strictness (`C_FIT` in Eq. 20) or a size scaling on A_ca. The Λ
+  factors are **dead** while `USE_MELOCHE_ARREST` is on (`_qualifies` returns
+  after the Meloche test), and `C_FIT` is a default argument, so setting
+  `arrest_indices.C_FIT` at runtime changes nothing: it must be passed as `C=`
+  (analyze's `A_ca_brittle` and the BFS call at `release_geometry.py` ~1188). **Not** the Stauchwall angle or the slab-thickness cap: they move
   polygons in jumps (7 382 / 4 580 / 827 m² at 28 / 29 / 30°), so a fit lands
   on a knife edge. Choose a robust plateau, not the single best point.
 - **Start with a sensitivity sweep** on Jan 18: IoU and area against each
