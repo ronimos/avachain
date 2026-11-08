@@ -148,6 +148,21 @@ SECONDS=0
 SNAPSHOT_ARG=""
 [[ -n "$SNAPSHOT_DATE" ]] && SNAPSHOT_ARG="--snapshot-date $SNAPSHOT_DATE"
 
+# Step 0: is the survey in the ground DEM's vertical frame (survey_check.py)?
+# A geoid/ellipsoid mix reads ~12 m of snow everywhere and nothing downstream
+# would stop it, so FAIL ends the run here, before any state changes (Ron,
+# 2026-11-07). WARN (no near-bare ground) alerts and carries on.
+echo ">>> Step 0: Survey vertical-frame check"
+CURRENT_STEP="Step 0: Survey vertical-frame check"
+check_rc=0
+python $PROJECT_DIR/src/avachain/survey_check.py --toml $TOML --survey-date $SURVEY_DATE     --json "$AVA_ANALYSIS_DIR/survey_check_$SURVEY_DATE.json" || check_rc=$?
+if [[ $check_rc -eq 3 ]]; then
+    $ALERT --subject "survey $SURVEY_DATE: frame check WARN (run continues)"         --body "survey_check.py found no near-bare ground; see $AVA_ANALYSIS_DIR/survey_check_$SURVEY_DATE.json"         --log "$LOGFILE" || true
+elif [[ $check_rc -ne 0 ]]; then
+    exit $check_rc
+fi
+echo ""
+
 echo ">>> Step 1: Resample"
 CURRENT_STEP="Step 1: Resample"
 step1_start=$SECONDS

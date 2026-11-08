@@ -205,7 +205,9 @@ warns on a NAVD88 tag and on a > 5 m median offset against a compared DEM,
 which is a mixed geoid/ellipsoid pair. Snow height is DSM − DEM, so a survey in
 the other frame reads ~12 m of snow; the producer's rules are in
 `docs/deployment.md` §2.1. Do not "convert to NAVD88" anything on its own: the
-surveys would have to move with it.
+surveys would have to move with it. `survey_check.py` (Step 0 of the survey run)
+FAILs a survey whose shallowest 10 % inside the boundary reads > 6 m from zero,
+and WARNs above 1.5 m. Last season's 23 surveys read −0.57 to +0.69 m.
 
 EPSG:32613 (WGS84/UTM 13N) must never appear as a reprojection target;
 `tests/test_raster_crs.py` fails if it does. pyproj treats 6342→32613 as a

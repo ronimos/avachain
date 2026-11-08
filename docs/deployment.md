@@ -107,6 +107,21 @@ of snow everywhere. For each survey the producer:
 - reports any change (receiver, base, SiteScan version or license, geoid
   setting) before delivering, so the change can be checked first.
 
+**The chain checks this on every survey** (`survey_check.py`, Step 0 of
+`run_<path>.sh`, before any state changes). Surveys don't reach the road, and
+their minima are artefacts, so the reference is the slope's own shallow end:
+the 10th percentile of HS inside the boundary. Over 2025-26 it ran from
+−0.57 to +0.69 m, and a frame mix puts it near ±12.4 m.
+
+- |p10| > 6 m (half the geoid separation), or less than half the boundary
+  covered: **FAIL**. The survey ends `FAILED` with an alert. Once the
+  producer redelivers, rename the marker to `.READY`.
+- |p10| > 1.5 m (no near-bare ground): **WARN**. The run continues and sends
+  an alert, because a slope-wide storm can do this, and so can a partial
+  datum shift.
+
+The report is written to `<analysis_dir>/survey_check_<date>.json`.
+
 The marker's state lives in its file extension. The producer only ever creates
 `READY`; from then on the chain moves it along:
 
