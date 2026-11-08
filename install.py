@@ -557,12 +557,26 @@ LOGFILE="$LOG_DIR/{slope_name}_${{TIMESTAMP}}.log"
 MARKERS="python $PROJECT_DIR/src/avachain/survey_markers.py --toml $TOML"
 CLAIMED=""
 CURRENT_STEP="setup"
+# Season analytics (metrics.py, docs/analytics_design.md). Never fails a run.
+METRICS="python $PROJECT_DIR/src/avachain/metrics.py --toml $TOML"
+# One id for every record and superseded copy this run makes.
+export AVACHAIN_RUN_ID=${{AVACHAIN_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}}
+STEP_TIMES=""
+RUNOUT_STATUS=""
+SURVEY_DATE=""
 if [[ $AVA_SURVEY_MARKERS -eq 1 && -z "$SNAPSHOT_DATE" ]]; then
     CLAIMED=$($MARKERS claim --pid $$ --log "$LOGFILE")
     [[ -z "$CLAIMED" ]] && exit 0
 fi
 _finish_marker() {{
     local rc=$?
+    # A cron tick with nothing to claim exits before the log exists: no record.
+    if [[ -f "$LOGFILE" ]]; then
+        $METRICS run --kind survey --exit-code $rc --log "$LOGFILE" --steps "$STEP_TIMES" \
+            --total-s $SECONDS --runout-status "$RUNOUT_STATUS" --snapshot "$SNAPSHOT_DATE" \
+            --failed-step "$([[ $rc -ne 0 ]] && echo "$CURRENT_STEP")" || true
+        [[ -n "$SURVEY_DATE" ]] && {{ $METRICS survey --date "$SURVEY_DATE" --exit-code $rc || true; }}
+    fi
     [[ -z "$CLAIMED" ]] && return
     if [[ $rc -eq 0 ]]; then
         $MARKERS finish --survey-date "$CLAIMED" --status DONE --exit-code 0 \
@@ -643,6 +657,7 @@ CURRENT_STEP="Step 1: Resample"
 step1_start=$SECONDS
 $PIPELINE resample
 step1_elapsed=$((SECONDS - step1_start))
+STEP_TIMES+=" resample=$step1_elapsed"
 echo "    Done: $((step1_elapsed / 60))m $((step1_elapsed % 60))s"
 echo ""
 
@@ -652,6 +667,7 @@ step1b_start=$SECONDS
 $PIPELINE transport
 $PIPELINE avalanche
 step1b_elapsed=$((SECONDS - step1b_start))
+STEP_TIMES+=" transport_avalanche=$step1b_elapsed"
 echo "    Done: $((step1b_elapsed / 60))m $((step1b_elapsed % 60))s"
 echo ""
 
@@ -660,6 +676,7 @@ CURRENT_STEP="Step 2: Gap-fill"
 step2_start=$SECONDS
 $PIPELINE gap_fill
 step2_elapsed=$((SECONDS - step2_start))
+STEP_TIMES+=" gap_fill=$step2_elapsed"
 echo "    Done: $((step2_elapsed / 60))m $((step2_elapsed % 60))s"
 echo ""
 
@@ -672,6 +689,7 @@ else
     echo "    Skipped (--no-cluster-update)"
 fi
 step2b_elapsed=$((SECONDS - step2b_start))
+STEP_TIMES+=" cluster_update=$step2b_elapsed"
 echo "    Done: $((step2b_elapsed / 60))m $((step2b_elapsed % 60))s"
 echo ""
 
@@ -684,6 +702,7 @@ $PIPELINE smet --since-survey-anchor
 # smet ends at the survey time; append station observations up to now.
 $SMET_APPEND
 step2c_elapsed=$((SECONDS - step2c_start))
+STEP_TIMES+=" smet=$step2c_elapsed"
 echo "    Done: $((step2c_elapsed / 60))m $((step2c_elapsed % 60))s"
 echo ""
 
@@ -715,6 +734,7 @@ else
     echo "    Skipped (--no-nwp)"
 fi
 step2d_elapsed=$((SECONDS - step2d_start))
+STEP_TIMES+=" nwp_ingest=$step2d_elapsed"
 echo "    Done: $((step2d_elapsed / 60))m $((step2d_elapsed % 60))s"
 echo ""
 
@@ -725,6 +745,7 @@ CYCLE_ARGS="survey --survey-date $SURVEY_DATE"
 [[ -n "$STABLE_TS" ]] && CYCLE_ARGS="$CYCLE_ARGS --stable-ts $STABLE_TS --nwp-edate $NWP_EDATE"
 $CYCLE $CYCLE_ARGS
 step3_elapsed=$((SECONDS - step3_start))
+STEP_TIMES+=" snowpack=$step3_elapsed"
 echo "    Done: $((step3_elapsed / 60))m $((step3_elapsed % 60))s"
 echo ""
 
@@ -733,6 +754,7 @@ CURRENT_STEP="Step 4: Analysis + scenario generation"
 step4_start=$SECONDS
 {analysis_block}
 step4_elapsed=$((SECONDS - step4_start))
+STEP_TIMES+=" analysis=$step4_elapsed"
 echo "    Done: $((step4_elapsed / 60))m $((step4_elapsed % 60))s"
 echo ""
 
@@ -758,6 +780,7 @@ else
     echo "    Runout skipped (--no-runout or --no-scenarios)"
 fi
 step5_elapsed=$((SECONDS - step5_start))
+STEP_TIMES+=" runout=$step5_elapsed"
 echo ""
 
 total_elapsed=$SECONDS
@@ -830,6 +853,12 @@ NWP="python $PROJECT_DIR/src/avachain/nwp_ingest.py --toml $TOML"
 CYCLE="python $PROJECT_DIR/src/avachain/snowpack_cycle.py --toml $TOML"
 # Alerts ([alerts] email in the TOML; prints only when none). Never fails.
 ALERT="python $PROJECT_DIR/src/avachain/alerts.py --toml $TOML send"
+# Season analytics (metrics.py, docs/analytics_design.md). Never fails a run.
+METRICS="python $PROJECT_DIR/src/avachain/metrics.py --toml $TOML"
+# One id for every record and superseded copy this run makes.
+export AVACHAIN_RUN_ID=${{AVACHAIN_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}}
+STEP_TIMES=""
+RUNOUT_STATUS=""
 VENV=$PROJECT_DIR/.venv/bin/activate
 # Every directory comes from the TOML (config.py --print-paths sets AVA_*),
 # never from $PROJECT_DIR/outputs/...: a deployment relocates them.
@@ -867,6 +896,8 @@ exec > >(tee -a "$LOGFILE") 2>&1
 # naming the last step it reached. Signals exit 128+n so a kill is a failure.
 _daily_exit() {{
     local rc=$?
+    $METRICS run --kind daily --exit-code $rc --log "$LOGFILE" --steps "$STEP_TIMES" \
+        --total-s $SECONDS --runout-status "$RUNOUT_STATUS" --snapshot "$SNAPSHOT_DATE" || true
     [[ $rc -eq 0 ]] && return
     local step
     step=$(grep '>>> Step' "$LOGFILE" 2>/dev/null | tail -1 | sed 's/^>>> //')
@@ -894,6 +925,7 @@ echo ">>> Step 1: Fetch latest station data"
 step1_start=$SECONDS
 $AWS
 step1_elapsed=$((SECONDS - step1_start))
+STEP_TIMES+=" aws_ingest=$step1_elapsed"
 echo ""
 
 echo ">>> Step 2: Append observations to cluster SMETs"
@@ -905,6 +937,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
 fi
 $SMET_APPEND
 step2_elapsed=$((SECONDS - step2_start))
+STEP_TIMES+=" smet_append=$step2_elapsed"
 echo ""
 
 echo ">>> Step 3: NWP forecast extension"
@@ -935,6 +968,7 @@ else
     echo "    Skipped (--no-nwp)"
 fi
 step3_elapsed=$((SECONDS - step3_start))
+STEP_TIMES+=" nwp_ingest=$step3_elapsed"
 echo ""
 
 echo ">>> Step 4: SNOWPACK daily cycle (restart from the daily anchor)"
@@ -943,12 +977,14 @@ CYCLE_ARGS="daily"
 [[ -n "$STABLE_TS" ]] && CYCLE_ARGS="$CYCLE_ARGS --stable-ts $STABLE_TS --nwp-edate $NWP_EDATE"
 $CYCLE $CYCLE_ARGS
 step4_elapsed=$((SECONDS - step4_start))
+STEP_TIMES+=" snowpack=$step4_elapsed"
 echo ""
 
 echo ">>> Step 5: Analysis + scenario generation"
 step5_start=$SECONDS
 {analysis_block}
 step5_elapsed=$((SECONDS - step5_start))
+STEP_TIMES+=" analysis=$step5_elapsed"
 echo ""
 
 echo ">>> Step 6: Runout (com1DFA) on the published release set"
@@ -973,6 +1009,7 @@ else
     echo "    Runout skipped (--no-runout or --no-scenarios)"
 fi
 step6_elapsed=$((SECONDS - step6_start))
+STEP_TIMES+=" runout=$step6_elapsed"
 echo ""
 
 

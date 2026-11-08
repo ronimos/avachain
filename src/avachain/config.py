@@ -26,6 +26,7 @@ RASTER_EPSG = 6342
 OVERRIDABLE_DIRS = (
     "analysis_dir", "plots_dir", "grids_dir", "resampled_dir", "scenarios_dir",
     "models_dir", "logs_dir", "event_masks_dir", "weather_cache_dir",
+    "metrics_dir", "issued_dir",
 )
 
 def wrf_season(wrf: dict, season_start: Optional[str]) -> Optional[str]:
@@ -408,6 +409,26 @@ class ProjectConfig:
     @property
     def logs_dir(self) -> Path:
         return self._dir("logs_dir", self.output_dir / "logs")
+
+    @property
+    def metrics_dir(self) -> Path:
+        """Season analytics records (metrics.py), <metrics_dir>/<season>/*.jsonl."""
+        return self._dir("metrics_dir", self.output_dir / "metrics")
+
+    @property
+    def issued_dir(self) -> Path:
+        """What forecasters were shown and a rerun would otherwise overwrite:
+        <issued_dir>/<season>/<cycle_date>/ (forecast-store snapshots,
+        superseded release sets and reports). metrics.py writes it."""
+        return self._dir("issued_dir", self.output_dir / "issued")
+
+    @property
+    def season_label(self) -> str:
+        """'2026-27' from [snowpack] season_start; 'no-season' without one."""
+        if self.season_start is None:
+            return "no-season"
+        y = self.season_start.year
+        return f"{y}-{(y + 1) % 100:02d}"
 
     @property
     def dem_1m_path(self) -> Path:

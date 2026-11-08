@@ -230,6 +230,10 @@ def main(argv=None) -> int:
             print(f"  waiting for {rc['lock_file']} (another runout is running)", flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
             print(f"  lock taken after {time.monotonic() - t0:.0f} s", flush=True)
+        # A rerun republishes the date's reports: keep the ones forecasters
+        # already had (season record, Ron 2026-11-08). Never fails the run.
+        import metrics
+        metrics.keep_published_reports(cfg, args.snapshot_date)
         env = dict(os.environ)
         env.pop("VIRTUAL_ENV", None)          # the run scripts activate avachain's venv
         # Model first: its report is the one due at 03:00.

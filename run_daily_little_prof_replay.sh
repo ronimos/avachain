@@ -41,6 +41,12 @@ NWP="python $PROJECT_DIR/src/avachain/nwp_ingest.py --toml $TOML"
 CYCLE="python $PROJECT_DIR/src/avachain/snowpack_cycle.py --toml $TOML"
 # Alerts ([alerts] email in the TOML; prints only when none). Never fails.
 ALERT="python $PROJECT_DIR/src/avachain/alerts.py --toml $TOML send"
+# Season analytics (metrics.py, docs/analytics_design.md). Never fails a run.
+METRICS="python $PROJECT_DIR/src/avachain/metrics.py --toml $TOML"
+# One id for every record and superseded copy this run makes.
+export AVACHAIN_RUN_ID=${AVACHAIN_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
+STEP_TIMES=""
+RUNOUT_STATUS=""
 VENV=$PROJECT_DIR/.venv/bin/activate
 # Every directory comes from the TOML (config.py --print-paths sets AVA_*),
 # never from $PROJECT_DIR/outputs/...: a deployment relocates them.
@@ -78,6 +84,7 @@ exec > >(tee -a "$LOGFILE") 2>&1
 # naming the last step it reached. Signals exit 128+n so a kill is a failure.
 _daily_exit() {
     local rc=$?
+    $METRICS run --kind daily --exit-code $rc --log "$LOGFILE" --steps "$STEP_TIMES"         --total-s $SECONDS --runout-status "$RUNOUT_STATUS" --snapshot "$SNAPSHOT_DATE" || true
     [[ $rc -eq 0 ]] && return
     local step
     step=$(grep '>>> Step' "$LOGFILE" 2>/dev/null | tail -1 | sed 's/^>>> //')
@@ -105,6 +112,7 @@ echo ">>> Step 1: Fetch latest station data"
 step1_start=$SECONDS
 $AWS
 step1_elapsed=$((SECONDS - step1_start))
+STEP_TIMES+=" aws_ingest=$step1_elapsed"
 echo ""
 
 echo ">>> Step 2: Append observations to cluster SMETs"
@@ -116,6 +124,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
 fi
 $SMET_APPEND
 step2_elapsed=$((SECONDS - step2_start))
+STEP_TIMES+=" smet_append=$step2_elapsed"
 echo ""
 
 echo ">>> Step 3: NWP forecast extension"
@@ -146,6 +155,7 @@ else
     echo "    Skipped (--no-nwp)"
 fi
 step3_elapsed=$((SECONDS - step3_start))
+STEP_TIMES+=" nwp_ingest=$step3_elapsed"
 echo ""
 
 echo ">>> Step 4: SNOWPACK daily cycle (restart from the daily anchor)"
@@ -154,6 +164,7 @@ CYCLE_ARGS="daily"
 [[ -n "$STABLE_TS" ]] && CYCLE_ARGS="$CYCLE_ARGS --stable-ts $STABLE_TS --nwp-edate $NWP_EDATE"
 $CYCLE $CYCLE_ARGS
 step4_elapsed=$((SECONDS - step4_start))
+STEP_TIMES+=" snowpack=$step4_elapsed"
 echo ""
 
 echo ">>> Step 5: Analysis + scenario generation"
@@ -165,6 +176,7 @@ else
     echo "    Scenarios skipped (--no-scenarios)"
 fi
 step5_elapsed=$((SECONDS - step5_start))
+STEP_TIMES+=" analysis=$step5_elapsed"
 echo ""
 
 echo ">>> Step 6: Runout (com1DFA) on the published release set"
@@ -189,6 +201,7 @@ else
     echo "    Runout skipped (--no-runout or --no-scenarios)"
 fi
 step6_elapsed=$((SECONDS - step6_start))
+STEP_TIMES+=" runout=$step6_elapsed"
 echo ""
 
 

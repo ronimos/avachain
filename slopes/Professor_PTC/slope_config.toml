@@ -55,6 +55,12 @@ scenarios_dir         = "/home/avachain/handoff/Professor_PTC/release"
 output_dir            = "/home/avachain/outputs/Professor_PTC"
 plots_dir             = "/home/avachain/outputs/Professor_PTC/plots"
 logs_dir              = "/home/avachain/logs/Professor_PTC"
+# --- season analytics (metrics.py, docs/analytics_design.md) ---
+# records: <metrics_dir>/<season>/{runs,surveys,cycles,observations}.jsonl
+metrics_dir           = "/home/avachain/work/metrics/Professor_PTC"
+# what forecasters were shown: <issued_dir>/<season>/<cycle>/ (forecast-store
+# snapshots, superseded release sets and reports)
+issued_dir            = "/home/avachain/archive/Professor_PTC/issued"
 
 [surveys]
 # A survey counts once its marker is RUNNING or DONE (survey_markers.py).

@@ -1,0 +1,215 @@
+
+=== step_forecast  cycle=2026-11-08  days=3 ===
+  observed store: 2026-11-07 01:00:00 .. 2026-11-08 06:00:00
+  forecast store: 2026-11-08 12:00:00 .. 2026-11-10 18:00:00
+
+  T_0 2026-11-08: forecast store at 2026-11-08T18:00 UTC
+Running: /home/avachain/code/avachain/.venv/bin/python /home/avachain/code/avachain/src/avachain/analyze_release_zone.py --project-dir /home/avachain/code/avachain --pro-dir /home/avachain/work/snowpack/Professor_PTC/output --zarr-path /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr --snapshot-date 2026-11-08 --features-dir /home/avachain/work/release/Professor_PTC/analysis/forecast/2026-11-08/T_0 --snapshot-ts 2026-11-08T18:00 --toml slopes/Professor_PTC/slope_config.toml --operational
+Building spatial masks...
+  Release zone mask:  5810 cells
+  Release mask: 1 event GeoJSON(s), 5810 cells
+Assigning clusters...
+  Release zone: 655 clusters
+  Adjacent slope (start zone): 1003 clusters
+  Reference (terrain-matched): 857 clusters
+Cluster IDs saved: /home/avachain/work/release/Professor_PTC/analysis/release_zone_groups_2026-11-08.json
+Loading SNOWPACK dataset (Zarr store is large — may take 30-60s)...
+Snapshot: 2026-11-08 (profiles at 2026-11-08 18:00:00)
+Extracting per-cluster features at snapshot...
+  --operational: skipping release/adjacent/reference group extraction
+
+Extracting features for ALL start zone clusters...
+  Total start zone clusters: 1605
+  Already processed:         0
+  Remaining to process:      1605
+  Extracted features for 0 additional clusters
+
+=== step_scenarios  snapshot=2026-11-08 ===
+  slab tensile-failure gate ON (sigma_t_mean__jamieson1990)
+Loading dataset from Zarr: /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr...
+  dims: {'location': 6541, 'time': 10, 'layer': 338}
+  No snow cover: start-zone max HS 0.00 m < 0.1 m — publishing an empty scenario set
+Published scenario set → /home/avachain/handoff/Professor_PTC/release/2026-11-08/T_0
+Published forced-shot set → /home/avachain/handoff/Professor_PTC/release/2026-11-08/shots/T_0
+
+  T_1 2026-11-09: forecast store at 2026-11-09T18:00 UTC
+Running: /home/avachain/code/avachain/.venv/bin/python /home/avachain/code/avachain/src/avachain/analyze_release_zone.py --project-dir /home/avachain/code/avachain --pro-dir /home/avachain/work/snowpack/Professor_PTC/output --zarr-path /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr --snapshot-date 2026-11-09 --features-dir /home/avachain/work/release/Professor_PTC/analysis/forecast/2026-11-08/T_1 --snapshot-ts 2026-11-09T18:00 --toml slopes/Professor_PTC/slope_config.toml --operational
+Building spatial masks...
+  Release zone mask:  5810 cells
+  Release mask: 1 event GeoJSON(s), 5810 cells
+Assigning clusters...
+  Release zone: 655 clusters
+  Adjacent slope (start zone): 1003 clusters
+  Reference (terrain-matched): 857 clusters
+Cluster IDs saved: /home/avachain/work/release/Professor_PTC/analysis/release_zone_groups_2026-11-09.json
+Loading SNOWPACK dataset (Zarr store is large — may take 30-60s)...
+Snapshot: 2026-11-09 (profiles at 2026-11-09 18:00:00)
+Extracting per-cluster features at snapshot...
+  --operational: skipping release/adjacent/reference group extraction
+
+Extracting features for ALL start zone clusters...
+  Total start zone clusters: 1605
+  Already processed:         0
+  Remaining to process:      1605
+  Extracted features for 0 additional clusters
+
+=== step_scenarios  snapshot=2026-11-09 ===
+  slab tensile-failure gate ON (sigma_t_mean__jamieson1990)
+Loading dataset from Zarr: /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr...
+  dims: {'location': 6541, 'time': 10, 'layer': 338}
+  No snow cover: start-zone max HS 0.00 m < 0.1 m — publishing an empty scenario set
+Published scenario set → /home/avachain/handoff/Professor_PTC/release/2026-11-08/T_1
+Published forced-shot set → /home/avachain/handoff/Professor_PTC/release/2026-11-08/shots/T_1
+
+  T_2 2026-11-10: forecast store at 2026-11-10T18:00 UTC
+Running: /home/avachain/code/avachain/.venv/bin/python /home/avachain/code/avachain/src/avachain/analyze_release_zone.py --project-dir /home/avachain/code/avachain --pro-dir /home/avachain/work/snowpack/Professor_PTC/output --zarr-path /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr --snapshot-date 2026-11-10 --features-dir /home/avachain/work/release/Professor_PTC/analysis/forecast/2026-11-08/T_2 --snapshot-ts 2026-11-10T18:00 --toml slopes/Professor_PTC/slope_config.toml --operational
+Building spatial masks...
+  Release zone mask:  5810 cells
+  Release mask: 1 event GeoJSON(s), 5810 cells
+Assigning clusters...
+  Release zone: 655 clusters
+  Adjacent slope (start zone): 1003 clusters
+  Reference (terrain-matched): 857 clusters
+Cluster IDs saved: /home/avachain/work/release/Professor_PTC/analysis/release_zone_groups_2026-11-10.json
+Loading SNOWPACK dataset (Zarr store is large — may take 30-60s)...
+Snapshot: 2026-11-10 (profiles at 2026-11-10 18:00:00)
+Extracting per-cluster features at snapshot...
+  --operational: skipping release/adjacent/reference group extraction
+
+Extracting features for ALL start zone clusters...
+  Total start zone clusters: 1605
+  Already processed:         0
+  Remaining to process:      1605
+  Extracted features for 0 additional clusters
+
+=== step_scenarios  snapshot=2026-11-10 ===
+  slab tensile-failure gate ON (sigma_t_mean__jamieson1990)
+Loading dataset from Zarr: /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr...
+  dims: {'location': 6541, 'time': 10, 'layer': 338}
+  No snow cover: start-zone max HS 0.00 m < 0.1 m — publishing an empty scenario set
+Published scenario set → /home/avachain/handoff/Professor_PTC/release/2026-11-08/T_2
+Published forced-shot set → /home/avachain/handoff/Professor_PTC/release/2026-11-08/shots/T_2
+
+  forecast cycle 2026-11-08: 3 of 3 days published
+08:45:37 - INFO - log: /home/avachain/work/runout/Professor_PTC/logs/runout/20261108_084537_forecast_Professor_PTC_20261108.log
+08:45:37 - INFO - 
+08:45:37 - INFO - ######################################################################
+08:45:37 - INFO -  Path Professor_PTC  cycle 20261108  profile forecast
+08:45:37 - INFO - ######################################################################
+08:45:37 - INFO -   Profile:      forecast  mode=forecast
+  Physics:      operational  [ba901eb42a59]
+  Path hash:    [8a4d0aea55ce]
+  Source:       /home/avachain/work/runout/Professor_PTC/config/profiles.yaml
+  Description:  Operational forecast, all horizons present, locked physics
+  Products:     report, viewer, viewer_3d
+08:45:37 - INFO - [Professor_PTC] horizons: T_0, T_1, T_2
+08:45:37 - INFO - 
+08:45:37 - INFO - ======================================================================
+08:45:37 - INFO -  Horizon T_0  Professor_PTC  20261108
+08:45:37 - INFO - ======================================================================
+08:45:37 - INFO - copied 0 scenario folder(s): /home/avachain/work/runout/Professor_PTC/scen/Professor_PTC/20261108/T_0 -> /home/avachain/work/runout/Professor_PTC/intermediate/runout/Professor_PTC/20261108/T_0
+08:45:37 - INFO - [T_0] No release scenarios (snowpack 2026-11-08): no snow cover. The start zone holds less than 0.10 m of snow (deepest modelled snow 0 cm), so no avalanche can release.
+08:45:46 - INFO - [T_0] no release scenarios; reported with the reason
+08:45:46 - INFO - [T_1] still running; shown as pending
+08:45:46 - INFO - [T_2] still running; shown as pending
+08:45:46 - INFO - no-release report written: /home/avachain/work/runout/Professor_PTC/outputs/forecasts/Professor_PTC/20261108/report.html
+08:45:46 - INFO - published report.html -> /home/www/html/ron/runout_forecast/forecasts/Professor_PTC/20261108 (latest = 20261108)
+08:45:46 - INFO - 
+08:45:46 - INFO - ======================================================================
+08:45:46 - INFO -  Horizon T_1  Professor_PTC  20261108
+08:45:46 - INFO - ======================================================================
+08:45:46 - INFO - copied 0 scenario folder(s): /home/avachain/work/runout/Professor_PTC/scen/Professor_PTC/20261108/T_1 -> /home/avachain/work/runout/Professor_PTC/intermediate/runout/Professor_PTC/20261108/T_1
+08:45:46 - INFO - [T_1] No release scenarios (snowpack 2026-11-09): no snow cover. The start zone holds less than 0.10 m of snow (deepest modelled snow 0 cm), so no avalanche can release.
+08:45:46 - INFO - [T_0] no release scenarios; reported with the reason
+08:45:46 - INFO - [T_1] no release scenarios; reported with the reason
+08:45:46 - INFO - [T_2] still running; shown as pending
+08:45:46 - INFO - no-release report written: /home/avachain/work/runout/Professor_PTC/outputs/forecasts/Professor_PTC/20261108/report.html
+08:45:46 - INFO - published report.html -> /home/www/html/ron/runout_forecast/forecasts/Professor_PTC/20261108 (latest = 20261108)
+08:45:46 - INFO - 
+08:45:46 - INFO - ======================================================================
+08:45:46 - INFO -  Horizon T_2  Professor_PTC  20261108
+08:45:46 - INFO - ======================================================================
+08:45:46 - INFO - copied 0 scenario folder(s): /home/avachain/work/runout/Professor_PTC/scen/Professor_PTC/20261108/T_2 -> /home/avachain/work/runout/Professor_PTC/intermediate/runout/Professor_PTC/20261108/T_2
+08:45:46 - INFO - [T_2] No release scenarios (snowpack 2026-11-10): no snow cover. The start zone holds less than 0.10 m of snow (deepest modelled snow 0 cm), so no avalanche can release.
+08:45:46 - INFO - [T_0] no release scenarios; reported with the reason
+08:45:46 - INFO - [T_1] no release scenarios; reported with the reason
+08:45:46 - INFO - [T_2] no release scenarios; reported with the reason
+08:45:46 - INFO - no-release report written: /home/avachain/work/runout/Professor_PTC/outputs/forecasts/Professor_PTC/20261108/report.html
+08:45:46 - INFO - published report.html -> /home/www/html/ron/runout_forecast/forecasts/Professor_PTC/20261108 (latest = 20261108)
+08:45:46 - INFO - 
+08:45:46 - INFO - ======================================================================
+08:45:46 - INFO -  Professor_PTC  cycle 20261108
+08:45:46 - INFO -    T_0: no release
+08:45:46 - INFO -    T_1: no release
+08:45:46 - INFO -    T_2: no release
+08:45:46 - INFO - ======================================================================
+08:45:46 - INFO - [Professor_PTC] manifest: /home/avachain/work/runout/Professor_PTC/outputs/forecasts/Professor_PTC/20261108/manifest.json
+08:45:46 - INFO - [T_0] no release scenarios; reported with the reason
+08:45:46 - INFO - [T_1] no release scenarios; reported with the reason
+08:45:46 - INFO - [T_2] no release scenarios; reported with the reason
+08:45:46 - INFO - no-release report written: /home/avachain/work/runout/Professor_PTC/outputs/forecasts/Professor_PTC/20261108/report.html
+08:45:46 - INFO - published report.html -> /home/www/html/ron/runout_forecast/forecasts/Professor_PTC/20261108 (latest = 20261108)
+08:45:46 - INFO - log: /home/avachain/work/runout/Professor_PTC/shots/logs/runout/20261108_084546_forecast_Professor_PTC_shots_20261108.log
+08:45:46 - INFO - 
+08:45:46 - INFO - ######################################################################
+08:45:46 - INFO -  Path Professor_PTC  cycle 20261108  profile forecast
+08:45:46 - INFO - ######################################################################
+08:45:46 - INFO -   Profile:      forecast  mode=forecast
+  Physics:      operational  [ba901eb42a59]
+  Path hash:    [95c190508592]
+  Source:       /home/avachain/work/runout/Professor_PTC/shots/config/profiles.yaml
+  Description:  Operational forecast, all horizons present, locked physics
+  Products:     report, viewer, viewer_3d
+08:45:46 - INFO - [Professor_PTC] horizons: T_0, T_1, T_2
+08:45:46 - INFO - 
+08:45:46 - INFO - ======================================================================
+08:45:46 - INFO -  Horizon T_0  Professor_PTC  20261108
+08:45:46 - INFO - ======================================================================
+08:45:46 - INFO - copied 0 scenario folder(s): /home/avachain/work/runout/Professor_PTC/shots/scen/Professor_PTC/20261108/T_0 -> /home/avachain/work/runout/Professor_PTC/shots/intermediate/runout/Professor_PTC/20261108/T_0
+08:45:46 - INFO - [T_0] No release scenarios (snowpack 2026-11-08): no snow cover. The start zone holds less than 0.10 m of snow (deepest modelled snow 0 cm), so no avalanche can release.
+08:45:47 - INFO - [T_0] no release scenarios; reported with the reason
+08:45:47 - INFO - [T_1] still running; shown as pending
+08:45:47 - INFO - [T_2] still running; shown as pending
+08:45:47 - INFO - no-release report written: /home/avachain/work/runout/Professor_PTC/shots/outputs/forecasts/Professor_PTC/20261108/report.html
+08:45:47 - INFO - published report.html -> /home/www/html/ron/runout_forecast/shots/forecasts/Professor_PTC/20261108 (latest = 20261108)
+08:45:47 - INFO - 
+08:45:47 - INFO - ======================================================================
+08:45:47 - INFO -  Horizon T_1  Professor_PTC  20261108
+08:45:47 - INFO - ======================================================================
+08:45:47 - INFO - copied 0 scenario folder(s): /home/avachain/work/runout/Professor_PTC/shots/scen/Professor_PTC/20261108/T_1 -> /home/avachain/work/runout/Professor_PTC/shots/intermediate/runout/Professor_PTC/20261108/T_1
+08:45:47 - INFO - [T_1] No release scenarios (snowpack 2026-11-09): no snow cover. The start zone holds less than 0.10 m of snow (deepest modelled snow 0 cm), so no avalanche can release.
+08:45:47 - INFO - [T_0] no release scenarios; reported with the reason
+08:45:47 - INFO - [T_1] no release scenarios; reported with the reason
+08:45:47 - INFO - [T_2] still running; shown as pending
+08:45:47 - INFO - no-release report written: /home/avachain/work/runout/Professor_PTC/shots/outputs/forecasts/Professor_PTC/20261108/report.html
+08:45:47 - INFO - published report.html -> /home/www/html/ron/runout_forecast/shots/forecasts/Professor_PTC/20261108 (latest = 20261108)
+08:45:47 - INFO - 
+08:45:47 - INFO - ======================================================================
+08:45:47 - INFO -  Horizon T_2  Professor_PTC  20261108
+08:45:47 - INFO - ======================================================================
+08:45:47 - INFO - copied 0 scenario folder(s): /home/avachain/work/runout/Professor_PTC/shots/scen/Professor_PTC/20261108/T_2 -> /home/avachain/work/runout/Professor_PTC/shots/intermediate/runout/Professor_PTC/20261108/T_2
+08:45:47 - INFO - [T_2] No release scenarios (snowpack 2026-11-10): no snow cover. The start zone holds less than 0.10 m of snow (deepest modelled snow 0 cm), so no avalanche can release.
+08:45:47 - INFO - [T_0] no release scenarios; reported with the reason
+08:45:47 - INFO - [T_1] no release scenarios; reported with the reason
+08:45:47 - INFO - [T_2] no release scenarios; reported with the reason
+08:45:47 - INFO - no-release report written: /home/avachain/work/runout/Professor_PTC/shots/outputs/forecasts/Professor_PTC/20261108/report.html
+08:45:47 - INFO - published report.html -> /home/www/html/ron/runout_forecast/shots/forecasts/Professor_PTC/20261108 (latest = 20261108)
+08:45:47 - INFO - 
+08:45:47 - INFO - ======================================================================
+08:45:47 - INFO -  Professor_PTC  cycle 20261108
+08:45:47 - INFO -    T_0: no release
+08:45:47 - INFO -    T_1: no release
+08:45:47 - INFO -    T_2: no release
+08:45:47 - INFO - ======================================================================
+08:45:47 - INFO - [Professor_PTC] manifest: /home/avachain/work/runout/Professor_PTC/shots/outputs/forecasts/Professor_PTC/20261108/manifest.json
+08:45:47 - INFO - [T_0] no release scenarios; reported with the reason
+08:45:47 - INFO - [T_1] no release scenarios; reported with the reason
+08:45:47 - INFO - [T_2] no release scenarios; reported with the reason
+08:45:47 - INFO - no-release report written: /home/avachain/work/runout/Professor_PTC/shots/outputs/forecasts/Professor_PTC/20261108/report.html
+08:45:47 - INFO - published report.html -> /home/www/html/ron/runout_forecast/shots/forecasts/Professor_PTC/20261108 (latest = 20261108)
+Runout (model) on T_0=/home/avachain/handoff/Professor_PTC/release/2026-11-08/T_0, T_1=/home/avachain/handoff/Professor_PTC/release/2026-11-08/T_1, T_2=/home/avachain/handoff/Professor_PTC/release/2026-11-08/T_2
+  /home/avachain/code/avachain/runout/.venv/bin/python -m scripts run --profile forecast --path Professor_PTC --date 20261108 --config-dir /home/avachain/work/runout/Professor_PTC/config --snow-height set --run-name Professor_PTC_20261108
+Runout (shots) on T_0=/home/avachain/handoff/Professor_PTC/release/2026-11-08/shots/T_0, T_1=/home/avachain/handoff/Professor_PTC/release/2026-11-08/shots/T_1, T_2=/home/avachain/handoff/Professor_PTC/release/2026-11-08/shots/T_2
+  /home/avachain/code/avachain/runout/.venv/bin/python -m scripts run --profile forecast --path Professor_PTC --date 20261108 --config-dir /home/avachain/work/runout/Professor_PTC/shots/config --snow-height set --run-name Professor_PTC_shots_20261108
+Runout (model) exit 0
+Runout (shots) exit 0

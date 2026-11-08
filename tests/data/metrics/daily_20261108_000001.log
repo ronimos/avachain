@@ -1,0 +1,728 @@
+============================================================
+  Little Professor — Daily Forward Pipeline
+  Started: Sun Nov  8 12:00:01 AM MST 2026
+  As-of:   live
+  No-NWP:  0   Dry-run: 0
+  Log:     /home/avachain/logs/Professor_PTC/daily_20261108_000001.log
+============================================================
+
+>>> Step 1: Fetch latest station data
+    [CAABT] fetching 2026-11-06 19:00 -> 2026-11-08 07:00 UTC from CAABT, CAABM
+    [CAABT] 36 rows, 2026-11-06 20:00:00+00:00 -> 2026-11-08 07:00:00+00:00
+    [CAABT] cached 36 rows (total: 5189)
+
+  Rows cached: 36
+
+>>> Step 2: Append observations to cluster SMETs
+    SMET append: 6541/6541 files updated, 85033 total rows written
+
+>>> Step 3: NWP forecast extension
+  T_stable = 2026-11-08 06:00:00+00:00
+  WRF: 12 6h ticks → 67 hourly rows (3535 m altitude)
+    NWP forecast SMETs: 6541 written to /home/avachain/work/snowpack/Professor_PTC/input/smet_forecast (67 hourly rows each from T_stable=2026-11-08 06:00:00+00:00)
+    T_stable  = 2026-11-08T06:00
+    NWP EDATE = 2026-11-10T18:00 (T_stable + 60 h, clamped to the WRF outlook)
+
+>>> Step 4: SNOWPACK daily cycle (restart from the daily anchor)
+  Daily cycle: 2026-11-07T18:00 -> 2026-11-08T06:00
+    SNOWPACK anchor -> 2026-11-08T06:00
+=== Little Professor SNOWPACK run ===
+    Start:    2026-11-07T01:00:00 (fresh clusters; restarts begin at their own ProfileDate)
+    Restart:  anchor
+    End:      2026-11-08T06:00
+    Clusters: 6541
+    Started:  Sun Nov  8 07:01:20 AM UTC 2026
+
+=== Run complete: Sun Nov  8 07:10:19 AM UTC 2026 ===
+    Restarted: 6541   Fresh from template: 0
+    Slope clamped to 55.0 deg for 41 cluster(s)
+    OK: 6541   Failed: 0
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 256 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+[i] xsnow.io: Parsing 141 datasets eagerly with 31 workers...
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+update_zarr_since: kept 4 timesteps <= 2026-11-07T18:00:00.000000, wrote 2 (2026-11-08T00:00 -> 2026-11-08T06:00) in 64s
+    SNOWPACK anchor -> 2026-11-10T18:00 (forecast, precipitation-driven)
+=== Little Professor SNOWPACK run ===
+    Start:    2026-11-08T00:00 (fresh clusters; restarts begin at their own ProfileDate)
+    Restart:  anchor
+    End:      2026-11-10T18:00
+    Clusters: 6541
+    Started:  Sun Nov  8 07:12:17 AM UTC 2026
+
+=== Run complete: Sun Nov  8 07:21:12 AM UTC 2026 ===
+    Restarted: 6541   Fresh from template: 0
+    Slope clamped to 55.0 deg for 41 cluster(s)
+    OK: 6541   Failed: 0
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+Files: 6541  batch_size: 100  batches: 66  workers: 31
+  Batch 1/66: cluster_0001_cluster_0001.pro … cluster_0100_cluster_0100.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 236K
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=2min
+  Batch 2/66: cluster_0101_cluster_0101.pro … cluster_0201_cluster_0201.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 276K
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.1s  write=0.1s  ETA=2min
+  Batch 3/66: cluster_0202_cluster_0202.pro … cluster_0302_cluster_0302.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 436K
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.1s  write=0.1s  ETA=2min
+  Batch 4/66: cluster_0303_cluster_0303.pro … cluster_0402_cluster_0402.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 476K
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.0s  write=0.1s  ETA=2min
+  Batch 5/66: cluster_0403_cluster_0403.pro … cluster_0502_cluster_0502.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 516K
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=2min
+  Batch 6/66: cluster_0503_cluster_0503.pro … cluster_0602_cluster_0602.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 676K
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=2min
+  Batch 7/66: cluster_0603_cluster_0603.pro … cluster_0704_cluster_0704.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 720K
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.1s  write=0.1s  ETA=2min
+  Batch 8/66: cluster_0705_cluster_0705.pro … cluster_0806_cluster_0806.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 880K
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=2min
+  Batch 9/66: cluster_0807_cluster_0807.pro … cluster_0906_cluster_0906.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 920K
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=2min
+  Batch 10/66: cluster_0907_cluster_0907.pro … cluster_1006_cluster_1006.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 960K
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=2min
+  Batch 11/66: cluster_1007_cluster_1007.pro … cluster_1106_cluster_1106.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 1.1M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=2min
+  Batch 12/66: cluster_1107_cluster_1107.pro … cluster_1206_cluster_1206.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 1.2M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=2min
+  Batch 13/66: cluster_1207_cluster_1207.pro … cluster_1306_cluster_1306.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 1.3M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=2min
+  Batch 14/66: cluster_1307_cluster_1307.pro … cluster_1407_cluster_1407.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 1.4M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=2min
+  Batch 15/66: cluster_1408_cluster_1408.pro … cluster_1507_cluster_1507.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 1.4M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.1s  write=0.1s  ETA=2min
+  Batch 16/66: cluster_1508_cluster_1508.pro … cluster_1607_cluster_1607.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 1.6M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.1s  write=0.1s  ETA=2min
+  Batch 17/66: cluster_1608_cluster_1608.pro … cluster_1707_cluster_1707.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 1.6M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=2min
+  Batch 18/66: cluster_1708_cluster_1708.pro … cluster_1808_cluster_1808.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 1.8M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.1s  write=0.1s  ETA=2min
+  Batch 19/66: cluster_1809_cluster_1809.pro … cluster_1908_cluster_1908.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 1.8M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=2min
+  Batch 20/66: cluster_1909_cluster_1909.pro … cluster_2008_cluster_2008.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 1.9M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.0s  write=0.1s  ETA=2min
+  Batch 21/66: cluster_2009_cluster_2009.pro … cluster_2108_cluster_2108.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 2.0M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=2min
+  Batch 22/66: cluster_2109_cluster_2109.pro … cluster_2208_cluster_2208.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 2.1M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=2min
+  Batch 23/66: cluster_2209_cluster_2209.pro … cluster_2308_cluster_2308.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 2.1M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=2min
+  Batch 24/66: cluster_2309_cluster_2309.pro … cluster_2409_cluster_2409.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 2.3M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=2min
+  Batch 25/66: cluster_2410_cluster_2410.pro … cluster_2510_cluster_2510.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 2.3M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=2min
+  Batch 26/66: cluster_2511_cluster_2511.pro … cluster_2611_cluster_2611.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 2.5M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=2min
+  Batch 27/66: cluster_2612_cluster_2612.pro … cluster_2713_cluster_2713.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 2.5M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=1min
+  Batch 28/66: cluster_2714_cluster_2714.pro … cluster_2813_cluster_2813.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 2.5M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 29/66: cluster_2814_cluster_2814.pro … cluster_2913_cluster_2913.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 2.7M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 30/66: cluster_2914_cluster_2914.pro … cluster_3016_cluster_3016.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 2.7M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=1min
+  Batch 31/66: cluster_3017_cluster_3017.pro … cluster_3116_cluster_3116.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 2.9M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.1s  write=0.1s  ETA=1min
+  Batch 32/66: cluster_3117_cluster_3117.pro … cluster_3216_cluster_3216.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 2.9M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=1min
+  Batch 33/66: cluster_3217_cluster_3217.pro … cluster_3316_cluster_3316.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 3.0M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 34/66: cluster_3317_cluster_3317.pro … cluster_3416_cluster_3416.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 3.1M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 35/66: cluster_3417_cluster_3417.pro … cluster_3516_cluster_3516.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 3.2M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=1min
+  Batch 36/66: cluster_3517_cluster_3517.pro … cluster_3617_cluster_3617.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 3.3M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 37/66: cluster_3618_cluster_3618.pro … cluster_3717_cluster_3717.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 3.4M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 38/66: cluster_3718_cluster_3718.pro … cluster_3817_cluster_3817.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 3.4M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 39/66: cluster_3818_cluster_3818.pro … cluster_3918_cluster_3918.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 3.6M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 40/66: cluster_3919_cluster_3919.pro … cluster_4019_cluster_4019.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 3.6M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 41/66: cluster_4020_cluster_4020.pro … cluster_4119_cluster_4119.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 3.8M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 42/66: cluster_4120_cluster_4120.pro … cluster_4219_cluster_4219.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 3.8M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 43/66: cluster_4220_cluster_4220.pro … cluster_4319_cluster_4319.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 3.8M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=1min
+  Batch 44/66: cluster_4320_cluster_4320.pro … cluster_4419_cluster_4419.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 4.0M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.4s  write=0.1s  ETA=1min
+  Batch 45/66: cluster_4420_cluster_4420.pro … cluster_4519_cluster_4519.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 4.0M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.4s  write=0.1s  ETA=1min
+  Batch 46/66: cluster_4520_cluster_4520.pro … cluster_4620_cluster_4620.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 4.1M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=1min
+  Batch 47/66: cluster_4621_cluster_4621.pro … cluster_4720_cluster_4720.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 4.2M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=1min
+  Batch 48/66: cluster_4721_cluster_4721.pro … cluster_4820_cluster_4820.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 4.3M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 49/66: cluster_4821_cluster_4821.pro … cluster_4920_cluster_4920.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 4.4M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=1min
+  Batch 50/66: cluster_4921_cluster_4921.pro … cluster_5021_cluster_5021.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 4.5M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.4s  write=0.1s  ETA=1min
+  Batch 51/66: cluster_5022_cluster_5022.pro … cluster_5121_cluster_5121.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 4.5M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=1min
+  Batch 52/66: cluster_5123_cluster_5123.pro … cluster_5222_cluster_5222.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 4.7M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=1min
+  Batch 53/66: cluster_5223_cluster_5223.pro … cluster_5322_cluster_5322.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 4.7M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=0min
+  Batch 54/66: cluster_5323_cluster_5323.pro … cluster_5422_cluster_5422.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 4.9M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=0min
+  Batch 55/66: cluster_5423_cluster_5423.pro … cluster_5522_cluster_5522.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 4.9M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=0min
+  Batch 56/66: cluster_5523_cluster_5523.pro … cluster_5623_cluster_5623.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 5.0M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=0min
+  Batch 57/66: cluster_5624_cluster_5624.pro … cluster_5723_cluster_5723.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 5.1M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.4s  write=0.1s  ETA=0min
+  Batch 58/66: cluster_5724_cluster_5724.pro … cluster_5823_cluster_5823.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 5.1M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=0min
+  Batch 59/66: cluster_5824_cluster_5824.pro … cluster_5924_cluster_5924.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 5.3M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=0min
+  Batch 60/66: cluster_5925_cluster_5925.pro … cluster_6024_cluster_6024.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 5.3M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=0min
+  Batch 61/66: cluster_6025_cluster_6025.pro … cluster_6124_cluster_6124.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 5.4M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.3s  write=0.1s  ETA=0min
+  Batch 62/66: cluster_6125_cluster_6125.pro … cluster_6224_cluster_6224.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 5.5M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=0min
+  Batch 63/66: cluster_6225_cluster_6225.pro … cluster_6324_cluster_6324.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 5.6M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=0min
+  Batch 64/66: cluster_6325_cluster_6325.pro … cluster_6424_cluster_6424.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 5.6M
+[i] xsnow.io: Parsing 100 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=0min
+  Batch 65/66: cluster_6425_cluster_6425.pro … cluster_6524_cluster_6524.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 5.8M
+[i] xsnow.io: Parsing 41 datasets eagerly with 31 workers...
+    read=2.2s  write=0.1s  ETA=0min
+  Batch 66/66: cluster_6525_cluster_6525.pro … cluster_6565_cluster_6565.pro
+[i] xsnow.io: Preserving per-location slope coordinates because their global union would grow the slope dimension beyond its current size of 1.
+/home/avachain/code/avachain/.venv/lib/python3.12/site-packages/zarr/api/asynchronous.py:246: ZarrUserWarning: Consolidated metadata is currently not part in the Zarr format 3 specification. It may not be supported by other zarr implementations and may change in the future.
+  warnings.warn(
+[i] xsnow.io.zarr: Dataset saved to /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+[i] xsnow.io.zarr:    Size: 5.8M
+    read=2.1s  write=0.1s  ETA=0min
+
+Done in 2.5min → /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr
+
+>>> Step 5: Analysis + scenario generation
+
+=== step_forecast  cycle=2026-11-08  days=3 ===
+  observed store: 2026-11-07 01:00:00 .. 2026-11-08 06:00:00
+  forecast store: 2026-11-08 12:00:00 .. 2026-11-10 18:00:00
+
+  T_0 2026-11-08: forecast store at 2026-11-08T18:00 UTC
+Running: /home/avachain/code/avachain/.venv/bin/python /home/avachain/code/avachain/src/avachain/analyze_release_zone.py --project-dir /home/avachain/code/avachain --pro-dir /home/avachain/work/snowpack/Professor_PTC/output --zarr-path /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr --snapshot-date 2026-11-08 --features-dir /home/avachain/work/release/Professor_PTC/analysis/forecast/2026-11-08/T_0 --snapshot-ts 2026-11-08T18:00 --toml /home/avachain/code/avachain/slopes/Professor_PTC/slope_config.toml --operational
+Building spatial masks...
+  Release zone mask:  5810 cells
+  Release mask: 1 event GeoJSON(s), 5810 cells
+Assigning clusters...
+  Release zone: 655 clusters
+  Adjacent slope (start zone): 1003 clusters
+  Reference (terrain-matched): 857 clusters
+Cluster IDs saved: /home/avachain/work/release/Professor_PTC/analysis/release_zone_groups_2026-11-08.json
+Loading SNOWPACK dataset (Zarr store is large — may take 30-60s)...
+Snapshot: 2026-11-08 (profiles at 2026-11-08 18:00:00)
+Extracting per-cluster features at snapshot...
+  --operational: skipping release/adjacent/reference group extraction
+
+Extracting features for ALL start zone clusters...
+  Total start zone clusters: 1605
+  Already processed:         0
+  Remaining to process:      1605
+  Extracted features for 0 additional clusters
+
+=== step_scenarios  snapshot=2026-11-08 ===
+  slab tensile-failure gate ON (sigma_t_mean__jamieson1990)
+Loading dataset from Zarr: /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr...
+  dims: {'location': 6541, 'time': 10, 'layer': 338}
+  T_0 2026-11-08: FAILED: Run 'analyze' step first — missing features CSV
+
+  T_1 2026-11-09: forecast store at 2026-11-09T18:00 UTC
+Running: /home/avachain/code/avachain/.venv/bin/python /home/avachain/code/avachain/src/avachain/analyze_release_zone.py --project-dir /home/avachain/code/avachain --pro-dir /home/avachain/work/snowpack/Professor_PTC/output --zarr-path /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr --snapshot-date 2026-11-09 --features-dir /home/avachain/work/release/Professor_PTC/analysis/forecast/2026-11-08/T_1 --snapshot-ts 2026-11-09T18:00 --toml /home/avachain/code/avachain/slopes/Professor_PTC/slope_config.toml --operational
+Building spatial masks...
+  Release zone mask:  5810 cells
+  Release mask: 1 event GeoJSON(s), 5810 cells
+Assigning clusters...
+  Release zone: 655 clusters
+  Adjacent slope (start zone): 1003 clusters
+  Reference (terrain-matched): 857 clusters
+Cluster IDs saved: /home/avachain/work/release/Professor_PTC/analysis/release_zone_groups_2026-11-09.json
+Loading SNOWPACK dataset (Zarr store is large — may take 30-60s)...
+Snapshot: 2026-11-09 (profiles at 2026-11-09 18:00:00)
+Extracting per-cluster features at snapshot...
+  --operational: skipping release/adjacent/reference group extraction
+
+Extracting features for ALL start zone clusters...
+  Total start zone clusters: 1605
+  Already processed:         0
+  Remaining to process:      1605
+  Extracted features for 0 additional clusters
+
+=== step_scenarios  snapshot=2026-11-09 ===
+  slab tensile-failure gate ON (sigma_t_mean__jamieson1990)
+Loading dataset from Zarr: /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr...
+  dims: {'location': 6541, 'time': 10, 'layer': 338}
+  T_1 2026-11-09: FAILED: Run 'analyze' step first — missing features CSV
+
+  T_2 2026-11-10: forecast store at 2026-11-10T18:00 UTC
+Running: /home/avachain/code/avachain/.venv/bin/python /home/avachain/code/avachain/src/avachain/analyze_release_zone.py --project-dir /home/avachain/code/avachain --pro-dir /home/avachain/work/snowpack/Professor_PTC/output --zarr-path /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr --snapshot-date 2026-11-10 --features-dir /home/avachain/work/release/Professor_PTC/analysis/forecast/2026-11-08/T_2 --snapshot-ts 2026-11-10T18:00 --toml /home/avachain/code/avachain/slopes/Professor_PTC/slope_config.toml --operational
+Building spatial masks...
+  Release zone mask:  5810 cells
+  Release mask: 1 event GeoJSON(s), 5810 cells
+Assigning clusters...
+  Release zone: 655 clusters
+  Adjacent slope (start zone): 1003 clusters
+  Reference (terrain-matched): 857 clusters
+Cluster IDs saved: /home/avachain/work/release/Professor_PTC/analysis/release_zone_groups_2026-11-10.json
+Loading SNOWPACK dataset (Zarr store is large — may take 30-60s)...
+Snapshot: 2026-11-10 (profiles at 2026-11-10 18:00:00)
+Extracting per-cluster features at snapshot...
+  --operational: skipping release/adjacent/reference group extraction
+
+Extracting features for ALL start zone clusters...
+  Total start zone clusters: 1605
+  Already processed:         0
+  Remaining to process:      1605
+  Extracted features for 0 additional clusters
+
+=== step_scenarios  snapshot=2026-11-10 ===
+  slab tensile-failure gate ON (sigma_t_mean__jamieson1990)
+Loading dataset from Zarr: /home/avachain/work/snowpack/Professor_PTC/output/forecast_snowpack.zarr...
+  dims: {'location': 6541, 'time': 10, 'layer': 338}
+  T_2 2026-11-10: FAILED: Run 'analyze' step first — missing features CSV
+ERROR: no forecast day published a scenario set
+ALERT sent to recipient@example.org: [avachain Professor_PTC] daily run FAILED (exit 1) at Step 5: Analysis + scenario generation
