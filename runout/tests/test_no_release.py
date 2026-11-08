@@ -31,6 +31,11 @@ MODEL = ({'producer': 'release', 'snapshot_date': '2025-11-30', 'horizon': 'T_1'
           'status': 'no_scenarios', 'n_scenarios': 0, 'trigger_source': 'model'},
          {'n_scenarios': 0, 'n_trigger_locations': 2, 'trigger_source': 'model',
           'n_below_depth_floor': 30})
+# 2026-11-08, first live night: bare ground, no snow profile in the start zone
+NO_SNOW = ({'producer': 'release', 'snapshot_date': '2026-11-08', 'horizon': 'T_0',
+            'status': 'no_scenarios', 'n_scenarios': 0, 'trigger_source': 'no_snow'},
+           {'n_scenarios': 0, 'n_trigger_locations': 0, 'trigger_source': 'no_snow',
+            'n_below_depth_floor': 0, 'max_hs_m': 0.0, 'min_release_depth_m': 0.1})
 # no candidate and no shot locations configured: no metadata is written
 NONE = ({'producer': 'release', 'snapshot_date': '2025-11-27', 'status': 'no_scenarios',
          'n_scenarios': 0, 'trigger_source': None}, None)
@@ -64,6 +69,14 @@ class Reasons(unittest.TestCase):
         self.assertIn('all 30 candidate releases from 2 trigger locations', r['reason'])
         self.assertIn('too little snow', r['reason'])
         self.assertNotIn('shot', r['reason'])
+
+    def test_bare_ground(self):
+        r = discover.release_info(_set(self.tmp / 'e', *NO_SNOW))
+        self.assertIn('no snow cover', r['reason'])
+        self.assertIn('0.10 m', r['reason'])
+        self.assertIn('0 cm', r['reason'])
+        self.assertIn('2026-11-08', r['reason'])
+        self.assertNotIn('trigger criteria', r['reason'])
 
     def test_no_shot_locations_configured(self):
         r = discover.release_info(_set(self.tmp / 'c', *NONE))
