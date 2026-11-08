@@ -155,14 +155,20 @@ def slab_tensile_support(sigma_t, rho, h, r_c):
 C_FIT = 0.045  # fitted from Meloche et al. 2025 Fig. 8 (two runs); see docs/arrest_indices.md
 
 
-def arrest_length(tau_g, theta, Lam, sigma_t, delta=1.0, L_t=None, C=C_FIT):
+def arrest_length(tau_g, theta, Lam, sigma_t, delta=1.0, L_t=None, C=None):
     """JGR Eq. 20: A_ca / L_t = C * X * sqrt(sigma_t / tau_g),
     X = tau_g / (theta Lam sqrt(1 + delta)). C = 0.045 is a two-run fit (Fig. 8).
+
+    C=None reads C_FIT at call time, not at import: a slope's [calibration]
+    c_fit (calibration.py) sets the module value, and a default argument
+    would have frozen 0.045 (2026-11-08). Same result at the default.
 
     The only implementation of Eq. 20 in the package — call this rather than
     re-deriving the scaling, so the C prefactor cannot be dropped.
 
     Returns (A_ca or A_ca/L_t, X)."""
+    if C is None:
+        C = C_FIT
     X = tau_g / (theta * Lam * np.sqrt(1.0 + delta))
     rel = C * X * np.sqrt(sigma_t / tau_g)
     return (rel * L_t if L_t is not None else rel), X
@@ -835,7 +841,7 @@ def arrest_length_energy(tau_p0, tau_p_star, theta):
 # Combined evaluation
 # ---------------------------------------------------------------------------
 def evaluate(rho, h, psi_deg, E, sigma_t, D_wl, G_wl, theta, a_c=None, a_sc=None,
-             nu=0.3, phi_deg=27.0, delta=1.0, C=C_FIT, tau_p0=None, R=R_FIT,
+             nu=0.3, phi_deg=27.0, delta=1.0, C=None, tau_p0=None, R=R_FIT,
              use_residual=False, speed_ratio_along=MODE2_SPEED_RATIO,
              speed_ratio_cross=MODE3_SPEED_RATIO):
     """All indices for one slab / weak-layer configuration.

@@ -731,7 +731,16 @@ def step_scenarios(cfg, args):
     for READY, so it never reads a set still being written or replaced. A
     failed build discards its staging and leaves any published set alone.
     """
+    import copy
     import handoff
+    import calibration
+    # [calibration]: c_fit for the BFS arrest; size_scale on every size factor
+    # (weights are centred on the median log factor, so they do not change).
+    calibration.apply(cfg)
+    k = calibration.size_scale(cfg)
+    if k != 1.0:
+        args = copy.copy(args)
+        args.size_factors = [round(f * k, 6) for f in args.size_factors]
     final = scenario_set_dir(cfg, args)
     stage = handoff.staging_dir(final)
     shot_final = shot_set_dir(cfg, args) if _forcing_shots(cfg, args) else None
@@ -762,6 +771,17 @@ def step_scenarios(cfg, args):
     return final
 
 
+def _calibration_version(cfg):
+    import calibration
+    return calibration.version(cfg)
+
+
+def _calibration_knobs(cfg):
+    import calibration
+    cal = getattr(cfg, 'calibration', None) or {}
+    return {k: cal[k] for k in calibration.KNOBS if k in cal} or None
+
+
 def _publish_set(cfg, args, stage, final):
     import handoff
     meta = stage / "metadata.json"
@@ -785,7 +805,9 @@ def _publish_set(cfg, args, stage, final):
                     cycle_date=getattr(args, 'cycle_date', None),
                     snapshot_ts=getattr(args, 'snapshot_ts', None),
                     store=getattr(args, 'store_kind', None),
-                    clamped=getattr(args, 'clamped', None))
+                    clamped=getattr(args, 'clamped', None),
+                    calibration_version=_calibration_version(cfg),
+                    calibration=_calibration_knobs(cfg))
 
 
 # What the last _build_scenarios saw at each trigger gate, for the season
