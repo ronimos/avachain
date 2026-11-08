@@ -95,8 +95,8 @@ checking these leads to wrong conclusions about what produced a polygon.
 | `release_geometry.MASK_MODE` | `'gate'` | `'diagnostic'` runs the BFS without the start-zone KML; needs features outside it (`analyze --feature-buffer-m`). |
 | `energy_path.ENERGY_DELTA` | `0.0` | Energy-mode δ only; R was fitted at δ = 0. The Eq. 20 δ stays 1.0. |
 
-**The Jan 18 validation target is the survey-derived polygon** (Ron,
-2026-10-26): `data/validation/avalanche_release_area_20260118.geojson`,
+**The Jan 18 target is the survey-derived polygon** (Ron, 2026-10-26; since
+2026-11-08 it is a calibration target, not validation: see *Calibration*): `data/validation/avalanche_release_area_20260118.geojson`,
 5 810 m², from `survey_release_polygon.py` (`avalanche.delineate_crown` on the
 01-14 → 01-20 surveys). `[paths] validation_dir` makes
 `cfg.release_geojsons_for_date` prefer it, which covers every scoring reader
@@ -560,5 +560,48 @@ reproduce the failure first — with synthetic data if needed — then show the
 fix changes that specific behaviour. A test that passes before and after the
 change proves nothing; check that it fails when the fix is reverted.
 
-Never fit or tune parameters to the 18 January 2026 event. It is n=1 and it is
-the validation target.
+## Calibration — deliberate, versioned, and never called validation
+
+Ron, 2026-11-08: this rule **replaced** "never fit or tune to Jan 18". The
+chain is an operational tool for competent forecasters who know its limits,
+and they are better served by a model anchored to the one event we have. So
+the release-area model **is** calibrated to Jan 18, and recalibrated as new
+avalanches occur, under these rules:
+
+- **Jan 18 is a calibration target and a regression test, not evidence of
+  skill.** Never report Jan 18 IoU as validation once a value was fitted to it.
+  The report carries a caveat line for the release model, like the one for the
+  runout's τ₀ = 125 Pa (itself already fitted to Jan 18).
+- **The no-event days are part of every fit.** The model false-alarms on 10
+  of 10 no-event survey days; a fit that chases only the 5 810 m² polygon can
+  make that worse. No-event days and shots that did not release are
+  constraints, as much as the polygon.
+- **One free parameter, two at most.** One polygon constrains roughly size
+  and maybe position; more knobs fit noise.
+- **Pick a knob that changes area smoothly and has a physical reading** —
+  e.g. arrest strictness (`C_FIT` in Eq. 20) or a size scaling on A_ca. The Λ
+  factors are **dead** while `USE_MELOCHE_ARREST` is on (`_qualifies` returns
+  after the Meloche test), and `C_FIT` is a default argument, so setting
+  `arrest_indices.C_FIT` at runtime changes nothing: it must be passed as `C=`
+  (analyze's `A_ca_brittle` and the BFS call at `release_geometry.py` ~1188). **Not** the Stauchwall angle or the slab-thickness cap: they move
+  polygons in jumps (7 382 / 4 580 / 827 m² at 28 / 29 / 30°), so a fit lands
+  on a knife edge. Choose a robust plateau, not the single best point.
+- **Start with a sensitivity sweep** on Jan 18: IoU and area against each
+  candidate knob, plus false alarms on the no-event days. Pick the knob with
+  the smoothest response.
+- **Calibrated values live in the slope TOML `[calibration]`**, with
+  provenance: events used, date, objective, commit. The physics stays
+  identical to `~/avalanche-release-areas`; only per-slope parameters differ,
+  so parity holds. Never edit module-top physics constants to calibrate.
+- **Recalibration proposes, it does not apply.** A new event triggers a run
+  that refits on all events plus the no-event days, reports leave-one-out
+  results (each event scored by a fit that did not see it), and changes
+  nothing until Ron approves.
+- **Every report and every metrics run record states the calibration
+  version**, so the season's records say which version produced each forecast.
+- **Shot outcomes are the main input** (`observations.jsonl`, metrics.py).
+  Without them recalibration has one data point per avalanche.
+
+Fitting material parameters to the *start-zone snowpack distribution* (e.g.
+G_wl so the start-zone median Π = 1) is a different thing and stays allowed:
+its target is the snowpack, not the crown.

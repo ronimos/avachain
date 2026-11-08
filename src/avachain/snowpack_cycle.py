@@ -244,7 +244,14 @@ def _complete(cfg: ProjectConfig, j: dict, *, snowpack: Callable,
             # the same bytes when this runs straight after save_survey.
             snowpack(cfg, obs_end, "survey")
             _require_coherent(cfg, "res", obs_end, n)
-            anchor_check_fn(cfg, s_new)
+            held = anchor_check_fn(cfg, s_new)
+            if isinstance(held, dict):
+                # Kept for the season record (metrics.py); it was discarded.
+                try:
+                    (cfg.analysis_dir / f"anchor_check_{s_new:%Y-%m-%d}.json"
+                     ).write_text(json.dumps(held))
+                except OSError as e:
+                    print(f"WARNING: anchor check not saved: {e}", flush=True)
         phase = _advance(cfg, j, "save_anchor")
     if phase != "save_anchor":
         raise CycleError(f"{_journal_path(cfg)}: unknown phase {phase!r}")

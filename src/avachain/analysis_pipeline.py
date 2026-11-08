@@ -713,6 +713,12 @@ def step_forecast(cfg, args):
             published += 1
         except (Exception, SystemExit) as e:
             print(f"  {tag}: FAILED: {e}", flush=True)
+    # The forecast store is rebuilt with mode='w' next cycle: keep the
+    # timesteps the T_n days were read at (season record, Ron 2026-11-08).
+    fc_ts = [d["ts"] for d in plan if d["store"] == "forecast"]
+    if fc_ts:
+        import metrics
+        metrics.keep_forecast_store(cfg, args.snapshot_date, fc_ts)
     if not published:
         sys.exit("ERROR: no forecast day published a scenario set")
     print(f"\n  forecast cycle {args.snapshot_date}: {published} of {n_days} days published")
@@ -745,11 +751,14 @@ def step_scenarios(cfg, args):
         raise
     _publish_set(cfg, args, stage, final)
     print(f"Published scenario set → {final}")
+    import metrics
+    metrics.cycle_record(cfg, final, funnel=dict(_FUNNEL), near_miss=list(_NEAR_MISS))
     if shot_stage is not None:
         # After the model set: publishing <date>/ moves an existing
         # <date>/shots across, and the shot set then replaces itself in place.
         _publish_set(cfg, args, shot_stage, shot_final)
         print(f"Published forced-shot set → {shot_final}")
+        metrics.cycle_record(cfg, shot_final)
     return final
 
 
@@ -758,7 +767,17 @@ def _publish_set(cfg, args, stage, final):
     meta = stage / "metadata.json"
     meta_d = json.loads(meta.read_text()) if meta.exists() else {}
     n = meta_d.get("n_scenarios", 0)
-    handoff.publish(stage, final, "release", toml=cfg.toml_path,
+    keep_old = None
+    if final.exists():
+        # A rerun replaces what forecasters were shown: keep it (Ron, 11-08).
+        import metrics
+        try:
+            rel = final.relative_to(cfg.scenarios_dir)
+            cycle = getattr(args, 'cycle_date', None) or args.snapshot_date
+            keep_old = metrics.superseded_dir(cfg, cycle) / "release" / rel
+        except (ValueError, Exception) as e:     # noqa: BLE001
+            print(f"WARNING: superseded set will not be kept: {e}")
+    handoff.publish(stage, final, "release", toml=cfg.toml_path, keep_old=keep_old,
                     path=cfg.slope_name, snapshot_date=args.snapshot_date,
                     horizon=args.forecast_horizon,
                     status="ok" if n else "no_scenarios", n_scenarios=n,
@@ -767,6 +786,47 @@ def _publish_set(cfg, args, stage, final):
                     snapshot_ts=getattr(args, 'snapshot_ts', None),
                     store=getattr(args, 'store_kind', None),
                     clamped=getattr(args, 'clamped', None))
+
+
+# What the last _build_scenarios saw at each trigger gate, for the season
+# record (metrics.cycle_record). Printed only until 2026-11-08.
+_FUNNEL: dict = {}
+_NEAR_MISS: list = []
+N_NEAR_MISS = 10
+
+
+def _near_misses(cids, snap_features, meloche_df, val, mean_slope, sk38_col,
+                 min_tau_g, min_slope, max_sk38, min_slab, max_slab):
+    """The N_NEAR_MISS lowest-Sk38 start-zone clusters with each gate's value
+    and threshold, before any gate. Never raises: it is a record, not a gate."""
+    try:
+        rows = []
+        for cid in cids:
+            sk = val(snap_features, cid, sk38_col)
+            if np.isnan(sk):
+                continue
+            rows.append((sk, cid))
+        out = []
+        for sk, cid in sorted(rows)[:N_NEAR_MISS]:
+            r = {'cid': int(cid), 'sk38': round(sk, 3),
+                 'tau_g_pa': round(val(meloche_df, cid, 'tau_g'), 1),
+                 'slope_deg': round(mean_slope(cid), 1),
+                 'slab_m': round(val(snap_features, cid, 'slab_thickness'), 3)}
+            try:
+                r['s_t'] = round(float(_rg.cluster_tensile_support(cid, meloche_df,
+                                                                   snap_features)), 3)
+            except Exception:                    # noqa: BLE001
+                r['s_t'] = None
+            out.append({k: (None if isinstance(v, float) and np.isnan(v) else v)
+                        for k, v in r.items()})
+        if out:
+            out.append({'thresholds': {'sk38_lt': max_sk38, 'tau_g_ge': min_tau_g,
+                                       'slope_ge': min_slope,
+                                       'slab_m': [min_slab, max_slab], 's_t_ge': 1.0}})
+        return out
+    except Exception as e:                       # noqa: BLE001
+        print(f"WARNING: near-miss record failed: {e}")
+        return []
 
 
 def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
@@ -779,6 +839,8 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
       - Slab depth:         SNOWPACK HS × depth_scale at given percentile
     """
     print(f"\n=== step_scenarios  snapshot={args.snapshot_date} ===")
+    _FUNNEL.clear()
+    _NEAR_MISS.clear()
 
     # make_release_polygon_2d reads these module flags, so set them before any run.
     _rg.ARREST_MODE  = getattr(args, 'arrest_mode', _rg.ARREST_MODE)
@@ -881,6 +943,7 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
     candidate_ids = [cid for cid in snap_features.index
                      if cid in sz_cids]
     print(f"  Start zone clusters with features: {len(candidate_ids)}")
+    _FUNNEL['start_zone_with_features'] = len(candidate_ids)
 
     def _scalar_val(df, cid, col):
         """Safely get a scalar from a possibly multi-row index."""
@@ -902,6 +965,10 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
 
         # Also filter by Sk38 — Sk38 >= 0.5 is stable terrain
         sk38_col = 'min_sk38'
+        _NEAR_MISS.extend(_near_misses(candidate_ids, snap_features, meloche_df,
+                                       _scalar_val, _mean_slope, sk38_col,
+                                       MIN_TAU_G, MIN_SLOPE_TRIGGER, MAX_SK38,
+                                       MIN_SLAB_THICKNESS, MAX_SLAB_THICKNESS))
         candidate_ids = [
             cid for cid in candidate_ids
             if cid in meloche_df.index
@@ -915,6 +982,7 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
               f"slope >= {MIN_SLOPE_TRIGGER:.1f}°, "
               f"Sk38 < {MAX_SK38} filter: "
               f"{len(candidate_ids)}")
+        _FUNNEL['tau_g_slope_sk38'] = len(candidate_ids)
         candidate_ids = [
             cid for cid in candidate_ids
             if ((_scalar_val(snap_features, cid, 'slab_thickness') >= MIN_SLAB_THICKNESS
@@ -923,6 +991,7 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
         ]
         print(f"  Candidates after slab_thickness {MIN_SLAB_THICKNESS}-{MAX_SLAB_THICKNESS}m filter: "
             f"{len(candidate_ids)}")
+        _FUNNEL['slab_thickness'] = len(candidate_ids)
     # Slab tensile gate on the trigger: rank only triggers whose slab can carry
     # a crack to r_c, so the ranking still yields n_triggers releases.
     if (_rg.USE_SLAB_TENSILE_GATE and _rg.ARREST_MODE == 'legacy'
@@ -935,6 +1004,7 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
             cid for cid in candidate_ids
             if not (_rg.cluster_tensile_support(cid, meloche_df, snap_features) < 1.0)]
         print(f"  Candidates after slab tensile support S_t >= 1: {len(candidate_ids)}")
+        _FUNNEL['slab_tensile'] = len(candidate_ids)
     # Optional: restrict to observed release area (validation mode only)
     if args.restrict_to_release_area:
         from snowpack_analysis import geojson_to_mask
@@ -967,6 +1037,7 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
                              if e >= elev_threshold]
             print(f"  Candidates after elevation >= P{elev_pct} "
                   f"({elev_threshold:.0f}m) filter: {len(candidate_ids)}")
+            _FUNNEL['elevation'] = len(candidate_ids)
 
     sk38_col = 'min_sk38' if 'min_sk38' in snap_features.columns else 'sk38_min'
     trigger_source = 'model'

@@ -532,6 +532,9 @@ def anchor_to_survey(cfg, survey_ts: pd.Timestamp, top_down_cids=(),
           f"p90 {100 * np.percentile(exc, 90):+.0f} cm", flush=True)
     out = cfg.analysis_dir / f"anchor_stats_{date}.json"
     out.write_text(json.dumps(stats, indent=1))
+    # The counts were returned and dropped; the season record (metrics.py)
+    # reads them from here.
+    (cfg.analysis_dir / f"anchor_counts_{date}.json").write_text(json.dumps(n))
     return {'counts': n, 'stats': stats}
 
 

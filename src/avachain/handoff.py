@@ -83,10 +83,13 @@ def _write_atomic(path: Path, text: str) -> None:
 
 
 def publish(stage: Path, final: Path, producer: str, *,
-            toml: Optional[Path] = None, **fields) -> Path:
+            toml: Optional[Path] = None, keep_old: Optional[Path] = None,
+            **fields) -> Path:
     """Write the manifest into `stage`, move it to `final`, then write READY.
 
     `fields` go into the manifest as is (snapshot_date, horizon, status, ...).
+    `keep_old`: when a published set is replaced, move it there instead of
+    deleting it (the season record keeps what forecasters were shown).
     """
     files = sorted(p for p in stage.rglob("*") if p.is_file())
     manifest = {
@@ -117,7 +120,16 @@ def publish(stage: Path, final: Path, producer: str, *,
     _write_atomic(final / READY, json.dumps(
         {"published_utc": _now(), "manifest": MANIFEST}) + "\n")
     if old is not None:
-        shutil.rmtree(old)
+        kept = False
+        if keep_old is not None:
+            try:
+                Path(keep_old).parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(old), str(keep_old))
+                kept = True
+            except OSError as e:
+                print(f"WARNING: superseded set not kept ({e}); deleting it")
+        if not kept:
+            shutil.rmtree(old, ignore_errors=True)
     return final
 
 

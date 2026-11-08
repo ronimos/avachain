@@ -337,6 +337,8 @@ class TestDirOverrides:
             "plots_dir": "outputs/P/plots",
             "logs_dir": "logs/P",
             "weather_cache_dir": "work/weather",
+            "metrics_dir": "work/metrics/P",
+            "issued_dir": "archive/P/issued",
         }
         assert set(OVERRIDABLE_DIRS) <= set(keys)
         body = "\n".join(f'{k} = "{deploy / v}"' for k, v in keys.items())
