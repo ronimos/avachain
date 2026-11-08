@@ -178,6 +178,14 @@ Sk38 < 1, slab 0.5–2.0 m, tensile support). `scenarios` used to raise
 Little Professor's points are the centres of 2025-26 clusters 3500, 2568, 2480
 and 4137.
 
+**Bare ground** (first live night, 2026-11-08): with no snow profile in the
+start zone, `analyze` writes no features CSV, and `scenarios` used to fail
+before reaching the fallback. Now, when the CSV is missing and the start zone's
+modelled HS is below the 0.10 m floor everywhere, the set (and the forced-shot
+set) publishes empty with `trigger_source: "no_snow"` and `max_hs_m`, the run
+ends DONE, and the report says "no snow cover". With snow present a missing
+CSV still fails.
+
 ## 7. Rehearsal (2025-26 replayed as a live season)
 
 `/home/avachain/scratch/ron/season_start/rehearsal/`, driver `run_rehearsal.sh`.

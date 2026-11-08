@@ -116,6 +116,7 @@ def release_info(src_dir):
             'min_release_depth_m': meta.get('min_release_depth_m', RELEASE_DEPTH_FLOOR_M),
             'snapshot_date': man.get('snapshot_date'),
             'shot_outcomes': meta.get('shot_outcomes'),
+            'max_hs_m': meta.get('max_hs_m'),
         }
         info['reason'] = no_release_reason(info) if info['status'] == 'no_scenarios' else None
         return info
@@ -131,6 +132,12 @@ def no_release_reason(info):
     n_trig = info.get('n_trigger_locations')
     floor = f"{info.get('min_release_depth_m', RELEASE_DEPTH_FLOOR_M):.2f} m"
     snap = f" (snowpack {info['snapshot_date']})" if info.get('snapshot_date') else ''
+    if src == 'no_snow':
+        # Bare ground: the start zone holds less snow than any release needs
+        hs = info.get('max_hs_m')
+        hs_txt = f" (deepest modelled snow {hs * 100:.0f} cm)" if hs is not None else ''
+        return (f"No release scenarios{snap}: no snow cover. The start zone holds "
+                f"less than {floor} of snow{hs_txt}, so no avalanche can release.")
     if src == 'explosive_forced':
         # Forced explosive shots: each shot initiates; none propagated
         why = {'slab_tensile': 'the slab could not carry the crack (slab tensile support below 1)',

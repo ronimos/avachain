@@ -816,8 +816,23 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
         print(f"  WARNING: using group-level features ({feat_csv_grp.name}). "
               f"Rerun 'analyze' step to generate full start zone coverage.")
     else:
+        # analyze writes no features CSV when no start-zone cluster has a
+        # snow profile. On bare ground that is the right answer, not an
+        # error: publish an empty set that says so, so the run ends DONE and
+        # the report shows "no snow cover" (first live night, 2026-11-08).
+        # With snow present a missing CSV is still a real fault and fails.
+        max_hs = _start_zone_max_hs(ds, cluster_map, start_zone_mask, args)
+        if max_hs is not None and max_hs < MIN_RELEASE_DEPTH_M:
+            print(f"  No snow cover: start-zone max HS {max_hs:.2f} m "
+                  f"< {MIN_RELEASE_DEPTH_M} m — publishing an empty scenario set")
+            _write_no_snow_metadata(out_dir, args, max_hs)
+            if shot_dir is not None:
+                _write_no_snow_metadata(shot_dir, args, max_hs, shots=True)
+            return out_dir
         raise FileNotFoundError(
-            f"Run 'analyze' step first — missing features CSV")
+            f"Run 'analyze' step first — missing features CSV"
+            + ("" if max_hs is None else
+               f" (start-zone max HS {max_hs:.2f} m, so this is not bare ground)"))
 
     mel_csv = mel_csv_all if mel_csv_all.exists() else mel_csv_grp
 
@@ -995,6 +1010,37 @@ MIN_RELEASE_DEPTH_M = 0.10
 # (the value the old release-group median fell back to).
 DEFAULT_SLAB_DENSITY = 280.0
 DEFAULT_SLAB_DENSITY_STD = 20.0
+
+
+def _start_zone_max_hs(ds, cluster_map, start_zone_mask, args):
+    """Largest modelled HS (m) over the start-zone clusters at the snapshot,
+    or None when the store has no HS or no start-zone cluster."""
+    if 'HS' not in ds:
+        return None
+    sz_ids = set(int(c) for c in np.unique(cluster_map[start_zone_mask]) if c > 0)
+    keep = np.array([int(str(n).split('_')[-1]) in sz_ids
+                     for n in ds['location'].values])
+    if not keep.any():
+        return None
+    ts = pd.Timestamp(getattr(args, 'snapshot_ts', None) or args.snapshot_date)
+    hs = ds['HS'].isel(location=keep).sel(time=ts, method='nearest').values
+    hs = np.asarray(hs, dtype=float)
+    if not np.isfinite(hs).any():
+        return None
+    return float(np.nanmax(hs))
+
+
+def _write_no_snow_metadata(out_dir, args, max_hs, shots=False):
+    """metadata.json of an empty set published because there is no snow."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    meta = {'snapshot_date': args.snapshot_date, 'n_scenarios': 0,
+            'n_trigger_locations': 0, 'trigger_source': 'no_snow',
+            'n_below_depth_floor': 0, 'max_hs_m': round(max_hs, 3),
+            'min_release_depth_m': MIN_RELEASE_DEPTH_M}
+    if shots:
+        meta['shot_outcomes'] = {}
+        meta['p_no_release'] = 1.0
+    (out_dir / "metadata.json").write_text(json.dumps(meta, indent=2))
 
 
 def _release_mean_depth(release_depth: np.ndarray) -> float:
