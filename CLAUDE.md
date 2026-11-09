@@ -572,10 +572,22 @@ avalanches occur, under these rules:
   skill.** Never report Jan 18 IoU as validation once a value was fitted to it.
   The report carries a caveat line for the release model, like the one for the
   runout's τ₀ = 125 Pa (itself already fitted to Jan 18).
-- **The no-event days are part of every fit.** The model false-alarms on 10
-  of 10 no-event survey days; a fit that chases only the 5 810 m² polygon can
-  make that worse. No-event days and shots that did not release are
-  constraints, as much as the polygon.
+- **A no-event day says nothing about release area** (Ron, 2026-11-09; this
+  replaced "the no-event days are part of every fit", which scored the
+  no-event E[area] against its baseline). A day passes without an avalanche
+  for reasons the area model does not see: no trigger in the right place,
+  a slope hard to trigger across, or an r_c too large. Its potential release
+  can be larger or smaller than Jan 18's. So **do not constrain the area on
+  no-event days**. Report it, never score it. Those days still bear on
+  *initiation* (the trigger gates), and the model false-alarms on 10 of 10
+  of them, but area knobs leave the trigger list unchanged.
+- **Observed non-triggering constrains propagation.** These are points where a
+  trigger was applied and nothing propagated: shots that did not release, and
+  skiers. On Jan 18, people skied 10–20 m from the crown without triggering
+  it. Score them by putting model triggers there with no rectangle fallback
+  (the forced-shot path, `make_release_polygon_2d(rectangle_fallback=False)`).
+  A fit that gets Jan 18 IoU by growing the polygon over skied terrain is
+  wrong.
 - **One free parameter, two at most.** One polygon constrains roughly size
   and maybe position; more knobs fit noise.
 - **Pick a knob that changes area smoothly and has a physical reading** —
@@ -587,20 +599,22 @@ avalanches occur, under these rules:
   polygons in jumps (7 382 / 4 580 / 827 m² at 28 / 29 / 30°), so a fit lands
   on a knife edge. Choose a robust plateau, not the single best point.
 - **Start with a sensitivity sweep** on Jan 18: IoU and area against each
-  candidate knob, plus false alarms on the no-event days. Pick the knob with
-  the smoothest response.
+  candidate knob, plus the non-triggering points above. Report the no-event
+  areas, but don't score them. Pick the knob with the smoothest response.
 - **Calibrated values live in the slope TOML `[calibration]`**, with
   provenance: events used, date, objective, commit. The physics stays
   identical to `~/avalanche-release-areas`; only per-slope parameters differ,
   so parity holds. Never edit module-top physics constants to calibrate.
 - **Recalibration proposes, it does not apply.** A new event triggers a run
-  that refits on all events plus the no-event days, reports leave-one-out
+  that refits on all events plus every observed non-triggering point
+  (shots, skiers), reports leave-one-out
   results (each event scored by a fit that did not see it), and changes
   nothing until Ron approves.
 - **Every report and every metrics run record states the calibration
   version**, so the season's records say which version produced each forecast.
 - **Shot outcomes are the main input** (`observations.jsonl`, metrics.py).
-  Without them recalibration has one data point per avalanche.
+  Without them recalibration has one data point per avalanche. Record skier
+  and ski-cut non-triggers the same way, with locations.
 
 Fitting material parameters to the *start-zone snowpack distribution* (e.g.
 G_wl so the start-zone median Π = 1) is a different thing and stays allowed:

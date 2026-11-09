@@ -506,6 +506,20 @@ def k_ic_n_clamped(rho, relation=K_IC_DEFAULT):
     return int(np.sum(np.isfinite(rho) & ((rho < lo) | (rho > hi))))
 
 
+# The density ranges in K_IC_RELATIONS are a GUIDELINE, not a limit (Ron,
+# 2026-11-09). They are what each relation was fitted over; Schweizer et al.
+# (2004) is 80-300 kg/m^3 from Swiss beam tests. Little Professor is a Colorado
+# high-alpine, wind-affected snowpack. On Jan 18 2026, 82% of the start-zone
+# clusters (avachain) have a mean slab density above 300, and every one has at
+# least one intact slab layer outside 80-300. clamp=True evaluates those layers
+# at the range edge, so it understates K_Ic of dense slabs: the median ligament
+# K_Ic is 1318 clamped against 1650 Pa m^0.5 extrapolated (+25%). Kirchner et
+# al. (2000), fitted to 540, has 3% of clusters out of range. The power law
+# extrapolated past the range is the intended reading for slab toughness. The
+# clamp stays the default only because the ligament columns, the sole consumer
+# and read by no polygon, were built with it. Use the extrapolated value
+# (spec['func'] directly) for any K_Ic-based gate, and report it as
+# extrapolated.
 def k_ic(rho, relation=K_IC_DEFAULT, d_max=None, clamp=True):
     """K_Ic (Pa m^0.5) from a named density relation.
 
