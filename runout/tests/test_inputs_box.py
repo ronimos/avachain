@@ -51,6 +51,31 @@ class InputsBox(unittest.TestCase):
         self.assertTrue(box['caveats'][0].startswith('No forecast for T+2'))
         self.assertEqual(box['caveats'][1], 'c1')
 
+    def test_calibrated_release_model_is_stated_with_a_caveat(self):
+        # CLAUDE.md "Calibration" (Ron, 2026-11-08): every report states the
+        # release calibration version, and a calibrated model carries a caveat
+        tmp = tempfile.mkdtemp()
+        raster = self._release_set(tmp, '2026-01-18')
+        man = raster.parent / 'manifest.json'
+        m = json.loads(man.read_text())
+        m.update(calibration_version='2026-11-10.1',
+                 calibration={'facet_a': 0.75, 'distance_caps': False})
+        man.write_text(json.dumps(m))
+        box = cp.inputs_and_caveats({'display': {'caveats': ['c1']}},
+                                    [_hz('T_0', raster)])
+        self.assertIn('release calibration 2026-11-10.1',
+                      dict(box['rows'])['Release scenarios T+0'])
+        cal = [c for c in box['caveats'] if 'calibrated to the 2026-01-18' in c]
+        self.assertEqual(len(cal), 1)
+        self.assertIn('2026-11-10.1', cal[0])
+
+    def test_uncalibrated_release_model_says_none_and_no_caveat(self):
+        tmp = tempfile.mkdtemp()
+        box = cp.inputs_and_caveats({'display': {}},
+                                    [_hz('T_0', self._release_set(tmp, '2026-01-18'))])
+        self.assertIn('release calibration none', dict(box['rows'])['Release scenarios T+0'])
+        self.assertFalse(any('calibrated' in c for c in box['caveats']))
+
     def test_forecast_days_show_their_snapshot_time_and_the_clamp(self):
         # Ron, 2026-11-04: three days at 18 UTC; T+2 clamped to the WRF
         # outlook's last step must say so.

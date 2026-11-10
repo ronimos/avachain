@@ -722,7 +722,7 @@ def release_set_info(raster_path):
     # release manifest.json beside it)
     # @param raster_path: str or None
     # @returns: dict (set, snapshot_date, snapshot_ts, store, clamped,
-    #          created_utc, commit) or None
+    #          created_utc, commit, calibration_version, calibration) or None
     if not raster_path:
         return None
     m = Path(raster_path).parent / 'manifest.json'
@@ -738,7 +738,9 @@ def release_set_info(raster_path):
             'store': man.get('store'),
             'clamped': bool(man.get('clamped')),
             'created_utc': man.get('created_utc'),
-            'commit': (man.get('commit') or '')[:7]}
+            'commit': (man.get('commit') or '')[:7],
+            'calibration_version': man.get('calibration_version'),
+            'calibration': man.get('calibration')}
 
 
 def entrainment_rule(ent):
@@ -787,7 +789,17 @@ def inputs_and_caveats(manifest, horizons):
             rows.append((f"Release scenarios {hz['name']}",
                          f"set {rel['set']}, snowpack {_when(rel)}, "
                          f"built {(rel['created_utc'] or '').replace('T', ' ').replace('Z', ' UTC')}"
-                         f"{', commit ' + rel['commit'] if rel['commit'] else ''}"))
+                         f"{', commit ' + rel['commit'] if rel['commit'] else ''}"
+                         f", release calibration {rel.get('calibration_version') or 'none'}"))
+        # CLAUDE.md "Calibration": a calibrated release model says so on the
+        # report, like the runout's tau0 fit (Ron, 2026-11-08)
+        cal_versions = sorted({r['calibration_version'] for _, r in rels
+                               if r.get('calibration_version')})
+        if cal_versions:
+            caveats_extra.append(
+                f"The release-area model is calibrated to the 2026-01-18 avalanche "
+                f"(calibration {', '.join(cal_versions)}). Its match to that event is a fit, "
+                f"not evidence of skill.")
     else:
         snow_line = ('Last snow height survey', (manifest.get('survey') or {}).get('date') or 'none')
     rows.append(('Scenarios', ', '.join(f"{hz['name']} {len(hz['df'])}" for hz in horizons)))

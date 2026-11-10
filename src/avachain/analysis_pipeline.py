@@ -870,6 +870,12 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
     _ep.ENERGY_DELTA = getattr(args, 'energy_delta', _ep.ENERGY_DELTA)
     if getattr(args, 'slab_tensile_gate', None) is not None:
         _rg.USE_SLAB_TENSILE_GATE = args.slab_tensile_gate
+    if getattr(args, 'trigger_toughness', None) is not None:
+        _rg.USE_TRIGGER_TOUGHNESS = args.trigger_toughness
+    if getattr(args, 'distance_caps', None) is not None:
+        _rg.USE_DISTANCE_CAPS = args.distance_caps
+    print(f"  trigger toughness {'ON' if _rg.USE_TRIGGER_TOUGHNESS else 'OFF'}  "
+          f"distance caps {'ON' if _rg.USE_DISTANCE_CAPS else 'OFF'}")
     if _rg.USE_SLAB_TENSILE_GATE:
         print(f"  slab tensile-failure gate ON ({_rg.SLAB_TENSILE_SIGMA_COL})")
     if _rg.ARREST_MODE != 'legacy' or _rg.MASK_MODE != 'gate':
@@ -1813,6 +1819,16 @@ def build_parser():
                         help='legacy mode: also arrest where the slab breaks in tension '
                              'before the crack reaches r_c (Schweizer et al. 2014; '
                              'default: release_geometry.USE_SLAB_TENSILE_GATE, on).')
+    parser.add_argument('--trigger-toughness', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help='cap the trigger slab strength by its edge-crack toughness '
+                             'K_Ic/(1.122 sqrt(pi h/2)) (default: '
+                             'release_geometry.USE_TRIGGER_TOUGHNESS, on).')
+    parser.add_argument('--distance-caps', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help='BFS up/down/cross distance caps (default: [calibration] '
+                             'distance_caps, else release_geometry.USE_DISTANCE_CAPS, on). '
+                             'Overrides the TOML.')
     parser.add_argument('--force-explosive-triggers', action=argparse.BooleanOptionalAction,
                         default=None,
                         help='scenarios: also publish a forced-shot set at '

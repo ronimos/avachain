@@ -9,6 +9,8 @@ without [calibration] runs exactly as before.
     version     = "2026-11-xx.1"        # stamped on every set, report and record
     c_fit       = 0.045                 # Eq. 20 prefactor (arrest_indices.C_FIT)
     size_scale  = 1.0                   # multiplies every [scenarios] size factor
+    facet_a     = 0.5                   # facet strength knockdown (snowpack_analysis)
+    distance_caps = true                # BFS distance caps (release_geometry)
     # provenance (free-form, not read by the model):
     events = ["2026-01-18"]; no_event_dates = [...]; objective = "..."; fitted = "..."; commit = "..."
 
@@ -19,11 +21,19 @@ Knobs, and why only these two:
   size_scale  The scenario size factors scale the BFS distance caps and the
               rectangle fallback; their weights are centred on the median log
               factor, so a uniform scale leaves the weights unchanged.
+  facet_a     snowpack_analysis.FACET_STRENGTH_FACTOR, the J&J 1990 sigma_t
+              knockdown for faceted layers (module default 0.5). It moves the
+              sigma_t_mean / _wl / _ligament columns and the tensile gate, so
+              analyze must be re-run (--force) after a change.
+  distance_caps  release_geometry.USE_DISTANCE_CAPS. A structural switch, not
+              a fitted value: false opens the BFS up/down/cross caps. With the
+              caps off, size_scale and the size factors scale nothing in the
+              BFS.
 The Λ factors are not knobs: with USE_MELOCHE_ARREST they never run.
 """
 from __future__ import annotations
 
-KNOBS = ("c_fit", "size_scale")
+KNOBS = ("c_fit", "size_scale", "facet_a", "distance_caps")
 PROVENANCE = ("version", "events", "no_event_dates", "objective", "fitted",
               "commit", "note", "sweep")
 
@@ -37,6 +47,10 @@ def _check(cal: dict) -> None:
         raise ValueError("[calibration] c_fit must be > 0")
     if "size_scale" in cal and not float(cal["size_scale"]) > 0:
         raise ValueError("[calibration] size_scale must be > 0")
+    if "facet_a" in cal and not 0 < float(cal["facet_a"]) <= 1:
+        raise ValueError("[calibration] facet_a must be in (0, 1]")
+    if "distance_caps" in cal and not isinstance(cal["distance_caps"], bool):
+        raise ValueError("[calibration] distance_caps must be true or false")
 
 
 def apply(cfg, quiet: bool = False) -> dict:
@@ -51,9 +65,18 @@ def apply(cfg, quiet: bool = False) -> dict:
         applied["c_fit"] = _ai.C_FIT
     if "size_scale" in cal:
         applied["size_scale"] = float(cal["size_scale"])
+    if "facet_a" in cal:
+        import snowpack_analysis as _sa
+        _sa.FACET_STRENGTH_FACTOR = float(cal["facet_a"])
+        applied["facet_a"] = _sa.FACET_STRENGTH_FACTOR
+    if "distance_caps" in cal:
+        import release_geometry as _rg
+        _rg.USE_DISTANCE_CAPS = bool(cal["distance_caps"])
+        applied["distance_caps"] = _rg.USE_DISTANCE_CAPS
     if applied and not quiet:
         print(f"  calibration {cal.get('version', '(no version)')}: "
-              + ", ".join(f"{k}={v:g}" for k, v in applied.items()), flush=True)
+              + ", ".join(f"{k}={v:g}" if not isinstance(v, bool) else f"{k}={v}"
+                          for k, v in applied.items()), flush=True)
     return applied
 
 

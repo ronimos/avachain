@@ -416,7 +416,7 @@ DMAX_FACTOR = 1.0   # d_max = DMAX_FACTOR * grain size (both in m)
 # regression, so the paper's figure is now the default and the rounding is kept
 # only as a named constant for reproducing older output. Note this cannot move
 # any release polygon: k_ic() reaches only the ligament columns, which the BFS
-# never reads.
+# never reads. (Since 2026-11-10 the trigger toughness gate reads them.)
 SCH2004_A4        = 350.0   # Pa m
 SCH2004_EXP_PAPER = 1.9     # as printed in Eq. 8 (r = 0.98)
 SCH2004_EXP_ROUND = 2.0     # the abstract's "about 2"; default before 2026-10-09
@@ -511,32 +511,63 @@ def k_ic_n_clamped(rho, relation=K_IC_DEFAULT):
 # (2004) is 80-300 kg/m^3 from Swiss beam tests. Little Professor is a Colorado
 # high-alpine, wind-affected snowpack. On Jan 18 2026, 82% of the start-zone
 # clusters (avachain) have a mean slab density above 300, and every one has at
-# least one intact slab layer outside 80-300. clamp=True evaluates those layers
-# at the range edge, so it understates K_Ic of dense slabs: the median ligament
+# least one intact slab layer outside 80-300. Clamping evaluated those layers
+# at the range edge and understated K_Ic of dense slabs: the median ligament
 # K_Ic is 1318 clamped against 1650 Pa m^0.5 extrapolated (+25%). Kirchner et
-# al. (2000), fitted to 540, has 3% of clusters out of range. The power law
-# extrapolated past the range is the intended reading for slab toughness. The
-# clamp stays the default only because the ligament columns, the sole consumer
-# and read by no polygon, were built with it. Use the extrapolated value
-# (spec['func'] directly) for any K_Ic-based gate, and report it as
-# extrapolated.
-def k_ic(rho, relation=K_IC_DEFAULT, d_max=None, clamp=True):
+# al. (2000), fitted to 540, has 3% of clusters out of range. So since
+# 2026-11-10 (Ron) the power law is EXTRAPOLATED past its range by default
+# (K_IC_RANGE_MODE); n_rho_clamped now counts the extrapolated layers. The
+# trigger toughness gate (release_geometry.USE_TRIGGER_TOUGHNESS) reads the
+# ligament K_Ic, so this moves which triggers can start a release.
+K_IC_RANGE_MODE = 'extrapolate'   # 'extrapolate' | 'clamp' | 'nan'
+
+
+def k_ic(rho, relation=K_IC_DEFAULT, d_max=None, clamp=None):
     """K_Ic (Pa m^0.5) from a named density relation.
 
-    clamp=True (default) clamps rho into the relation's fitted range *for this
-    evaluation only*, rather than returning NaN, so that a single out-of-range
-    layer cannot poison a thickness-weighted ligament. Density is not modified
-    anywhere else. clamp=False restores the NaN-outside-range behaviour.
-    Use k_ic_n_clamped() to report how many layers were clamped.
+    Outside the relation's fitted density range: clamp=None (default) follows
+    K_IC_RANGE_MODE, read at call time ('extrapolate' since 2026-11-10);
+    clamp=True evaluates at the range edge (the default before 2026-11-10);
+    clamp=False returns NaN. Density is not modified anywhere. Use
+    k_ic_n_clamped() to count the out-of-range layers.
     """
     spec = _k_ic_spec(relation)
     rho = np.asarray(rho, dtype=float)
     lo, hi = spec['rho']
-    if clamp:
-        rho_eval = np.clip(rho, lo, hi)
-        return spec['func'](rho_eval, d_max)
+    mode = K_IC_RANGE_MODE if clamp is None else ('clamp' if clamp else 'nan')
+    if mode == 'extrapolate':
+        return spec['func'](rho, d_max)
+    if mode == 'clamp':
+        return spec['func'](np.clip(rho, lo, hi), d_max)
+    if mode != 'nan':
+        raise ValueError(f"unknown K_IC_RANGE_MODE {mode!r}")
     K = spec['func'](rho, d_max)
     return np.where((rho >= lo) & (rho <= hi), K, np.nan)
+
+
+# Trigger fracture toughness (Ron, 2026-11-09/10). A slab fracture at the
+# trigger starts at one point and propagates, so the slab's tensile capacity
+# there is also limited by its toughness: an edge crack of depth a in a slab of
+# toughness K_Ic fails at K_Ic / (F sqrt(pi a)). F = 1.122 is the
+# semi-infinite edge-crack factor and a = h/2 the crack depth; both are the
+# values the 2026-11-09 sweep evaluated (ski non-triggers 13/46 -> 0/46, Jan 18
+# triggers unchanged, robust to the K source). The finite-thickness factor
+# (edge_crack_strength's polynomial) would be ~2.8 at a/h = 0.5, i.e. stricter;
+# that was not evaluated.
+TOUGHNESS_EDGE_F = 1.122
+TOUGHNESS_A_FRAC = 0.5
+
+
+def toughness_limited_strength(sigma_t, K_Ic, h, a_frac=None, F=None):
+    """min(sigma_t, K_Ic / (F sqrt(pi a))), a = a_frac * h. A missing K_Ic or
+    h leaves sigma_t unchanged."""
+    a_frac = TOUGHNESS_A_FRAC if a_frac is None else a_frac
+    F = TOUGHNESS_EDGE_F if F is None else F
+    sigma_t = float(sigma_t)
+    if not (np.isfinite(K_Ic) and np.isfinite(h) and h > 0 and a_frac > 0):
+        return sigma_t
+    s_k = float(K_Ic) / (F * np.sqrt(np.pi * a_frac * float(h)))
+    return min(sigma_t, s_k) if np.isfinite(sigma_t) else sigma_t
 
 
 def characteristic_length(K_Ic, sigma_t):
@@ -664,7 +695,7 @@ def ligament_bound(rho_intact, dz_intact, st_intact, a, h, embedded,
         dmax_factor * np.asarray(d_max_intact, dtype=float)
     out['n_rho_clamped'] = k_ic_n_clamped(rho_intact, relation)
     K_lig = tensile_strength_mean(
-        k_ic(rho_intact, relation, d_max=d_max, clamp=True), dz_intact)
+        k_ic(rho_intact, relation, d_max=d_max), dz_intact)
     st_lig = tensile_strength_mean(st_intact, dz_intact)
     out['K_Ic_ligament'] = K_lig
     out['sigma_t_lig_intact'] = st_lig
