@@ -18,6 +18,11 @@ sigma_t_mean__jamieson1990, so the gate can fire here; the old ones lacked
 the column and the gate was a silent no-op. Trigger 37 is the rebuild's
 second operational trigger. GATE_OFF pins the gate's effect: with it off,
 1998 and 37 grow back to 1519 and 3850 m2.
+
+Re-pinned 2026-11-10 for USE_SLAB_CRACK_LINES on by default (Ron): 37 goes
+3657 -> 3498 m2 (IoU 0.2670 -> 0.2664) because a crack line from a tensile-gate
+failure cuts off part of its region; the other three start no line that cuts
+anything. CRACK_OFF pins the old value with the flag off.
 """
 import pytest
 
@@ -30,6 +35,11 @@ REFERENCE = {
     1772: (612.0, 0.05067835270873417),
     1998: (1385.0, 0.029587436796836643),
     4300: (1676.0, 0.10518130657424013),
+    37: (3498.0, 0.26644425400377847),
+}
+
+# Same triggers with USE_SLAB_CRACK_LINES off (the reference before 2026-11-10).
+CRACK_OFF = {
     37: (3657.0, 0.26698185726428897),
 }
 
@@ -74,3 +84,13 @@ def test_energy_switches_do_not_touch_legacy(legacy, monkeypatch):
     monkeypatch.setattr(ep, 'SIGMA_T_COLUMN', 'sigma_t_wl')
     monkeypatch.setattr(ep, 'ENERGY_R', 0.7)
     assert fx.polygon_for(1772).equals(legacy[1772])
+
+
+def test_slab_crack_lines_on_and_cut(legacy, monkeypatch):
+    assert rg.USE_SLAB_CRACK_LINES
+    monkeypatch.setattr(rg, 'USE_SLAB_CRACK_LINES', False)
+    for trig, (area, iou) in CRACK_OFF.items():
+        poly = fx.polygon_for(trig)
+        assert poly.area == pytest.approx(area, abs=1.0)
+        assert fx.iou(poly) == pytest.approx(iou, abs=1e-3)
+        assert poly.area > legacy[trig].area

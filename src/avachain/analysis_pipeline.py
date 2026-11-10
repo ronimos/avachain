@@ -874,8 +874,11 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
         _rg.USE_TRIGGER_TOUGHNESS = args.trigger_toughness
     if getattr(args, 'distance_caps', None) is not None:
         _rg.USE_DISTANCE_CAPS = args.distance_caps
+    if getattr(args, 'slab_crack_lines', None) is not None:
+        _rg.USE_SLAB_CRACK_LINES = args.slab_crack_lines
     print(f"  trigger toughness {'ON' if _rg.USE_TRIGGER_TOUGHNESS else 'OFF'}  "
-          f"distance caps {'ON' if _rg.USE_DISTANCE_CAPS else 'OFF'}")
+          f"distance caps {'ON' if _rg.USE_DISTANCE_CAPS else 'OFF'}  "
+          f"slab-crack lines {'ON' if _rg.USE_SLAB_CRACK_LINES else 'OFF'}")
     if _rg.USE_SLAB_TENSILE_GATE:
         print(f"  slab tensile-failure gate ON ({_rg.SLAB_TENSILE_SIGMA_COL})")
     if _rg.ARREST_MODE != 'legacy' or _rg.MASK_MODE != 'gate':
@@ -1829,6 +1832,11 @@ def build_parser():
                         help='BFS up/down/cross distance caps (default: [calibration] '
                              'distance_caps, else release_geometry.USE_DISTANCE_CAPS, on). '
                              'Overrides the TOML.')
+    parser.add_argument('--slab-crack-lines', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help='run slab cracks started by the tensile gate as crown/flank '
+                             'lines and cut off the area they sever (default: '
+                             'release_geometry.USE_SLAB_CRACK_LINES, on).')
     parser.add_argument('--force-explosive-triggers', action=argparse.BooleanOptionalAction,
                         default=None,
                         help='scenarios: also publish a forced-shot set at '

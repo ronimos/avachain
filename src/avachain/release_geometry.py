@@ -152,6 +152,28 @@ TOUGHNESS_K_COL = 'K_Ic_ligament'
 # the Λ/thickness factors are dead while USE_MELOCHE_ARREST is on).
 USE_DISTANCE_CAPS = True
 
+# Running slab cracks (Ron, 2026-11-10; both repos; CLI --no-slab-crack-lines).
+# A slab that the per-cluster tensile gate breaks (slab_tensile_failure) starts
+# a crack IN THE SLAB: a crown if the BFS reached it by an upslope step (runs
+# cross-slope), a flank if by a cross-slope step (runs along the fall line);
+# downslope steps start none (Stauchwall, compression). After the BFS each crack
+# runs as a line, one best-aligned neighbour per step (within
+# SLAB_CRACK_ALIGN_COS of the line), while the slab there is loaded: inside the
+# admitted region, with detached slab below a crown / beside a flank within
+# SLAB_CRACK_BAND_M, and the band-mean slope above FRICTION_DEG. The area the
+# lines sever from the trigger (4-connected pixels) is removed; the line
+# clusters stay (they are the boundary). Order-independent by construction.
+# No fracture toughness in the run test: with any static load of a detached
+# slab (full weight, or Stauchwall- and flank-supported, q*min(L,W)/2), K was
+# 10-75x the slab K_Ic on Jan 18 (0 of 2220 steps stopped), because a crack a
+# few metres long needs < ~0.5 kPa to arrest. Jan 18 (calibration 2026-11-10.2):
+# IoU 0.601 -> 0.610, area 7429 -> 6831 m2, AUC 0.801 -> 0.848, ski 0/46, same
+# five triggers; 419 m2 overshoot removed for 179 m2 of release; 9/10 no-event
+# days unchanged (the tensile gate never fires there).
+USE_SLAB_CRACK_LINES = True
+SLAB_CRACK_BAND_M    = 5.0     # m; half-width of the strip that sets L and W
+SLAB_CRACK_ALIGN_COS = 0.707   # a line step must lie within 45 deg of the line
+
 
 def cluster_tensile_support(cid, meloche_df, snap_features) -> float:
     """S_t of a TRIGGER cluster (NaN if an input is missing): r_c from the
@@ -286,6 +308,144 @@ MASK_MODE   = 'gate'
 # ============================================================================
 # END OF PROPAGATION MODEL PARAMETERS
 # ============================================================================
+
+
+def slab_crack_orientation(xy_from, xy_to, fall_xy, align_cos=None):
+    """'crown' for an upslope step from xy_from to xy_to, 'flank' for a
+    cross-slope step, None for downslope or a zero step. fall_xy is the unit
+    downslope vector in the map frame (east, north)."""
+    align_cos = SLAB_CRACK_ALIGN_COS if align_cos is None else align_cos
+    dx, dy = xy_to[0] - xy_from[0], xy_to[1] - xy_from[1]
+    d = float(np.hypot(dx, dy))
+    if d < 1e-9:
+        return None
+    along = (dx * fall_xy[0] + dy * fall_xy[1]) / d
+    if along < -align_cos:
+        return 'crown'
+    if abs(along) <= align_cos:
+        return 'flank'
+    return None
+
+
+def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
+                     fall_xy, props, slope_of, cluster_map, phi_deg=None,
+                     band_m=None, align_cos=None):
+    """Run slab cracks as lines through the admitted region; return
+    (clusters to remove, stats). See USE_SLAB_CRACK_LINES. Lines may cross;
+    each line stops on its own (outside the region, at the trigger, where the
+    slab is unloaded, or on a loop), so the union does not depend on which
+    crack is run first.
+
+    reached   : admitted clusters (the trigger included)
+    cracks    : {cid: 'crown' | 'flank'} where the tensile gate broke the slab
+    neighbours: {cid: [cid, ...]} BFS graph (made symmetric here)
+    centroids : {cid: (x, y)} map frame
+    fall_xy   : unit downslope vector (east, north)
+    props     : {cid: {'slab_density', 'slab_thickness'}} of admitted clusters
+    slope_of  : cid -> mean slope (deg)
+    The result does not depend on the order of reached, cracks or neighbours.
+    """
+    from scipy import ndimage
+    phi_deg = FRICTION_DEG if phi_deg is None else phi_deg
+    band = SLAB_CRACK_BAND_M if band_m is None else band_m
+    align_cos = SLAB_CRACK_ALIGN_COS if align_cos is None else align_cos
+    reached = set(reached)
+    fx, fy = fall_xy
+    tan_phi = np.tan(np.radians(phi_deg))
+    adj = {}
+    for c, nb in neighbours.items():
+        for u in nb:
+            adj.setdefault(c, set()).add(u)
+            adj.setdefault(u, set()).add(c)
+
+    def axes(xy0, xy1):
+        dx, dy = xy1[0] - xy0[0], xy1[1] - xy0[1]
+        return dx * fx + dy * fy, -dx * fy + dy * fx      # along (+down), cross
+
+    def loaded(n, orient):
+        """Net downslope load on the slab at n from detached slab nearby."""
+        h_n = props.get(n, {}).get('slab_thickness', np.nan)
+        if not (np.isfinite(h_n) and h_n > 0
+                and np.isfinite(props.get(n, {}).get('slab_density', np.nan))):
+            return False
+        xy = centroids[n]
+        below, col, row, slopes = [], [], [], []
+        for c in reached:
+            al, cr = axes(xy, centroids[c])
+            inc = False
+            if abs(cr) <= band:
+                col.append(al); inc = True
+                if al > 0:
+                    below.append(al)
+            if abs(al) <= band:
+                row.append(cr); inc = True
+            if inc:
+                p = props.get(c, {})
+                if (np.isfinite(p.get('slab_density', np.nan))
+                        and np.isfinite(p.get('slab_thickness', np.nan))):
+                    slopes.append(slope_of(c))
+        if not slopes:
+            return False
+        L = (max(below) if below else 0.0) if orient == 'crown' else (max(col) - min(col))
+        W = max(row) - min(row)
+        if min(L, W) <= 0:
+            return False
+        th = np.radians(np.mean(slopes))
+        return np.sin(th) - tan_phi * np.cos(th) > 0
+
+    def next_on_line(c, orient, sgn):
+        best = None
+        for n in adj.get(c, ()):
+            if n not in centroids:
+                continue
+            al, cr = axes(centroids[c], centroids[n])
+            d = float(np.hypot(al, cr))
+            if d < 1e-9:
+                continue
+            cosv = sgn * (cr if orient == 'crown' else al) / d
+            if cosv < align_cos:
+                continue
+            key = (-cosv, d, n)
+            if best is None or key < best[0]:
+                best = (key, n)
+        return None if best is None else best[1]
+
+    cut = set()
+    stats = {'cracks_crown': 0, 'cracks_flank': 0, 'line_crown': 0, 'line_flank': 0}
+    for c0 in sorted(cracks):
+        orient = cracks[c0]
+        if c0 not in centroids:
+            continue
+        stats['cracks_' + orient] += 1
+        for sgn in (1, -1):
+            c, seen = c0, {c0}
+            while True:
+                n = next_on_line(c, orient, sgn)
+                if (n is None or n in seen or n not in reached
+                        or n == trigger_cluster_id or not loaded(n, orient)):
+                    break
+                seen.add(n)
+                if n not in cut:
+                    cut.add(n); stats['line_' + orient] += 1
+                c = n
+
+    def trigger_component(members):
+        lab, _ = ndimage.label(np.isin(cluster_map, list(members)))
+        counts = np.bincount(lab[cluster_map == trigger_cluster_id].ravel())
+        counts[0] = 0
+        if not counts.sum():
+            return set()
+        ids = np.unique(cluster_map[lab == int(np.argmax(counts))])
+        return {int(x) for x in ids if x > 0} & set(members)
+
+    severed = set()
+    if cut:
+        before = trigger_component(reached)
+        after = trigger_component(reached - cut)
+        severed = before - after - cut
+    stats['line_clusters'] = len(cut)
+    stats['severed'] = len(severed)
+    return severed, stats
 
 
 def mode3_speed_cap_ratio(trigger_cluster_id: int,
@@ -1341,6 +1501,10 @@ def propagate_release(
     failed         = {trigger_cluster_id}
     cluster_props  = {trigger_cluster_id: trigger_props}
     visited        = {trigger_cluster_id}
+    # Slab cracks started by the tensile gate: {cid: 'crown' | 'flank'}
+    # (USE_SLAB_CRACK_LINES; run as lines after the BFS).
+    slab_cracks    = {}
+    fall_xy        = (np.sin(np.radians(t_aspect)), np.cos(np.radians(t_aspect)))
 
     # Ring-by-ring BFS for wave_callback support
     current_ring = [trigger_cluster_id]
@@ -1396,6 +1560,13 @@ def propagate_release(
                     admitted_along = True
             else:
                 ring_arrested.append({'cid': cid, 'reason': reason})
+                if reason == 'slab_tensile_failure':
+                    p_xy = centroids.get(parent_props.get('cid'))
+                    c_xy = centroids.get(cid)
+                    if p_xy is not None and c_xy is not None:
+                        orient = slab_crack_orientation(p_xy, c_xy, fall_xy)
+                        if orient is not None:
+                            slab_cracks.setdefault(cid, orient)
 
         # Deferred flank candidates the budget has now caught up with. Arrest
         # is evaluated here, on arrival, not when the cluster was deferred.
@@ -1452,6 +1623,21 @@ def propagate_release(
               f"{len(current_ring)} clusters still propagating — this polygon "
               f"is bounded by the cap, not by arrest criteria. Raise it to let "
               f"the physics terminate it.")
+
+    # Running slab cracks: lines from the tensile-gate failures; the area they
+    # sever from the trigger is removed (USE_SLAB_CRACK_LINES).
+    if USE_SLAB_CRACK_LINES and slab_cracks:
+        slope_cache = {}
+        def _slope_cached(c):
+            if c not in slope_cache:
+                slope_cache[c] = _mean_slope(c)
+            return slope_cache[c]
+        n_before = len(failed)
+        severed, sc_stats = slab_crack_lines(
+            failed, slab_cracks, trigger_cluster_id, neighbours, centroids,
+            fall_xy, cluster_props, _slope_cached, cluster_map)
+        failed -= severed
+        print(f"    slab-crack lines: {n_before} -> {len(failed)} clusters {sc_stats}")
 
     # Debug direction breakdown
     dir_counts = {'upslope': 0, 'downslope': 0, 'lateral': 0, 'other': 0}
