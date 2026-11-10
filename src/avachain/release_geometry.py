@@ -37,11 +37,63 @@ from pyproj import Transformer
 
 import arrest_indices as _ai
 
-# Default physical parameters
+# ============================================================================
+# PROPAGATION MODEL PARAMETERS
+# Every parameter of the release BFS (propagate_release / _qualifies) is
+# defined between this banner and "END OF PROPAGATION MODEL PARAMETERS" below
+# (Ron, 2026-11-10: no literals inside the functions). They are read at call
+# time, so a slope's [calibration] (calibration.py) or a CLI flag can set them.
+# Defined elsewhere, because analyze shares them:
+#   arrest_indices.C_FIT (Eq. 20 C), MODE2/3_SPEED_RATIO, TOUGHNESS_EDGE_F,
+#   TOUGHNESS_A_FRAC, K_IC_RANGE_MODE; snowpack_analysis.FACET_STRENGTH_FACTOR.
+# The standalone keeps the same values in its config.py.
+# ============================================================================
+
+# ---- Terrain and polygon -----------------------------------------------------
 STAUCHWALL_DEG   = 29.0   # slope threshold for downslope arrest (degrees); Ron 2026-10-27, was 28.0
 FRICTION_DEG     = 27.0   # snow friction angle (degrees), Meloche Table 1
 GAUME_ASPECT_CAP = 2.5    # max width/A_ca ratio (prevents runaway cross-slope)
 MIN_POLYGON_AREA = 200.0  # m² — discard degenerate polygons smaller than this
+
+# ---- Per-cluster arrest floors (_qualifies) ---------------------------------
+# Absolute gravitational-driving-stress floor for crack propagation (Pa).
+# tau_g is the driving LOAD on the weak layer; below this value the WL
+# cannot sustain dynamic fracture, regardless of slope or trigger. Unlike a
+# relative floor, an absolute one can represent a stable slope: if no
+# connected terrain exceeds it, the crack does not propagate.
+# Jan 18 reference: ~540 Pa inside release, ~230 Pa adjacent (non-released).
+# A floor in 230-540 reproduces that boundary on tau_g alone; ~350 is a
+# lower physical bound. Was a function-local literal in propagate_release
+# until 2026-11-10; per slope: [calibration] tau_g_floor.
+TAU_G_ABS_FLOOR        = 350.0  # Pa
+MIN_PROPAGATION_SLAB   = 0.50   # m — slab too thin to sustain crack propagation
+MIN_PROPAGATION_LAMBDA = 0.1    # m — slab too weak/compliant to transmit fracture
+                                # Λ = √(E×h³ / (12×G_wl×D_wl)): integrates
+                                # slab thickness, stiffness, and WL properties
+
+# ---- Λ / thickness gradient arrest (dead while USE_MELOCHE_ARREST) ----------
+# DIRECTIONAL relative change. Softening/thinning (a DROP in Lambda or slab
+# thickness) is the physical arrest mechanism and uses a tight threshold;
+# stiffening/thickening (a RISE) favors continued propagation and uses a
+# looser threshold, so the crack is not stopped prematurely by running into
+# stronger/thicker snow.
+#   arrest if  (Λ_nbr - Λ_cur)/Λ_cur  < -LAMBDA_DROP_FACTOR    (softening)
+#   arrest if  (Λ_nbr - Λ_cur)/Λ_cur  > +LAMBDA_RISE_FACTOR    (stiffening)
+#   (same pattern for slab thickness h)
+# size_factor multiplies thresholds → larger size_factor = more tolerant = larger release.
+LAMBDA_DROP_FACTOR     = 0.20   # tight: softening arrests readily
+LAMBDA_RISE_FACTOR     = 0.30   # loose: stiffening rarely arrests
+THICKNESS_DROP_FACTOR  = 0.20   # tight: thinning arrests readily
+THICKNESS_RISE_FACTOR  = 0.30   # loose: thickening rarely arrests
+
+# ---- Distance caps (used only while USE_DISTANCE_CAPS) ----------------------
+# d_up = max(A_ca, D_UP_MIN_M) (D_CAP_DEFAULT_M without an A_ca),
+# d_down = max(Stauchwall distance, D_DOWN_MIN_M), d_lat = max(Gaume width,
+# D_LAT_MIN_M); all but the floor on d_lat scale with size_factor.
+D_UP_MIN_M       = 20.0   # m
+D_DOWN_MIN_M     = 20.0   # m
+D_LAT_MIN_M      = 15.0   # m
+D_CAP_DEFAULT_M  = 50.0   # m; A_ca stand-in when the trigger has none
 
 # Meloche (2025) directional crack-arrest criterion. When True, _qualifies
 # replaces the heuristic Lambda/thickness gradient gates with the field-
@@ -220,6 +272,10 @@ ARREST_MODE = 'legacy'
 # clipped to it. 'diagnostic': the KML is used only in reporting
 # (frac_outside_mask); 17% of the observed Jan 18 crown lies outside it.
 MASK_MODE   = 'gate'
+
+# ============================================================================
+# END OF PROPAGATION MODEL PARAMETERS
+# ============================================================================
 
 
 def mode3_speed_cap_ratio(trigger_cluster_id: int,
@@ -949,15 +1005,7 @@ def propagate_release(
     # Pi1 retained for reporting only
     threshold = pi1_trigger  # informational
 
-    # Absolute gravitational-driving-stress floor for crack propagation (Pa).
-    # tau_g is the driving LOAD on the weak layer; below this value the WL
-    # cannot sustain dynamic fracture, regardless of slope or trigger. Unlike a
-    # relative floor, an absolute one can represent a stable slope: if no
-    # connected terrain exceeds it, the crack does not propagate.
-    # Jan 18 reference: ~540 Pa inside release, ~230 Pa adjacent (non-released).
-    # A floor in 230-540 reproduces that boundary on tau_g alone; ~350 is a
-    # lower physical bound. Sweep on the re-run.
-    TAU_G_ABS_FLOOR = 350.0   # Pa
+    # TAU_G_ABS_FLOOR and the other BFS parameters: PROPAGATION MODEL PARAMETERS, module top.
 
     print(f"    Pi1_trigger={pi1_trigger:.3f}  "
           f"tau_g_floor={TAU_G_ABS_FLOOR:.0f}Pa  "
@@ -989,7 +1037,7 @@ def propagate_release(
     t_aspect = float(aspect_grid[t_row, t_col])
 
     # Upslope distance cap: A_ca (Meloche) — no upslope limit for downslope/lateral
-    d_up = (max(A_ca, 20.0) if A_ca else 50.0) * size_factor
+    d_up = (max(A_ca, D_UP_MIN_M) if A_ca else D_CAP_DEFAULT_M) * size_factor
     caps = USE_DISTANCE_CAPS
 
     # Stauchwall distance (downslope hard cap)
@@ -998,7 +1046,7 @@ def propagate_release(
         threshold_deg=stauchwall_deg)
     sw_x, sw_y = pixel_to_utm(sw_row, sw_col, transform)
     d_down = max(float(np.sqrt((sw_x - t_x)**2 + (sw_y - t_y)**2)),
-                 20.0) * size_factor
+                 D_DOWN_MIN_M) * size_factor
 
     print(f"    distance caps: up={d_up:.0f}m  down={d_down:.0f}m")
 
@@ -1032,7 +1080,7 @@ def propagate_release(
               f"WL strength criterion disabled")
 
     # Lateral distance cap from Gaume cross-slope width estimate
-    A_ca_base   = A_ca if A_ca else 50.0
+    A_ca_base   = A_ca if A_ca else D_CAP_DEFAULT_M
     d_lat_gaume = estimate_cross_slope_width(
         trigger_cluster_id, A_ca_base,
         meloche_df, cluster_map, transform,
@@ -1048,13 +1096,13 @@ def propagate_release(
     if mode3_ratio is not None:
         d_lat_speed = A_ca_base * mode3_ratio * size_factor
         d_lat = min(d_lat, d_lat_speed)
-        print(f"    d_lat={max(d_lat, 15.0):.0f}m  "
+        print(f"    d_lat={max(d_lat, D_LAT_MIN_M):.0f}m  "
               f"(gaume={d_lat_gaume:.0f}m, mode3_speed_cap={d_lat_speed:.0f}m "
               f"@ ratio {mode3_ratio:.3f})")
     else:
-        print(f"    d_lat={max(d_lat, 15.0):.0f}m  (gaume only, "
+        print(f"    d_lat={max(d_lat, D_LAT_MIN_M):.0f}m  (gaume only, "
               f"mode III speed cap off)")
-    d_lat = max(d_lat, 15.0)
+    d_lat = max(d_lat, D_LAT_MIN_M)
     if not caps:
         d_up = d_down = d_lat = np.inf
         print("    distance caps OFF (USE_DISTANCE_CAPS)")
@@ -1262,25 +1310,8 @@ def propagate_release(
 
         return True, 'propagated'
 
-    # Gradient arrest thresholds — DIRECTIONAL relative change.
-    # Softening/thinning (a DROP in Lambda or slab thickness) is the physical
-    # arrest mechanism and uses a tight threshold; stiffening/thickening (a RISE)
-    # favors continued propagation and uses a looser threshold, so the crack is
-    # not stopped prematurely by running into stronger/thicker snow.
-    #   arrest if  (Λ_nbr - Λ_cur)/Λ_cur  < -LAMBDA_DROP_FACTOR    (softening)
-    #   arrest if  (Λ_nbr - Λ_cur)/Λ_cur  > +LAMBDA_RISE_FACTOR    (stiffening)
-    #   (same pattern for slab thickness h)
-    # size_factor multiplies thresholds → larger size_factor = more tolerant = larger release.
-    LAMBDA_DROP_FACTOR     = 0.20   # tight: softening arrests readily
-    LAMBDA_RISE_FACTOR     = 0.30   # loose: stiffening rarely arrests
-    THICKNESS_DROP_FACTOR  = 0.20   # tight: thinning arrests readily
-    THICKNESS_RISE_FACTOR  = 0.30   # loose: thickening rarely arrests
-    # TAU_G_ABS_FLOOR (absolute driving-stress floor, Pa) is defined earlier,
-    # before the diagnostic print, and applied directly in _qualifies.
-    MIN_PROPAGATION_SLAB  = 0.50   # m — slab too thin to sustain crack propagation
-    MIN_PROPAGATION_LAMBDA = 0.1   # m — slab too weak/compliant to transmit fracture
-                                   # Λ = √(E×h³ / (12×G_wl×D_wl)): integrates
-                                   # slab thickness, stiffness, and WL properties
+    # Arrest thresholds (Λ/thickness factors, MIN_PROPAGATION_*, TAU_G_ABS_FLOOR)
+    # are module-level: PROPAGATION MODEL PARAMETERS at the top.
 
     # (tau_g arrest is now an absolute floor, TAU_G_ABS_FLOOR, applied directly
     # in _qualifies — no per-trigger or per-region reference value to compute.)

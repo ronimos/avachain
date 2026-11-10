@@ -81,3 +81,22 @@ def test_calibration_sets_facet_a_and_caps(monkeypatch):
 def test_calibration_rejects_bad_values(bad):
     with pytest.raises(ValueError):
         calibration.apply(_Cfg(bad), quiet=True)
+
+
+def test_calibration_sets_tau_g_floor(monkeypatch):
+    # The floor was a function-local literal until 2026-11-10; it is now a
+    # module parameter the BFS reads at call time, so a slope can set it.
+    monkeypatch.setattr(rg, "TAU_G_ABS_FLOOR", rg.TAU_G_ABS_FLOOR)
+    assert rg.TAU_G_ABS_FLOOR == 350.0
+    got = calibration.apply(_Cfg({"tau_g_floor": 420.0}), quiet=True)
+    assert got == {"tau_g_floor": 420.0} and rg.TAU_G_ABS_FLOOR == 420.0
+    with pytest.raises(ValueError):
+        calibration.apply(_Cfg({"tau_g_floor": -1.0}), quiet=True)
+
+
+def test_no_bfs_literals_left_in_propagate_release():
+    import inspect
+    src = inspect.getsource(rg.propagate_release)
+    for lit in ("350.0", "TAU_G_ABS_FLOOR =", "MIN_PROPAGATION_SLAB  =",
+                "LAMBDA_DROP_FACTOR     =", "20.0)", "15.0)", "else 50.0"):
+        assert lit not in src, lit

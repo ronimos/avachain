@@ -11,6 +11,7 @@ without [calibration] runs exactly as before.
     size_scale  = 1.0                   # multiplies every [scenarios] size factor
     facet_a     = 0.5                   # facet strength knockdown (snowpack_analysis)
     distance_caps = true                # BFS distance caps (release_geometry)
+    tau_g_floor = 350.0                 # Pa, BFS driving-stress floor (release_geometry)
     # provenance (free-form, not read by the model):
     events = ["2026-01-18"]; no_event_dates = [...]; objective = "..."; fitted = "..."; commit = "..."
 
@@ -29,11 +30,14 @@ Knobs, and why only these two:
               a fitted value: false opens the BFS up/down/cross caps. With the
               caps off, size_scale and the size factors scale nothing in the
               BFS.
+  tau_g_floor release_geometry.TAU_G_ABS_FLOOR, the per-cluster tau_g floor
+              of the BFS (module default 350 Pa). Scenarios only; analyze is
+              unaffected.
 The Λ factors are not knobs: with USE_MELOCHE_ARREST they never run.
 """
 from __future__ import annotations
 
-KNOBS = ("c_fit", "size_scale", "facet_a", "distance_caps")
+KNOBS = ("c_fit", "size_scale", "facet_a", "distance_caps", "tau_g_floor")
 PROVENANCE = ("version", "events", "no_event_dates", "objective", "fitted",
               "commit", "note", "sweep")
 
@@ -49,6 +53,8 @@ def _check(cal: dict) -> None:
         raise ValueError("[calibration] size_scale must be > 0")
     if "facet_a" in cal and not 0 < float(cal["facet_a"]) <= 1:
         raise ValueError("[calibration] facet_a must be in (0, 1]")
+    if "tau_g_floor" in cal and not float(cal["tau_g_floor"]) >= 0:
+        raise ValueError("[calibration] tau_g_floor must be >= 0")
     if "distance_caps" in cal and not isinstance(cal["distance_caps"], bool):
         raise ValueError("[calibration] distance_caps must be true or false")
 
@@ -73,6 +79,10 @@ def apply(cfg, quiet: bool = False) -> dict:
         import release_geometry as _rg
         _rg.USE_DISTANCE_CAPS = bool(cal["distance_caps"])
         applied["distance_caps"] = _rg.USE_DISTANCE_CAPS
+    if "tau_g_floor" in cal:
+        import release_geometry as _rg
+        _rg.TAU_G_ABS_FLOOR = float(cal["tau_g_floor"])
+        applied["tau_g_floor"] = _rg.TAU_G_ABS_FLOOR
     if applied and not quiet:
         print(f"  calibration {cal.get('version', '(no version)')}: "
               + ", ".join(f"{k}={v:g}" if not isinstance(v, bool) else f"{k}={v}"
