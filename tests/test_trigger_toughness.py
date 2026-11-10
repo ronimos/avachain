@@ -100,3 +100,12 @@ def test_no_bfs_literals_left_in_propagate_release():
     for lit in ("350.0", "TAU_G_ABS_FLOOR =", "MIN_PROPAGATION_SLAB  =",
                 "LAMBDA_DROP_FACTOR     =", "20.0)", "15.0)", "else 50.0"):
         assert lit not in src, lit
+
+
+def test_tau_ratio_floor_default_off_and_calibratable(monkeypatch):
+    monkeypatch.setattr(rg, "TAU_RATIO_FLOOR", rg.TAU_RATIO_FLOOR)
+    assert rg.TAU_RATIO_FLOOR == 0.0          # off: behaviour unchanged
+    got = calibration.apply(_Cfg({"tau_ratio_floor": 0.65}), quiet=True)
+    assert got == {"tau_ratio_floor": 0.65} and rg.TAU_RATIO_FLOOR == 0.65
+    with pytest.raises(ValueError):
+        calibration.apply(_Cfg({"tau_ratio_floor": -0.1}), quiet=True)

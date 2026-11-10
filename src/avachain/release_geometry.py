@@ -66,6 +66,14 @@ MIN_POLYGON_AREA = 200.0  # m² — discard degenerate polygons smaller than thi
 # lower physical bound. Was a function-local literal in propagate_release
 # until 2026-11-10; per slope: [calibration] tau_g_floor.
 TAU_G_ABS_FLOOR        = 350.0  # Pa
+# Load-to-strength floor (Ron, 2026-11-10; both repos; default 0 = off): arrest
+# a cluster whose tau_g / tau_p (wl_shear_strength) is below it. Dimensionless,
+# so unlike TAU_G_ABS_FLOOR it does not encode one snowpack's slab density. On
+# Jan 18 (calibrated features) it separates release from the skied slope like
+# tau_g does (AUC 0.97; medians 0.92 release, 0.54 ski), because SNOWPACK's
+# tau_p is a function of WL density alone (r = 0.99 with rho_wl^2) and varies
+# little. Per slope: [calibration] tau_ratio_floor.
+TAU_RATIO_FLOOR        = 0.0
 MIN_PROPAGATION_SLAB   = 0.50   # m — slab too thin to sustain crack propagation
 MIN_PROPAGATION_LAMBDA = 0.1    # m — slab too weak/compliant to transmit fracture
                                 # Λ = √(E×h³ / (12×G_wl×D_wl)): integrates
@@ -1008,7 +1016,7 @@ def propagate_release(
     # TAU_G_ABS_FLOOR and the other BFS parameters: PROPAGATION MODEL PARAMETERS, module top.
 
     print(f"    Pi1_trigger={pi1_trigger:.3f}  "
-          f"tau_g_floor={TAU_G_ABS_FLOOR:.0f}Pa  "
+          f"tau_g_floor={TAU_G_ABS_FLOOR:.0f}Pa  tau_ratio_floor={TAU_RATIO_FLOOR:g}  "
           f"size_factor={size_factor:.2f}")
 
     # --- Build per-cluster lookup: Pi1, mean slope ---
@@ -1215,6 +1223,11 @@ def propagate_release(
         tau_g_nbr = nbr_props.get('tau_g', np.nan)
         if not np.isnan(tau_g_nbr) and tau_g_nbr < TAU_G_ABS_FLOOR:
             return False, 'tau_g_below_floor'
+        if TAU_RATIO_FLOOR > 0:
+            tau_p_nbr = nbr_props.get('wl_shear_strength', np.nan)
+            if (np.isfinite(tau_g_nbr) and np.isfinite(tau_p_nbr) and tau_p_nbr > 0
+                    and tau_g_nbr / tau_p_nbr < TAU_RATIO_FLOOR):
+                return False, 'tau_ratio_below_floor'
 
         # Minimum slab thickness
         h_nbr = nbr_props.get('slab_thickness', np.nan)
