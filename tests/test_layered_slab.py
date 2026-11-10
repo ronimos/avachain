@@ -288,13 +288,23 @@ class TestKIcRelations:
         assert np.isfinite(ai.k_ic(100.0, 'kirchner2000', clamp=False))
         assert np.isfinite(ai.k_ic(540.0, 'kirchner2000', clamp=False))
 
-    def test_clamping_is_the_default_and_pins_to_the_range(self):
+    def test_clamp_true_pins_to_the_range(self):
         lo, hi = ai.k_ic_valid_range('kirchner2000')
         assert (lo, hi) == (100.0, 540.0)
-        assert ai.k_ic(50.0, 'kirchner2000') == pytest.approx(
+        assert ai.k_ic(50.0, 'kirchner2000', clamp=True) == pytest.approx(
             ai.k_ic(lo, 'kirchner2000'))
-        assert ai.k_ic(900.0, 'kirchner2000') == pytest.approx(
+        assert ai.k_ic(900.0, 'kirchner2000', clamp=True) == pytest.approx(
             ai.k_ic(hi, 'kirchner2000'))
+
+    def test_extrapolation_is_the_default(self):
+        # Ron 2026-11-10: the fitted density range is a guideline, not a clamp.
+        assert ai.K_IC_RANGE_MODE == 'extrapolate'
+        for rho in (50.0, 900.0):
+            assert ai.k_ic(rho, 'kirchner2000') == pytest.approx(
+                7.84e3 * (rho / 917.0) ** 2.3)
+        # Schweizer 2004, dense slab above its 300 kg/m3 range: no clamp.
+        assert ai.k_ic(450.0, 'schweizer2004', d_max=1e-3) > \
+            ai.k_ic(450.0, 'schweizer2004', d_max=1e-3, clamp=True)
 
     def test_clamped_count(self):
         assert ai.k_ic_n_clamped([50.0, 300.0, 600.0], 'kirchner2000') == 2

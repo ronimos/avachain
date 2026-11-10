@@ -70,12 +70,34 @@ NU                 = 0.3   # slab Poisson's ratio
 USE_SLAB_TENSILE_GATE = True
 SLAB_TENSILE_SIGMA_COL = 'sigma_t_mean__jamieson1990'
 
+# Trigger fracture toughness (Ron, 2026-11-10; both repos; CLI
+# --no-trigger-toughness). At the TRIGGER only, sigma_t in S_t is capped by the
+# slab's edge-crack strength K_Ic / (1.122 sqrt(pi h/2))
+# (arrest_indices.toughness_limited_strength), K_Ic the ligament column
+# (Schweizer 2004, extrapolated past its density range). The BFS per-cluster
+# tensile gate is unchanged. On 2026-11-09 it took the Jan 18 ski-track
+# non-triggers from 13/46 releasing to 0/46 and left the five Jan 18 triggers
+# and IoU unchanged; it does not cut the no-event false alarms. A features CSV
+# without TOUGHNESS_K_COL leaves the plain S_t.
+USE_TRIGGER_TOUGHNESS = True
+TOUGHNESS_K_COL = 'K_Ic_ligament'
+
+# BFS distance caps (up: A_ca, down: Stauchwall distance, cross: Gaume width).
+# Default on, both repos. Off (a slope's [calibration] distance_caps = false,
+# or CLI --no-distance-caps) leaves the release bounded by the per-cluster
+# gates, the start zone and MAX_BFS_CLUSTERS. Off, the scenario size factors
+# scale nothing in the BFS (they scale the caps and the rectangle fallback;
+# the Λ/thickness factors are dead while USE_MELOCHE_ARREST is on).
+USE_DISTANCE_CAPS = True
+
 
 def cluster_tensile_support(cid, meloche_df, snap_features) -> float:
-    """S_t of one cluster (NaN if an input is missing): r_c from the Meloche
-    CSV, slab density / thickness / sigma_t from the snapshot features, as the
-    BFS gate reads them. The same gate applies to the trigger itself: a slab
-    that breaks before its own crack reaches r_c cannot start a release."""
+    """S_t of a TRIGGER cluster (NaN if an input is missing): r_c from the
+    Meloche CSV, slab density / thickness / sigma_t from the snapshot features.
+    A slab that breaks before its own crack reaches r_c cannot start a
+    release. Every caller is trigger-side (trigger gate, candidate filter,
+    reporting); with USE_TRIGGER_TOUGHNESS sigma_t is toughness-limited. The
+    BFS per-cluster gate calls arrest_indices.slab_tensile_support directly."""
     def _get(df, col):
         if df is None or df.empty or cid not in df.index or col not in df.columns:
             return np.nan
@@ -85,10 +107,13 @@ def cluster_tensile_support(cid, meloche_df, snap_features) -> float:
             return float(v)
         except (TypeError, ValueError):
             return np.nan
+    sigma_t = _get(snap_features, SLAB_TENSILE_SIGMA_COL)
+    h = _get(snap_features, 'slab_thickness')
+    if USE_TRIGGER_TOUGHNESS:
+        sigma_t = _ai.toughness_limited_strength(
+            sigma_t, _get(snap_features, TOUGHNESS_K_COL), h)
     return float(_ai.slab_tensile_support(
-        _get(snap_features, SLAB_TENSILE_SIGMA_COL),
-        _get(snap_features, 'slab_density'),
-        _get(snap_features, 'slab_thickness'),
+        sigma_t, _get(snap_features, 'slab_density'), h,
         _get(meloche_df, 'rc_wl')))
 
 THETA_MIN = 1e-6   # Pa/m; θ below this is treated as no usable gradient
@@ -965,6 +990,7 @@ def propagate_release(
 
     # Upslope distance cap: A_ca (Meloche) — no upslope limit for downslope/lateral
     d_up = (max(A_ca, 20.0) if A_ca else 50.0) * size_factor
+    caps = USE_DISTANCE_CAPS
 
     # Stauchwall distance (downslope hard cap)
     sw_row, sw_col = find_stauchwall(
@@ -1029,6 +1055,9 @@ def propagate_release(
         print(f"    d_lat={max(d_lat, 15.0):.0f}m  (gaume only, "
               f"mode III speed cap off)")
     d_lat = max(d_lat, 15.0)
+    if not caps:
+        d_up = d_down = d_lat = np.inf
+        print("    distance caps OFF (USE_DISTANCE_CAPS)")
 
     tau_p_str = f"{tau_p_trigger:.0f} Pa" if tau_p_trigger else "N/A"
 

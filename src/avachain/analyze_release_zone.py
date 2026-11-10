@@ -664,6 +664,9 @@ def main():
             cfg = ProjectConfig.from_toml(str(toml_path))
         else:
             cfg = ProjectConfig(project_dir=Path(args.project_dir))
+    # [calibration] c_fit moves A_ca_brittle, which is computed here.
+    import calibration
+    calibration.apply(cfg)
 
     with rasterio.open(str(cfg.resampled_dir / "dem_1m.tif")) as src:
         dem       = src.read(1).astype(np.float32)

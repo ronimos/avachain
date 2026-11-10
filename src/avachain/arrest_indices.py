@@ -155,14 +155,20 @@ def slab_tensile_support(sigma_t, rho, h, r_c):
 C_FIT = 0.045  # fitted from Meloche et al. 2025 Fig. 8 (two runs); see docs/arrest_indices.md
 
 
-def arrest_length(tau_g, theta, Lam, sigma_t, delta=1.0, L_t=None, C=C_FIT):
+def arrest_length(tau_g, theta, Lam, sigma_t, delta=1.0, L_t=None, C=None):
     """JGR Eq. 20: A_ca / L_t = C * X * sqrt(sigma_t / tau_g),
     X = tau_g / (theta Lam sqrt(1 + delta)). C = 0.045 is a two-run fit (Fig. 8).
+
+    C=None reads C_FIT at call time, not at import: a slope's [calibration]
+    c_fit (calibration.py) sets the module value, and a default argument
+    would have frozen 0.045 (2026-11-08). Same result at the default.
 
     The only implementation of Eq. 20 in the package — call this rather than
     re-deriving the scaling, so the C prefactor cannot be dropped.
 
     Returns (A_ca or A_ca/L_t, X)."""
+    if C is None:
+        C = C_FIT
     X = tau_g / (theta * Lam * np.sqrt(1.0 + delta))
     rel = C * X * np.sqrt(sigma_t / tau_g)
     return (rel * L_t if L_t is not None else rel), X
@@ -410,7 +416,7 @@ DMAX_FACTOR = 1.0   # d_max = DMAX_FACTOR * grain size (both in m)
 # regression, so the paper's figure is now the default and the rounding is kept
 # only as a named constant for reproducing older output. Note this cannot move
 # any release polygon: k_ic() reaches only the ligament columns, which the BFS
-# never reads.
+# never reads. (Since 2026-11-10 the trigger toughness gate reads them.)
 SCH2004_A4        = 350.0   # Pa m
 SCH2004_EXP_PAPER = 1.9     # as printed in Eq. 8 (r = 0.98)
 SCH2004_EXP_ROUND = 2.0     # the abstract's "about 2"; default before 2026-10-09
@@ -500,23 +506,68 @@ def k_ic_n_clamped(rho, relation=K_IC_DEFAULT):
     return int(np.sum(np.isfinite(rho) & ((rho < lo) | (rho > hi))))
 
 
-def k_ic(rho, relation=K_IC_DEFAULT, d_max=None, clamp=True):
+# The density ranges in K_IC_RELATIONS are a GUIDELINE, not a limit (Ron,
+# 2026-11-09). They are what each relation was fitted over; Schweizer et al.
+# (2004) is 80-300 kg/m^3 from Swiss beam tests. Little Professor is a Colorado
+# high-alpine, wind-affected snowpack. On Jan 18 2026, 82% of the start-zone
+# clusters (avachain) have a mean slab density above 300, and every one has at
+# least one intact slab layer outside 80-300. Clamping evaluated those layers
+# at the range edge and understated K_Ic of dense slabs: the median ligament
+# K_Ic is 1318 clamped against 1650 Pa m^0.5 extrapolated (+25%). Kirchner et
+# al. (2000), fitted to 540, has 3% of clusters out of range. So since
+# 2026-11-10 (Ron) the power law is EXTRAPOLATED past its range by default
+# (K_IC_RANGE_MODE); n_rho_clamped now counts the extrapolated layers. The
+# trigger toughness gate (release_geometry.USE_TRIGGER_TOUGHNESS) reads the
+# ligament K_Ic, so this moves which triggers can start a release.
+K_IC_RANGE_MODE = 'extrapolate'   # 'extrapolate' | 'clamp' | 'nan'
+
+
+def k_ic(rho, relation=K_IC_DEFAULT, d_max=None, clamp=None):
     """K_Ic (Pa m^0.5) from a named density relation.
 
-    clamp=True (default) clamps rho into the relation's fitted range *for this
-    evaluation only*, rather than returning NaN, so that a single out-of-range
-    layer cannot poison a thickness-weighted ligament. Density is not modified
-    anywhere else. clamp=False restores the NaN-outside-range behaviour.
-    Use k_ic_n_clamped() to report how many layers were clamped.
+    Outside the relation's fitted density range: clamp=None (default) follows
+    K_IC_RANGE_MODE, read at call time ('extrapolate' since 2026-11-10);
+    clamp=True evaluates at the range edge (the default before 2026-11-10);
+    clamp=False returns NaN. Density is not modified anywhere. Use
+    k_ic_n_clamped() to count the out-of-range layers.
     """
     spec = _k_ic_spec(relation)
     rho = np.asarray(rho, dtype=float)
     lo, hi = spec['rho']
-    if clamp:
-        rho_eval = np.clip(rho, lo, hi)
-        return spec['func'](rho_eval, d_max)
+    mode = K_IC_RANGE_MODE if clamp is None else ('clamp' if clamp else 'nan')
+    if mode == 'extrapolate':
+        return spec['func'](rho, d_max)
+    if mode == 'clamp':
+        return spec['func'](np.clip(rho, lo, hi), d_max)
+    if mode != 'nan':
+        raise ValueError(f"unknown K_IC_RANGE_MODE {mode!r}")
     K = spec['func'](rho, d_max)
     return np.where((rho >= lo) & (rho <= hi), K, np.nan)
+
+
+# Trigger fracture toughness (Ron, 2026-11-09/10). A slab fracture at the
+# trigger starts at one point and propagates, so the slab's tensile capacity
+# there is also limited by its toughness: an edge crack of depth a in a slab of
+# toughness K_Ic fails at K_Ic / (F sqrt(pi a)). F = 1.122 is the
+# semi-infinite edge-crack factor and a = h/2 the crack depth; both are the
+# values the 2026-11-09 sweep evaluated (ski non-triggers 13/46 -> 0/46, Jan 18
+# triggers unchanged, robust to the K source). The finite-thickness factor
+# (edge_crack_strength's polynomial) would be ~2.8 at a/h = 0.5, i.e. stricter;
+# that was not evaluated.
+TOUGHNESS_EDGE_F = 1.122
+TOUGHNESS_A_FRAC = 0.5
+
+
+def toughness_limited_strength(sigma_t, K_Ic, h, a_frac=None, F=None):
+    """min(sigma_t, K_Ic / (F sqrt(pi a))), a = a_frac * h. A missing K_Ic or
+    h leaves sigma_t unchanged."""
+    a_frac = TOUGHNESS_A_FRAC if a_frac is None else a_frac
+    F = TOUGHNESS_EDGE_F if F is None else F
+    sigma_t = float(sigma_t)
+    if not (np.isfinite(K_Ic) and np.isfinite(h) and h > 0 and a_frac > 0):
+        return sigma_t
+    s_k = float(K_Ic) / (F * np.sqrt(np.pi * a_frac * float(h)))
+    return min(sigma_t, s_k) if np.isfinite(sigma_t) else sigma_t
 
 
 def characteristic_length(K_Ic, sigma_t):
@@ -644,7 +695,7 @@ def ligament_bound(rho_intact, dz_intact, st_intact, a, h, embedded,
         dmax_factor * np.asarray(d_max_intact, dtype=float)
     out['n_rho_clamped'] = k_ic_n_clamped(rho_intact, relation)
     K_lig = tensile_strength_mean(
-        k_ic(rho_intact, relation, d_max=d_max, clamp=True), dz_intact)
+        k_ic(rho_intact, relation, d_max=d_max), dz_intact)
     st_lig = tensile_strength_mean(st_intact, dz_intact)
     out['K_Ic_ligament'] = K_lig
     out['sigma_t_lig_intact'] = st_lig
@@ -835,7 +886,7 @@ def arrest_length_energy(tau_p0, tau_p_star, theta):
 # Combined evaluation
 # ---------------------------------------------------------------------------
 def evaluate(rho, h, psi_deg, E, sigma_t, D_wl, G_wl, theta, a_c=None, a_sc=None,
-             nu=0.3, phi_deg=27.0, delta=1.0, C=C_FIT, tau_p0=None, R=R_FIT,
+             nu=0.3, phi_deg=27.0, delta=1.0, C=None, tau_p0=None, R=R_FIT,
              use_residual=False, speed_ratio_along=MODE2_SPEED_RATIO,
              speed_ratio_cross=MODE3_SPEED_RATIO):
     """All indices for one slab / weak-layer configuration.

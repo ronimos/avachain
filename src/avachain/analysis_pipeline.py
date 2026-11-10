@@ -731,7 +731,16 @@ def step_scenarios(cfg, args):
     for READY, so it never reads a set still being written or replaced. A
     failed build discards its staging and leaves any published set alone.
     """
+    import copy
     import handoff
+    import calibration
+    # [calibration]: c_fit for the BFS arrest; size_scale on every size factor
+    # (weights are centred on the median log factor, so they do not change).
+    calibration.apply(cfg)
+    k = calibration.size_scale(cfg)
+    if k != 1.0:
+        args = copy.copy(args)
+        args.size_factors = [round(f * k, 6) for f in args.size_factors]
     final = scenario_set_dir(cfg, args)
     stage = handoff.staging_dir(final)
     shot_final = shot_set_dir(cfg, args) if _forcing_shots(cfg, args) else None
@@ -762,6 +771,17 @@ def step_scenarios(cfg, args):
     return final
 
 
+def _calibration_version(cfg):
+    import calibration
+    return calibration.version(cfg)
+
+
+def _calibration_knobs(cfg):
+    import calibration
+    cal = getattr(cfg, 'calibration', None) or {}
+    return {k: cal[k] for k in calibration.KNOBS if k in cal} or None
+
+
 def _publish_set(cfg, args, stage, final):
     import handoff
     meta = stage / "metadata.json"
@@ -785,7 +805,9 @@ def _publish_set(cfg, args, stage, final):
                     cycle_date=getattr(args, 'cycle_date', None),
                     snapshot_ts=getattr(args, 'snapshot_ts', None),
                     store=getattr(args, 'store_kind', None),
-                    clamped=getattr(args, 'clamped', None))
+                    clamped=getattr(args, 'clamped', None),
+                    calibration_version=_calibration_version(cfg),
+                    calibration=_calibration_knobs(cfg))
 
 
 # What the last _build_scenarios saw at each trigger gate, for the season
@@ -848,6 +870,12 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
     _ep.ENERGY_DELTA = getattr(args, 'energy_delta', _ep.ENERGY_DELTA)
     if getattr(args, 'slab_tensile_gate', None) is not None:
         _rg.USE_SLAB_TENSILE_GATE = args.slab_tensile_gate
+    if getattr(args, 'trigger_toughness', None) is not None:
+        _rg.USE_TRIGGER_TOUGHNESS = args.trigger_toughness
+    if getattr(args, 'distance_caps', None) is not None:
+        _rg.USE_DISTANCE_CAPS = args.distance_caps
+    print(f"  trigger toughness {'ON' if _rg.USE_TRIGGER_TOUGHNESS else 'OFF'}  "
+          f"distance caps {'ON' if _rg.USE_DISTANCE_CAPS else 'OFF'}")
     if _rg.USE_SLAB_TENSILE_GATE:
         print(f"  slab tensile-failure gate ON ({_rg.SLAB_TENSILE_SIGMA_COL})")
     if _rg.ARREST_MODE != 'legacy' or _rg.MASK_MODE != 'gate':
@@ -1791,6 +1819,16 @@ def build_parser():
                         help='legacy mode: also arrest where the slab breaks in tension '
                              'before the crack reaches r_c (Schweizer et al. 2014; '
                              'default: release_geometry.USE_SLAB_TENSILE_GATE, on).')
+    parser.add_argument('--trigger-toughness', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help='cap the trigger slab strength by its edge-crack toughness '
+                             'K_Ic/(1.122 sqrt(pi h/2)) (default: '
+                             'release_geometry.USE_TRIGGER_TOUGHNESS, on).')
+    parser.add_argument('--distance-caps', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help='BFS up/down/cross distance caps (default: [calibration] '
+                             'distance_caps, else release_geometry.USE_DISTANCE_CAPS, on). '
+                             'Overrides the TOML.')
     parser.add_argument('--force-explosive-triggers', action=argparse.BooleanOptionalAction,
                         default=None,
                         help='scenarios: also publish a forced-shot set at '

@@ -86,3 +86,17 @@ wrf_dist_km   = 0.714
 
 [cron]
 hour_utc = 3
+
+[calibration]
+# Release-model calibration (calibration.py; CLAUDE.md "Calibration").
+# Approved by Ron 2026-11-10: trigger toughness (module default) + caps off + facet 0.75.
+version        = "2026-11-10.1"
+facet_a        = 0.75     # the one fitted knob: J&J 1990 facet knockdown (module default 0.5)
+distance_caps  = false    # structural: BFS up/down/cross caps open
+events         = ["2026-01-18"]
+no_event_dates = ["2026-01-29", "2026-02-05", "2026-02-12", "2026-02-19", "2026-02-26",
+                  "2026-03-05", "2026-03-07", "2026-03-12", "2026-03-19", "2026-03-26"]
+objective      = "Jan 18 E[IoU] vs the 5810 m2 survey polygon; ski-track non-triggers must not release (forced shots, no rectangle). No-event area reported, not scored."
+fitted         = "Jan 18 E[IoU] 0.589 (was 0.200), E[area] 7682 m2 (1.32x); ski 0/46 releasing (was 13/46); facet 0.75 and sigma_t x0.5 behave alike. A fit, not validation."
+commit         = "68a170f"
+sweep          = "11-09 J&J/facet sweeps + trigger-toughness/caps-off combined run; acceptance 11-10 identical on all 11 dates"

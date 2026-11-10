@@ -252,6 +252,10 @@ class ProjectConfig:
     # logs/ separately, which fixed sub-paths of output_dir cannot express.
     dir_overrides: dict = field(default_factory=dict)
 
+    # [calibration] — per-slope release-model calibration (calibration.py;
+    # CLAUDE.md "Calibration"). Empty = uncalibrated, the module defaults.
+    calibration: dict = field(default_factory=dict)
+
     def __post_init__(self):
         """Resolve paths relative to project_dir."""
         self.dem_path = self.project_dir / self.dem_path
@@ -521,6 +525,7 @@ class ProjectConfig:
             wrf_smet_file=wrf_smet,
             wrf_smet_dir=wrf_smet.parent if wrf_smet else None,
             dir_overrides={k: paths[k] for k in OVERRIDABLE_DIRS if k in paths},
+            calibration=dict(data.get("calibration", {})),
         )
             
 

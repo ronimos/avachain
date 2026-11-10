@@ -84,6 +84,9 @@ checking these leads to wrong conclusions about what produced a polygon.
 |---|---|---|
 | `USE_MELOCHE_ARREST` | `True` (since 2026-10-23, both repos; standalone `config.USE_MELOCHE_ARREST`, 31e5192) | `_qualifies` stops at the directional Meloche A_ca test (Eq. 20 via `arrest_indices.arrest_length`, with C = 0.045); the Λ/thickness discontinuity heuristics are then **skipped**, not run alongside. `TAU_G_ABS_FLOOR`, thin slab, low Λ and the distance caps still apply. It fires rarely (6 of ~1200 clusters for trigger 1772) and areas grow ~5-20% against the heuristics. |
 | `USE_SLAB_TENSILE_GATE` | `True` (since 2026-10-27, Ron, both repos; CLI `--no-slab-tensile-gate`) | No slab-tensile check. When on, a candidate is arrested when S_t = σ_t / (3ρg·r_c²/h) < 1 (Schweizer et al. 2014 ISSW Eq. 1, the closed form, not Reuter & Schweizer 2018's FE index). σ_t is `sigma_t_mean__jamieson1990` (J&J 1990 with the facet knockdown); a missing column means the gate never fires; `step_scenarios` and the standalone's `generate_scenarios` print a WARNING when that happens. It also gates the trigger. On the ten no-event days it rejects no trigger, so it does not stop false alarms. |
+| `USE_TRIGGER_TOUGHNESS` | `True` (since 2026-11-10, Ron, both repos; standalone `config.`; CLI `--no-trigger-toughness`) | Plain S_t at the trigger. When on, **at the trigger only** (`cluster_tensile_support`: trigger gate, candidate filter, reporting) σ_t is capped by K_Ic / (1.122 √(π h/2)), K_Ic the `K_Ic_ligament` column. The BFS per-cluster tensile gate is unchanged. Jan 18 ski non-triggers 13/46 → 0/46 releasing, Jan 18 triggers and IoU unchanged; no-event false alarms unchanged. F = 1.122 is the semi-infinite edge-crack factor; the finite-thickness one (~2.8 at a/h = 0.5) would be stricter and was not evaluated. |
+| `arrest_indices.K_IC_RANGE_MODE` | `'extrapolate'` (since 2026-11-10, Ron, both repos) | `'clamp'` evaluated out-of-range densities at the range edge (every CSV before 11-10; Jan 18 median ligament K_Ic 1318 vs 1650 Pa m^½). The density ranges are a guideline. `n_rho_clamped` now counts extrapolated layers. |
+| `USE_DISTANCE_CAPS` | `True` (both repos; avachain per slope via `[calibration] distance_caps`; CLI `--[no-]distance-caps` overrides) | Off sets d_up = d_down = d_lat = ∞; the BFS is bounded by the per-cluster gates, the start zone and `MAX_BFS_CLUSTERS`. Off, the size factors scale nothing in the BFS. |
 | `snowpack_analysis.FACET_SOURCE` | `'grain_class'` (since 2026-10-27, both repos; standalone `config.FACET_SOURCE`) | `'sphericity'` = f = 1 − sphericity, every CSV before 10-27. Grain class sets f = 1 for J&J's group II: primary FC/DH/FCxr, or PP/DF/RG with a faceted secondary (e.g. 341). `'grain_class_primary'` drops the secondary rule. It moves `sigma_t_mean/_wl/_ligament`, their `A_ca_*`, the energy mode and the tensile gate. It does **not** touch `A_ca_brittle` or the legacy Eq. 20, which read the plain `sigma_t` with no knockdown. Jan 18 start-zone median f goes from 0.45 to 0.97. |
 | `USE_MODE3_SPEED_CAP` | `False` | `d_lat` is the Gaume θ-ratio width (15 m floor) alone. |
 | `USE_MODE3_LAMBDA` | `False` | A single Λ is used in all directions. |
@@ -572,10 +575,22 @@ avalanches occur, under these rules:
   skill.** Never report Jan 18 IoU as validation once a value was fitted to it.
   The report carries a caveat line for the release model, like the one for the
   runout's τ₀ = 125 Pa (itself already fitted to Jan 18).
-- **The no-event days are part of every fit.** The model false-alarms on 10
-  of 10 no-event survey days; a fit that chases only the 5 810 m² polygon can
-  make that worse. No-event days and shots that did not release are
-  constraints, as much as the polygon.
+- **A no-event day says nothing about release area** (Ron, 2026-11-09; this
+  replaced "the no-event days are part of every fit", which scored the
+  no-event E[area] against its baseline). A day passes without an avalanche
+  for reasons the area model does not see: no trigger in the right place,
+  a slope hard to trigger across, or an r_c too large. Its potential release
+  can be larger or smaller than Jan 18's. So **do not constrain the area on
+  no-event days**. Report it, never score it. Those days still bear on
+  *initiation* (the trigger gates), and the model false-alarms on 10 of 10
+  of them, but area knobs leave the trigger list unchanged.
+- **Observed non-triggering constrains propagation.** These are points where a
+  trigger was applied and nothing propagated: shots that did not release, and
+  skiers. On Jan 18, people skied 10–20 m from the crown without triggering
+  it. Score them by putting model triggers there with no rectangle fallback
+  (the forced-shot path, `make_release_polygon_2d(rectangle_fallback=False)`).
+  A fit that gets Jan 18 IoU by growing the polygon over skied terrain is
+  wrong.
 - **One free parameter, two at most.** One polygon constrains roughly size
   and maybe position; more knobs fit noise.
 - **Pick a knob that changes area smoothly and has a physical reading** —
@@ -587,20 +602,22 @@ avalanches occur, under these rules:
   polygons in jumps (7 382 / 4 580 / 827 m² at 28 / 29 / 30°), so a fit lands
   on a knife edge. Choose a robust plateau, not the single best point.
 - **Start with a sensitivity sweep** on Jan 18: IoU and area against each
-  candidate knob, plus false alarms on the no-event days. Pick the knob with
-  the smoothest response.
+  candidate knob, plus the non-triggering points above. Report the no-event
+  areas, but don't score them. Pick the knob with the smoothest response.
 - **Calibrated values live in the slope TOML `[calibration]`**, with
   provenance: events used, date, objective, commit. The physics stays
   identical to `~/avalanche-release-areas`; only per-slope parameters differ,
   so parity holds. Never edit module-top physics constants to calibrate.
 - **Recalibration proposes, it does not apply.** A new event triggers a run
-  that refits on all events plus the no-event days, reports leave-one-out
+  that refits on all events plus every observed non-triggering point
+  (shots, skiers), reports leave-one-out
   results (each event scored by a fit that did not see it), and changes
   nothing until Ron approves.
 - **Every report and every metrics run record states the calibration
   version**, so the season's records say which version produced each forecast.
 - **Shot outcomes are the main input** (`observations.jsonl`, metrics.py).
-  Without them recalibration has one data point per avalanche.
+  Without them recalibration has one data point per avalanche. Record skier
+  and ski-cut non-triggers the same way, with locations.
 
 Fitting material parameters to the *start-zone snowpack distribution* (e.g.
 G_wl so the start-zone median Π = 1) is a different thing and stays allowed:
