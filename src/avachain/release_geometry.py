@@ -61,9 +61,10 @@ MIN_POLYGON_AREA = 200.0  # m² — discard degenerate polygons smaller than thi
 # cannot sustain dynamic fracture, regardless of slope or trigger. Unlike a
 # relative floor, an absolute one can represent a stable slope: if no
 # connected terrain exceeds it, the crack does not propagate.
-# Jan 18 reference: ~540 Pa inside release, ~230 Pa adjacent (non-released).
-# A floor in 230-540 reproduces that boundary on tau_g alone; ~350 is a
-# lower physical bound. Was a function-local literal in propagate_release
+# The 540/230 Pa (inside/adjacent) reference this was set from is from older
+# features. On the 11-10 calibrated Jan 18 features the start-zone minimum is
+# 409 Pa (release p5 1554, ski p5 605 Pa), so 350 never binds and Jan 18 does
+# not move below ~1200 Pa (sweep 200-2500, 11-10). Was a function-local literal in propagate_release
 # until 2026-11-10; per slope: [calibration] tau_g_floor.
 TAU_G_ABS_FLOOR        = 350.0  # Pa
 # Load-to-strength floor (Ron, 2026-11-10; both repos; default 0 = off): arrest
@@ -72,7 +73,8 @@ TAU_G_ABS_FLOOR        = 350.0  # Pa
 # Jan 18 (calibrated features) it separates release from the skied slope like
 # tau_g does (AUC 0.97; medians 0.92 release, 0.54 ski), because SNOWPACK's
 # tau_p is a function of WL density alone (r = 0.99 with rho_wl^2) and varies
-# little. Per slope: [calibration] tau_ratio_floor.
+# little. Per slope: [calibration] tau_ratio_floor (Little Professor 0.65 since
+# calibration 2026-11-10.2; Jan 18 IoU plateau 0.60-0.70).
 TAU_RATIO_FLOOR        = 0.0
 MIN_PROPAGATION_SLAB   = 0.50   # m — slab too thin to sustain crack propagation
 MIN_PROPAGATION_LAMBDA = 0.1    # m — slab too weak/compliant to transmit fracture

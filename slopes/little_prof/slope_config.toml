@@ -89,14 +89,16 @@ hour_utc = 3
 
 [calibration]
 # Release-model calibration (calibration.py; CLAUDE.md "Calibration").
-# Approved by Ron 2026-11-10: trigger toughness (module default) + caps off + facet 0.75.
-version        = "2026-11-10.1"
+# Approved by Ron 2026-11-10: trigger toughness (module default) + caps off + facet 0.75 (.1);
+# tau_g/tau_p load-to-strength floor 0.65 (.2).
+version        = "2026-11-10.2"
 facet_a        = 0.75     # the one fitted knob: J&J 1990 facet knockdown (module default 0.5)
 distance_caps  = false    # structural: BFS up/down/cross caps open
+tau_ratio_floor = 0.65    # second (last) fitted knob: BFS stops where tau_g/tau_p < 0.65 (module default 0 = off)
 events         = ["2026-01-18"]
 no_event_dates = ["2026-01-29", "2026-02-05", "2026-02-12", "2026-02-19", "2026-02-26",
                   "2026-03-05", "2026-03-07", "2026-03-12", "2026-03-19", "2026-03-26"]
 objective      = "Jan 18 E[IoU] vs the 5810 m2 survey polygon; ski-track non-triggers must not release (forced shots, no rectangle). No-event area reported, not scored."
-fitted         = "Jan 18 E[IoU] 0.589 (was 0.200), E[area] 7682 m2 (1.32x); ski 0/46 releasing (was 13/46); facet 0.75 and sigma_t x0.5 behave alike. A fit, not validation."
-commit         = "68a170f"
-sweep          = "11-09 J&J/facet sweeps + trigger-toughness/caps-off combined run; acceptance 11-10 identical on all 11 dates"
+fitted         = "Jan 18 E[IoU] 0.601 (0.589 at .1, 0.200 before), E[area] 7429 m2 (1.28x), AUC 0.801; ski 0/46 releasing (was 13/46); facet 0.75 and sigma_t x0.5 behave alike; ratio plateau 0.60-0.70 (IoU 0.59-0.60), cuts real release above 0.75. A fit, not validation."
+commit         = "68a170f (.1), 9c7eb7a (.2)"
+sweep          = "11-09 J&J/facet sweeps + trigger-toughness/caps-off combined run; acceptance 11-10 identical on all 11 dates; 11-10 tau_ratio_floor sweep 0-0.9 (11 dates, 46 ski shots) and TAU_G_ABS_FLOOR sweep 200-2500 Pa (ratio chosen: wider plateau, strength-relative)"
