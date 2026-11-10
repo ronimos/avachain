@@ -144,11 +144,26 @@ def slab_tensile_stress_cantilever(rho, h, l):
         / np.asarray(h, dtype=float)
 
 
+# Floor on r_c in slab_tensile_support (m). SNOWPACK reports r_c = 0 where the
+# slab's own weight overloads the weak layer (no cut needed): every such cluster
+# on the 2025-26 Little Professor CSVs has tau_g > tau_p, and they are the deep
+# slabs (97-100% of clusters with h > 3 m; 14 of 1608 on Jan 18, ~300 from late
+# Feb). r_c -> 0 drives the bending load to 0 and S_t to infinity, which is the
+# right limit (the slab cannot break before a zero-length crack), but it was a
+# divide by zero (891 RuntimeWarnings per 11-date run). 1 mm keeps S_t finite
+# (~1e5) without changing any gate outcome: the smallest positive r_c seen is
+# ~1 mm and S_t there is far above 1. Ron, 2026-11-10; same in both repos.
+RC_MIN_M = 1.0e-3
+
+
 def slab_tensile_support(sigma_t, rho, h, r_c):
     """S_t = sigma_t / sigma_max(l = r_c). S_t < 1: the slab breaks in tension
     before the weak-layer crack reaches critical length, so it cannot carry
     propagation (Schweizer et al. 2014). The threshold 1 is stress = strength,
-    not a fit."""
+    not a fit. r_c is floored at RC_MIN_M (SNOWPACK's r_c = 0 means no cut is
+    needed); a NaN r_c stays NaN, so the gate does not fire without data."""
+    r_c = np.asarray(r_c, dtype=float)
+    r_c = np.where(np.isfinite(r_c), np.maximum(r_c, RC_MIN_M), r_c)
     return np.asarray(sigma_t, dtype=float) / slab_tensile_stress_cantilever(rho, h, r_c)
 
 

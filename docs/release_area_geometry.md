@@ -366,9 +366,11 @@ release on all ten (§3).
    so the ranking picks the thickest slab the 2.0 m cap admits. Change the cap
    only for an operational reason.
 4. **r_c sets the slab tensile gate.** SNOWPACK's r_c is a flat-field
-   estimate. A factor of two in r_c moves S_t by four. Where r_c = 0, S_t
-   divides by zero and comes out infinite, so that cluster is never gated
-   (`RuntimeWarning` in `slab_tensile_support`).
+   estimate. A factor of two in r_c moves S_t by four. SNOWPACK reports
+   r_c = 0 where the slab's weight alone overloads the weak layer (the deep
+   slabs: ~19% of the start zone from late February). `slab_tensile_support`
+   floors r_c at `RC_MIN_M` = 1 mm, so S_t is ~10⁵ there rather than a divide
+   by zero. These clusters are never gated, which is the right limit.
 5. **Slab-crack orientation** uses the trigger's fall line, not the local one.
    The load test assumes the whole admitted region has detached. Mode III at
    the flank is not represented. `SLAB_CRACK_BAND_M` and the 45° tolerance

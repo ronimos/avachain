@@ -69,7 +69,7 @@ Where to look:
 | `STAUCHWALL_DEG`, `MAX_BFS_CLUSTERS`, `USE_*` flags, `LAMBDA_*_FACTOR` | `release_geometry.py` |
 | Stauchwall angle — **three copies**, all 29° since 2026-10-27 (Ron; was 28): `release_geometry.STAUCHWALL_DEG` (BFS defaults, scoring scripts), `config.ProjectConfig.stauchwall_deg`, and the slope TOML's `[scenarios] stauchwall_deg`, which **wins** for `analysis_pipeline` (CLI `--stauchwall-deg` overrides it). Change all three. Each degree turns clusters whose *mean* slope falls below it into downslope walls, so polygons jump rather than shrink: Jan 18 median gate-on area 7382 / 4580 / 827 m² at 28 / 29 / 30. | `release_geometry.py`, `config.py`, TOML |
 | BFS parameters: `TAU_G_ABS_FLOOR`, `MIN_PROPAGATION_*`, Λ/thickness factors, distance-cap floors `D_*` — one **PROPAGATION MODEL PARAMETERS** block (since 2026-11-10, Ron; `TAU_G_ABS_FLOOR` was function-local before). Keep new BFS parameters there, never as literals in the functions. | `release_geometry.py` top |
-| `MODE2/3_SPEED_RATIO`, `SCH2004_EXP`, `C_FIT`, material relations | `arrest_indices.py` |
+| `MODE2/3_SPEED_RATIO`, `SCH2004_EXP`, `C_FIT`, `RC_MIN_M` (1 mm r_c floor in `slab_tensile_support`; SNOWPACK's r_c = 0 means the slab overloads the WL), material relations | `arrest_indices.py` |
 | `MIN_TAU_G`, `MIN_SLOPE`, `MAX_SK38`, slab-thickness bounds | `analysis_pipeline.py` (~line 505, inside the trigger block) |
 | `RASTER_EPSG` | `config.py` |
 
