@@ -11,7 +11,6 @@ from rasterio.transform import from_origin
 import energy_path as ep
 import release_geometry as rg
 from arrest_indices import (
-    R_FIT,
     arrest_length_energy,
     critical_strength,
     gravitational_shear,
@@ -28,6 +27,7 @@ from energy_path import (
     n_max,
     tau_net,
 )
+import model_params as mp
 
 # Meloche et al. (2025) Table 1 slab, as in test_arrest_indices._BASE.
 RHO, H, PSI, E, SIG_T, G_WL, D_WL, NU = 250.0, 0.5, 35.0, 4e6, 6e3, 0.2e6, 0.04, 0.3
@@ -45,11 +45,11 @@ class TestJGRCasesThroughEnergyPath:
     ])
     def test_arrest_point_on_ramp(self, theta, delta, expected):
         x = np.arange(0.0, 200.0, 0.001)
-        G_av = g_avail(n_max(SIG_T, H), E, H, NU, R_FIT)
+        G_av = g_avail(n_max(SIG_T, H), E, H, NU, mp.R_FIT)
         stopped = g_c(TAU_P0 + theta * x, K_WL, delta) > G_av
         x_arrest = x[np.argmax(stopped)]
         assert x_arrest == pytest.approx(expected, abs=0.01)
-        tau_star = critical_strength(SIG_T, H, E, K_WL, delta, 0.0, R_FIT, NU)
+        tau_star = critical_strength(SIG_T, H, E, K_WL, delta, 0.0, mp.R_FIT, NU)
         assert x_arrest == pytest.approx(
             arrest_length_energy(TAU_P0, tau_star, theta), abs=0.002)
 
@@ -57,19 +57,19 @@ class TestJGRCasesThroughEnergyPath:
 class TestPrimitives:
 
     def test_tau_net_exactly_zero_at_friction_angle(self):
-        assert tau_net(RHO, H, ep.PHI_DEG, ep.PHI_DEG) == 0.0
+        assert tau_net(RHO, H, mp.PHI_DEG, mp.PHI_DEG) == 0.0
 
     @pytest.mark.parametrize('psi', [0.0, 10.0, 26.9])
     def test_tau_net_negative_below_friction_angle(self, psi):
-        assert tau_net(RHO, H, psi, ep.PHI_DEG) < 0.0
+        assert tau_net(RHO, H, psi, mp.PHI_DEG) < 0.0
 
     def test_tau_net_is_tau_g_minus_tau_r(self):
         expected = (gravitational_shear(RHO, H, PSI)
-                    - residual_shear(RHO, H, PSI, ep.PHI_DEG))
+                    - residual_shear(RHO, H, PSI, mp.PHI_DEG))
         assert tau_net(RHO, H, PSI) == pytest.approx(expected, rel=1e-12)
 
     def test_g_avail_at_n_max_is_r_times_g_slab(self):
-        for R in (0.3, R_FIT, 0.7):
+        for R in (0.3, mp.R_FIT, 0.7):
             assert g_avail(n_max(SIG_T, H), E, H, NU, R) == pytest.approx(
                 R * g_slab(SIG_T, H, E, NU), rel=1e-12)
 
@@ -104,7 +104,7 @@ class TestCellEnergy:
         assert out['N_max'] == pytest.approx(3e3 * H)
 
     def test_e_relation_switch(self):
-        assert e_column(ep.E_RELATION) == 'E_eff'
+        assert e_column(mp.E_RELATION) == 'E_eff'
         out = cell_energy(_row(), PSI, e_relation='project_fit')
         assert out['G_slab_path'] == pytest.approx(g_slab(SIG_T, H, 2e6))
 
@@ -116,7 +116,7 @@ class TestCellEnergy:
     def test_missing_wl_thickness_uses_fallback(self):
         out = cell_energy(_row(wl_thickness=np.nan), PSI, delta=0.0)
         assert out['G_c'] == pytest.approx(
-            g_c(2000.0, G_WL / ep.D_WL_FALLBACK, 0.0))
+            g_c(2000.0, G_WL / mp.D_WL_FALLBACK, 0.0))
 
     def test_no_weak_layer_gives_nan_g_c(self):
         out = cell_energy(_row(wl_shear_strength=np.nan), PSI)
@@ -124,7 +124,7 @@ class TestCellEnergy:
         assert np.isfinite(out['tau_net'])
 
     def test_residual_option(self):
-        tr = residual_shear(RHO, H, PSI, ep.PHI_DEG)
+        tr = residual_shear(RHO, H, PSI, mp.PHI_DEG)
         out = cell_energy(_row(), PSI, delta=0.0, use_residual=True)
         assert out['G_c'] == pytest.approx(g_c(2000.0, G_WL / D_WL, 0.0, tr))
 
@@ -146,23 +146,14 @@ def test_compute_meloche_features_emits_energy_columns_without_theta():
     assert out['tau_net'].iloc[0] == pytest.approx(tau_net(RHO, H, PSI), rel=1e-3)
 
 
-class TestAvachainConstants:
-    """energy_path keeps its own copies of constants defined elsewhere in avachain."""
-
-    def test_copies_match_their_sources(self):
-        import release_geometry as rg
-        import snowpack_analysis as sa
-        assert ep.G_WL == sa.G_WL
-        assert ep.NU == sa.NU == rg.NU
-        assert ep.E_RELATION == sa.E_RELATION
-        assert ep.PHI_DEG == rg.FRICTION_DEG
+class TestEnergyConstants:
+    """Energy-mode values (model_params since 2026-11-11)."""
 
     def test_energy_delta_is_zero_and_separate_from_eq20_delta(self):
-        import release_geometry as rg
-        assert ep.ENERGY_DELTA == 0.0
-        assert rg.MELOCHE_DELTA == 1.0
+        assert mp.ENERGY_DELTA == 0.0
+        assert mp.DELTA == 1.0
 
     def test_cell_energy_uses_energy_delta(self, monkeypatch):
         g0 = cell_energy(_row(), PSI)['G_c']
-        monkeypatch.setattr(ep, 'ENERGY_DELTA', 1.0)
+        monkeypatch.setattr(mp, 'ENERGY_DELTA', 1.0)
         assert cell_energy(_row(), PSI)['G_c'] == pytest.approx(2.0 * g0)

@@ -54,50 +54,76 @@ a constant set on one copy is invisible to the other. Entry points do
 `config.py` imports nothing from the project, so importing it anywhere is
 cycle-free.
 
-## Physics constants live at module tops, not in `config.py`
+## Model parameters live in `model_params.py`
 
-`config.py` is **pipeline** config — paths, station lists, scenario defaults.
-Physics constants sit at the top of the module that uses them. This is a
-deliberate difference from `~/avalanche-release-areas`, which centralises them
-in its own `config.py`. Do not "fix" it during a sync.
+Since 2026-11-11 (Ron) every parameter, switch and calibration knob of the
+release-area model is in `src/avachain/model_params.py`, under the standalone's
+names (its `config.py`): `PHI_DEG` (was `release_geometry.FRICTION_DEG`),
+`DELTA` (was `MELOCHE_DELTA`), `MAX_SK38` (was `baselines.STABILITY_MAX` and an
+`analysis_pipeline` local). Duplicates were collapsed to one value: `NU`, `G_WL`,
+`THETA_MIN`, `MODE2/3_SPEED_RATIO`, `DMAX_FACTOR`, `FACET_STRENGTH_FACTOR`,
+`E_RELATION` (was also `arrest_indices.E_DEFAULT`), `K_IC_RELATION` (was also
+`arrest_indices.K_IC_DEFAULT`). The analyze CSVs (Jan 18, Mar 5) were
+byte-identical before and after.
 
-Where to look:
+Rules, all pinned by `tests/test_model_params.py`:
 
-| Constants | File |
-|---|---|
-| `L_SS`, `THETA_*`, `TAU_G_FEATURE_FLOOR`, `E_RELATION`, `K_IC_RELATION`, `LIGAMENT_MODEL` | `snowpack_analysis.py` (~lines 40–130) |
-| `STAUCHWALL_DEG`, `MAX_BFS_CLUSTERS`, `USE_*` flags, `LAMBDA_*_FACTOR` | `release_geometry.py` |
-| Stauchwall angle — **three copies**, all 29° since 2026-10-27 (Ron; was 28): `release_geometry.STAUCHWALL_DEG` (BFS defaults, scoring scripts), `config.ProjectConfig.stauchwall_deg`, and the slope TOML's `[scenarios] stauchwall_deg`, which **wins** for `analysis_pipeline` (CLI `--stauchwall-deg` overrides it). Change all three. Each degree turns clusters whose *mean* slope falls below it into downslope walls, so polygons jump rather than shrink: Jan 18 median gate-on area 7382 / 4580 / 827 m² at 28 / 29 / 30. | `release_geometry.py`, `config.py`, TOML |
-| BFS parameters: `TAU_G_ABS_FLOOR`, `MIN_PROPAGATION_*`, Λ/thickness factors, distance-cap floors `D_*` — one **PROPAGATION MODEL PARAMETERS** block (since 2026-11-10, Ron; `TAU_G_ABS_FLOOR` was function-local before). Keep new BFS parameters there, never as literals in the functions. | `release_geometry.py` top |
-| `MODE2/3_SPEED_RATIO`, `SCH2004_EXP`, `C_FIT`, `RC_MIN_M` (1 mm r_c floor in `slab_tensile_support`; SNOWPACK's r_c = 0 means the slab overloads the WL), material relations | `arrest_indices.py` |
-| `MIN_TAU_G`, `MIN_SLOPE`, `MAX_SK38`, slab-thickness bounds | `analysis_pipeline.py` (~line 505, inside the trigger block) |
-| `RASTER_EPSG` | `config.py` |
+- `import model_params as mp` and read **`mp.X` at call time**. Never
+  `from model_params import X`, never `def f(x=mp.X)`: both freeze the value at
+  import, so `calibration.apply`, a CLI flag or `monkeypatch.setattr(mp, ...)`
+  would not reach it (how `[calibration] c_fit` was a no-op until 11-08).
+  Functions take `x=None` and resolve `mp.X` inside.
+- No other module defines a name `model_params` defines.
+- Values equal the standalone `config.py` for every shared name (skipped when
+  the standalone is not checked out).
+- Calibration still goes through the slope TOML `[calibration]`; never edit a
+  value in `model_params.py` to calibrate.
+
+Not in `model_params`: coefficients of published relations and the relation
+registries (`G_ACC`, `E_RHO_*`, `JJ1990_*`, `SCH2004_*`, `E_RELATIONS`,
+`K_IC_RELATIONS`, …) stay next to their formula in `arrest_indices.py`;
+data-format and plot constants (`WL_TYPES`, `RC_VAR`, `GROUP_*`) in
+`snowpack_analysis.py`; pipeline settings (`RASTER_EPSG`, paths,
+`MIN_RELEASE_DEPTH_M`, scenario sizes) in `config.py`, the TOML and
+`analysis_pipeline.py`.
+
+The Stauchwall angle has **two** settings, 29° since 2026-10-27 (Ron; was 28):
+`mp.STAUCHWALL_DEG` (BFS defaults, scoring scripts, and the
+`config.ProjectConfig.stauchwall_deg` default) and the slope TOML's
+`[scenarios] stauchwall_deg`, which **wins** for `analysis_pipeline` (CLI
+`--stauchwall-deg` overrides it). Change both. Each degree turns clusters whose
+*mean* slope falls below it into downslope walls, so polygons jump rather than
+shrink: Jan 18 median gate-on area 7382 / 4580 / 827 m² at 28 / 29 / 30.
+
+Keep new BFS parameters in the PROPAGATION MODEL section of `model_params.py`,
+never as literals in the functions (Ron, 2026-11-10).
 
 ---
 
 ## Feature flags — check which are active before reasoning about output
 
 Several physics paths are implemented but **off**. Reading the code without
-checking these leads to wrong conclusions about what produced a polygon.
+checking these leads to wrong conclusions about what produced a polygon. All
+are in `model_params.py`.
 
 | Flag | Default | Effect when off |
 |---|---|---|
 | `USE_MELOCHE_ARREST` | `True` (since 2026-10-23, both repos; standalone `config.USE_MELOCHE_ARREST`, 31e5192) | `_qualifies` stops at the directional Meloche A_ca test (Eq. 20 via `arrest_indices.arrest_length`, with C = 0.045); the Λ/thickness discontinuity heuristics are then **skipped**, not run alongside. `TAU_G_ABS_FLOOR`, thin slab, low Λ and the distance caps still apply. It fires rarely (6 of ~1200 clusters for trigger 1772) and areas grow ~5-20% against the heuristics. |
 | `USE_SLAB_TENSILE_GATE` | `True` (since 2026-10-27, Ron, both repos; CLI `--no-slab-tensile-gate`) | No slab-tensile check. When on, a candidate is arrested when S_t = σ_t / (3ρg·r_c²/h) < 1 (Schweizer et al. 2014 ISSW Eq. 1, the closed form, not Reuter & Schweizer 2018's FE index). σ_t is `sigma_t_mean__jamieson1990` (J&J 1990 with the facet knockdown); a missing column means the gate never fires; `step_scenarios` and the standalone's `generate_scenarios` print a WARNING when that happens. It also gates the trigger. On the ten no-event days it rejects no trigger, so it does not stop false alarms. |
 | `USE_TRIGGER_TOUGHNESS` | `True` (since 2026-11-10, Ron, both repos; standalone `config.`; CLI `--no-trigger-toughness`) | Plain S_t at the trigger. When on, **at the trigger only** (`cluster_tensile_support`: trigger gate, candidate filter, reporting) σ_t is capped by K_Ic / (1.122 √(π h/2)), K_Ic the `K_Ic_ligament` column. The BFS per-cluster tensile gate is unchanged. Jan 18 ski non-triggers 13/46 → 0/46 releasing, Jan 18 triggers and IoU unchanged; no-event false alarms unchanged. F = 1.122 is the semi-infinite edge-crack factor; the finite-thickness one (~2.8 at a/h = 0.5) would be stricter and was not evaluated. |
-| `arrest_indices.K_IC_RANGE_MODE` | `'extrapolate'` (since 2026-11-10, Ron, both repos) | `'clamp'` evaluated out-of-range densities at the range edge (every CSV before 11-10; Jan 18 median ligament K_Ic 1318 vs 1650 Pa m^½). The density ranges are a guideline. `n_rho_clamped` now counts extrapolated layers. |
+| `K_IC_RANGE_MODE` | `'extrapolate'` (since 2026-11-10, Ron, both repos) | `'clamp'` evaluated out-of-range densities at the range edge (every CSV before 11-10; Jan 18 median ligament K_Ic 1318 vs 1650 Pa m^½). The density ranges are a guideline. `n_rho_clamped` now counts extrapolated layers. |
 | `USE_DISTANCE_CAPS` | `True` (both repos; avachain per slope via `[calibration] distance_caps`; CLI `--[no-]distance-caps` overrides) | Off sets d_up = d_down = d_lat = ∞; the BFS is bounded by the per-cluster gates, the start zone and `MAX_BFS_CLUSTERS`. Off, the size factors scale nothing in the BFS. |
 | `USE_SLAB_CRACK_LINES` | `True` (since 2026-11-10, Ron, both repos; standalone `config.`; CLI `--no-slab-crack-lines`) | No slab cracks. When on, every cluster the tensile gate arrests (`slab_tensile_failure`) starts a crack in the slab: a crown if the BFS reached it by an upslope step, a flank if cross-slope. After the BFS, `slab_crack_lines` runs each one as a line through the admitted region (one best-aligned neighbour per step) while the slab there is loaded (detached slab below a crown / beside a flank within `SLAB_CRACK_BAND_M`, band-mean slope > `FRICTION_DEG`). The area the lines sever from the trigger (4-connected pixels) is removed; the line clusters stay. **No toughness test**: any static load of a detached slab gave K 10–75× the slab K_Ic on Jan 18. It does nothing where the tensile gate never fires, which is 9 of the 10 no-event days. |
-| `snowpack_analysis.FACET_SOURCE` | `'grain_class'` (since 2026-10-27, both repos; standalone `config.FACET_SOURCE`) | `'sphericity'` = f = 1 − sphericity, every CSV before 10-27. Grain class sets f = 1 for J&J's group II: primary FC/DH/FCxr, or PP/DF/RG with a faceted secondary (e.g. 341). `'grain_class_primary'` drops the secondary rule. It moves `sigma_t_mean/_wl/_ligament`, their `A_ca_*`, the energy mode and the tensile gate. It does **not** touch `A_ca_brittle` or the legacy Eq. 20, which read the plain `sigma_t` with no knockdown. Jan 18 start-zone median f goes from 0.45 to 0.97. |
+| `FACET_SOURCE` | `'grain_class'` (since 2026-10-27, both repos; standalone `config.FACET_SOURCE`) | `'sphericity'` = f = 1 − sphericity, every CSV before 10-27. Grain class sets f = 1 for J&J's group II: primary FC/DH/FCxr, or PP/DF/RG with a faceted secondary (e.g. 341). `'grain_class_primary'` drops the secondary rule. It moves `sigma_t_mean/_wl/_ligament`, their `A_ca_*`, the energy mode and the tensile gate. It does **not** touch `A_ca_brittle` or the legacy Eq. 20, which read the plain `sigma_t` with no knockdown. Jan 18 start-zone median f goes from 0.45 to 0.97. |
 | `USE_MODE3_SPEED_CAP` | `False` | `d_lat` is the Gaume θ-ratio width (15 m floor) alone. |
 | `USE_MODE3_LAMBDA` | `False` | A single Λ is used in all directions. |
 | `USE_ANISOTROPIC_RINGS` | `False` | BFS rings grow isotropically. |
 | `USE_LIGAMENT_BOUND` | `True` | — |
 | `THETA_ESTIMATOR` | `'plane_fit'` | `'knn'` reproduces every pre-2026-10-09 CSV. |
 | `E_RELATION` | `'vanherwijnen2016'` | — |
-| `release_geometry.ARREST_MODE` | `'legacy'` | `'energy'` (path-energy hypothesis, `energy_path.py`), `'slope_only'` / `'stability_connected'` (baselines, `baselines.py`). Non-legacy modes have no rectangle fallback. CLI `--arrest-mode`. |
-| `release_geometry.MASK_MODE` | `'gate'` | `'diagnostic'` runs the BFS without the start-zone KML; needs features outside it (`analyze --feature-buffer-m`). |
-| `energy_path.ENERGY_DELTA` | `0.0` | Energy-mode δ only; R was fitted at δ = 0. The Eq. 20 δ stays 1.0. |
+| `ARREST_MODE` | `'legacy'` | `'energy'` (path-energy hypothesis, `energy_path.py`), `'slope_only'` / `'stability_connected'` (baselines, `baselines.py`). Non-legacy modes have no rectangle fallback. CLI `--arrest-mode`. |
+| `MASK_MODE` | `'gate'` | `'diagnostic'` runs the BFS without the start-zone KML; needs features outside it (`analyze --feature-buffer-m`). |
+| `ENERGY_DELTA` | `0.0` | Energy-mode δ only; R was fitted at δ = 0. The Eq. 20 δ stays 1.0. |
 
 **The Jan 18 target is the survey-derived polygon** (Ron, 2026-10-26; since
 2026-11-08 it is a calibration target, not validation: see *Calibration*): `data/validation/avalanche_release_area_20260118.geojson`,
@@ -162,8 +188,8 @@ agree" conclusion.
 ## Two tau_g thresholds that look like a bug and are not
 
 ```
-snowpack_analysis.TAU_G_FEATURE_FLOOR = 50.0   # gates computing arrest indices
-analysis_pipeline.MIN_TAU_G           = 40.0   # gates trigger selection
+model_params.TAU_G_FEATURE_FLOOR = 50.0   # gates computing arrest indices
+model_params.MIN_TAU_G           = 40.0   # gates trigger selection
 ```
 
 The feature floor sits **above** the trigger gate on purpose, matching the
@@ -597,9 +623,9 @@ avalanches occur, under these rules:
 - **Pick a knob that changes area smoothly and has a physical reading** —
   e.g. arrest strictness (`C_FIT` in Eq. 20) or a size scaling on A_ca. The Λ
   factors are **dead** while `USE_MELOCHE_ARREST` is on (`_qualifies` returns
-  after the Meloche test), and `C_FIT` is a default argument, so setting
-  `arrest_indices.C_FIT` at runtime changes nothing: it must be passed as `C=`
-  (analyze's `A_ca_brittle` and the BFS call at `release_geometry.py` ~1188). **Not** the Stauchwall angle or the slab-thickness cap: they move
+  after the Meloche test). Every knob is read from `model_params` at call
+  time, so `calibration.apply` setting `mp.C_FIT` reaches both analyze's
+  `A_ca_brittle` and the BFS. **Not** the Stauchwall angle or the slab-thickness cap: they move
   polygons in jumps (7 382 / 4 580 / 827 m² at 28 / 29 / 30°), so a fit lands
   on a knife edge. Choose a robust plateau, not the single best point.
 - **Start with a sensitivity sweep** on Jan 18: IoU and area against each

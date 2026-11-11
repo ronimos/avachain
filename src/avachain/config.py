@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+import model_params as _mp   # imports nothing from the project: cycle-free
+
 # Horizontal CRS of all project rasters (cluster_map.tif, DEM, scenario outputs).
 # NAD83(2011) / UTM zone 13N. Last season's files are COMPD with a NAVD88 vertical,
 # for which rasterio returns EPSG=None; the horizontal component is 6342. That
@@ -138,7 +140,7 @@ class ProjectConfig:
     depth_scales: dict = field(default_factory=lambda: {10: 0.75, 50: 1.00, 90: 1.30})
     mu: float = 0.155           # Voellmy dry friction (uncalibrated default)
     xi: float = 1500.0          # Voellmy turbulent friction m/s² (uncalibrated default)
-    stauchwall_deg: float = 29.0   # Ron, 2026-10-27 (was 28.0)
+    stauchwall_deg: float = _mp.STAUCHWALL_DEG   # the slope TOML's [scenarios] stauchwall_deg wins
     # The slope's explosive-control shot locations, (lat, lon) WGS84. When no
     # cluster passes the trigger gates (thin early-season pack), scenarios
     # trigger at the clusters containing these points instead of failing
@@ -512,7 +514,7 @@ class ProjectConfig:
             max_bfs_clusters=int(scenarios.get("max_bfs_clusters", 2000)),
             size_factors=list(scenarios.get("size_factors", [0.70, 0.85, 1.00, 1.15, 1.30])),
             depth_percentiles=list(scenarios.get("depth_percentiles", [10, 50, 90])),
-            stauchwall_deg=float(scenarios.get("stauchwall_deg", 29.0)),
+            stauchwall_deg=float(scenarios.get("stauchwall_deg", _mp.STAUCHWALL_DEG)),
             explosive_trigger_points=_lat_lon_points(
                 scenarios.get("explosive_trigger_points", [])),
             force_explosive_triggers=bool(

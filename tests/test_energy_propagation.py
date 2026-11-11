@@ -1,4 +1,4 @@
-"""Synthetic-slope tests for the path-energy BFS (rg.ARREST_MODE = 'energy').
+"""Synthetic-slope tests for the path-energy BFS (mp.ARREST_MODE = 'energy').
 
 Scene: a south-facing slope tiled with 3 x 3 m clusters (the Jan 18 cluster
 size), fall line along +row. Each test sets per-cluster snowpack as a function
@@ -16,7 +16,6 @@ from affine import Affine
 import energy_path as ep
 import release_geometry as rg
 from arrest_indices import (
-    R_FIT,
     slab_modulus,
     slab_tensile_strength,
     weak_layer_stiffness,
@@ -28,15 +27,16 @@ from release_geometry import (
     make_release_polygon_2d,
     propagate_release,
 )
+import model_params as mp
 
 T = Affine(1.0, 0.0, 400000.0, 0.0, -1.0, 4000000.0)
 BLOCK = 3
 RHO, H, E, SIG_T, D_WL = 300.0, 1.0, 5e6, 6e3, 0.04
-K_WL = weak_layer_stiffness(ep.G_WL, D_WL)
-RG_SLAB = R_FIT * g_slab(SIG_T, H, E)            # 1.57 J/m2, saturated capability
+K_WL = weak_layer_stiffness(mp.G_WL, D_WL)
+RG_SLAB = mp.R_FIT * g_slab(SIG_T, H, E)            # 1.57 J/m2, saturated capability
 
 
-def tau_p_for(G_c, delta=ep.ENERGY_DELTA):
+def tau_p_for(G_c, delta=mp.ENERGY_DELTA):
     """Weak-layer strength giving fracture energy G_c (tau_r = 0)."""
     return np.sqrt(2.0 * K_WL * G_c / (1.0 + delta))
 
@@ -70,10 +70,10 @@ def scene(nr, nc, trig_px, snow, slope_deg=35.0):
 
 @pytest.fixture(autouse=True)
 def energy_mode(monkeypatch):
-    monkeypatch.setattr(rg, 'ARREST_MODE', 'energy')
+    monkeypatch.setattr(mp, 'ARREST_MODE', 'energy')
 
 
-def run(s, stauchwall_deg=rg.STAUCHWALL_DEG, state=None):
+def run(s, stauchwall_deg=mp.STAUCHWALL_DEG, state=None):
     poly, reached = propagate_release(
         trigger_cluster_id=s['trigger'], meloche_df=pd.DataFrame(),
         cluster_map=s['cluster_map'], dem=s['dem'], slope_grid=s['slope_grid'],
@@ -134,7 +134,7 @@ def test_flattening_slope_arrests_between_phi_and_drain_limit():
     _, reached = run(s, stauchwall_deg=0.0)
     y_last = s['feats'].loc[list(reached), 'y'].max() + trig_row
 
-    y_phi = y0 + (y1 - y0) * (35.0 - ep.PHI_DEG) / 15.0
+    y_phi = y0 + (y1 - y0) * (35.0 - mp.PHI_DEG) / 15.0
     # Drain from N_max to N* = N_max sqrt(G_c / R G_slab) on the continuous profile.
     N_star = SIG_T * H * np.sqrt(G_c_strong / RG_SLAB)
     yy = np.arange(y_phi, 180.0, 0.01)
@@ -148,7 +148,7 @@ def test_thin_slab_band_arrests_at_band():
     band = (15.0, 21.0)       # two clusters: edge clusters' k-NN links span 6 m
     rho_b, h_b = 250.0, 0.4
     E_b, st_b = float(slab_modulus(rho_b)), float(slab_tensile_strength(rho_b))
-    assert R_FIT * g_slab(st_b, h_b, E_b) < 0.3
+    assert mp.R_FIT * g_slab(st_b, h_b, E_b) < 0.3
 
     def snow(y, x):
         if band[0] <= y < band[1]:
@@ -230,7 +230,7 @@ def test_mask_gate_versus_diagnostic(monkeypatch):
     mask[:, :45] = True                              # east quarter outside
     gated = _polygon(s, mask)
     assert frac_outside_mask(gated, mask, T) == 0.0
-    monkeypatch.setattr(rg, 'MASK_MODE', 'diagnostic')
+    monkeypatch.setattr(mp, 'MASK_MODE', 'diagnostic')
     diag = _polygon(s, mask)
     assert diag.area == pytest.approx(30 * 60)
     assert frac_outside_mask(diag, mask, T) == pytest.approx(0.25)
@@ -238,14 +238,14 @@ def test_mask_gate_versus_diagnostic(monkeypatch):
 
 
 def test_unknown_mask_mode_raises(monkeypatch):
-    monkeypatch.setattr(rg, 'MASK_MODE', 'nonsense')
+    monkeypatch.setattr(mp, 'MASK_MODE', 'nonsense')
     s = scene(30, 30, (16, 16), lambda y, x: {})
     with pytest.raises(ValueError):
         _polygon(s, None)
 
 
 def test_unknown_mode_raises(monkeypatch):
-    monkeypatch.setattr(rg, 'ARREST_MODE', 'nonsense')
+    monkeypatch.setattr(mp, 'ARREST_MODE', 'nonsense')
     s = scene(30, 30, (16, 16), lambda y, x: {})
     with pytest.raises(ValueError):
         run(s)
@@ -260,6 +260,6 @@ def test_saturated_trigger_runs_where_zero_tension_starves(monkeypatch):
     s = scene(60, 3, (31, 1), lambda y, x: {'wl_shear_strength': tau_p_for(0.9 * RG_SLAB)})
     _, reached = run(s)
     assert reached == {s['trigger']}
-    monkeypatch.setattr(ep, 'ENERGY_TRIGGER_SATURATED', True)
+    monkeypatch.setattr(mp, 'ENERGY_TRIGGER_SATURATED', True)
     _, reached = run(s)
     assert reached == set(s['pixel_index'])

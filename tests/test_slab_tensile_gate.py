@@ -1,4 +1,4 @@
-"""Slab tensile-failure gate (release_geometry.USE_SLAB_TENSILE_GATE).
+"""Slab tensile-failure gate (model_params.USE_SLAB_TENSILE_GATE).
 
 A candidate is arrested when its slab would break in tension before its
 weak-layer crack reaches critical length: S_t = sigma_t / (3 rho g r_c^2 / h)
@@ -21,10 +21,11 @@ import release_geometry as rg                                   # noqa: E402
 from release_geometry import (                                  # noqa: E402
     cluster_pixel_index, compute_slope_aspect, propagate_release,
 )
+import model_params as mp
 
 T = Affine(1.0, 0.0, 400000.0, 0.0, -1.0, 4000000.0)
 BLOCK, N = 4, 81
-SIG = rg.SLAB_TENSILE_SIGMA_COL
+SIG = mp.SLAB_TENSILE_SIGMA_COL
 
 
 class TestFormula:
@@ -43,7 +44,7 @@ class TestFormula:
 
 def test_on_by_default():
     import re
-    src = Path(rg.__file__).read_text()
+    src = Path(mp.__file__).read_text()
     assert re.search(r'^USE_SLAB_TENSILE_GATE\s*=\s*True\b', src, re.M)
 
 
@@ -110,7 +111,7 @@ def test_scene_values(scene):
 
 
 def test_off_leaves_the_band_reachable(scene, monkeypatch):
-    monkeypatch.setattr(rg, 'USE_SLAB_TENSILE_GATE', False)
+    monkeypatch.setattr(mp, 'USE_SLAB_TENSILE_GATE', False)
     reached, reasons = _run(scene)
     assert scene['band'] <= reached
     assert scene['below'] & reached
@@ -118,7 +119,7 @@ def test_off_leaves_the_band_reachable(scene, monkeypatch):
 
 
 def test_on_arrests_at_the_band(scene, monkeypatch):
-    monkeypatch.setattr(rg, 'USE_SLAB_TENSILE_GATE', True)
+    monkeypatch.setattr(mp, 'USE_SLAB_TENSILE_GATE', True)
     reached, reasons = _run(scene)
     assert not (scene['band'] & reached)
     assert not (scene['below'] & reached)       # the band spans the slope
@@ -127,7 +128,7 @@ def test_on_arrests_at_the_band(scene, monkeypatch):
 
 
 def test_missing_input_is_not_gated(scene, monkeypatch):
-    monkeypatch.setattr(rg, 'USE_SLAB_TENSILE_GATE', True)
+    monkeypatch.setattr(mp, 'USE_SLAB_TENSILE_GATE', True)
     reached, _ = _run(scene, snap=scene['snap'].drop(columns=[SIG]))
     assert scene['band'] <= reached
 
@@ -153,16 +154,16 @@ def test_cluster_support_matches_the_gate(scene):
 def test_trigger_in_failing_slab_releases_nothing(scene, monkeypatch):
     """No polygon and, in particular, no rectangle fallback."""
     trigger = next(iter(scene['band']))
-    monkeypatch.setattr(rg, 'USE_SLAB_TENSILE_GATE', True)
+    monkeypatch.setattr(mp, 'USE_SLAB_TENSILE_GATE', True)
     state = {}
     assert _polygon(scene, trigger, state) is None
     assert state.get('trigger_tensile_failure') is True
 
 
 def test_trigger_gate_off_or_sound_slab_still_releases(scene, monkeypatch):
-    monkeypatch.setattr(rg, 'USE_SLAB_TENSILE_GATE', False)
+    monkeypatch.setattr(mp, 'USE_SLAB_TENSILE_GATE', False)
     assert _polygon(scene, next(iter(scene['band'])), {}) is not None
-    monkeypatch.setattr(rg, 'USE_SLAB_TENSILE_GATE', True)
+    monkeypatch.setattr(mp, 'USE_SLAB_TENSILE_GATE', True)
     state = {}
     assert _polygon(scene, scene['trigger'], state) is not None
     assert 'trigger_tensile_failure' not in state
@@ -173,14 +174,14 @@ def test_rc_zero_is_floored_not_divided_by_zero():
     divide-by-zero and S_t = inf. Floored at RC_MIN_M it is finite, far above
     1 (the gate outcome is unchanged), and raises no warning (Ron, 2026-11-10)."""
     import warnings
-    assert ai.RC_MIN_M == 1.0e-3
+    assert mp.RC_MIN_M == 1.0e-3
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         s0 = float(ai.slab_tensile_support(3000.0, 330.0, 4.0, 0.0))
         s_arr = np.asarray(ai.slab_tensile_support([3000.0, 3000.0], [330.0, 330.0],
                                                    [4.0, 4.0], [0.0, np.nan]))
     assert np.isfinite(s0) and s0 > 1e4
-    assert s0 == float(ai.slab_tensile_support(3000.0, 330.0, 4.0, ai.RC_MIN_M))
+    assert s0 == float(ai.slab_tensile_support(3000.0, 330.0, 4.0, mp.RC_MIN_M))
     assert np.isfinite(s_arr[0]) and np.isnan(s_arr[1])   # missing r_c stays NaN
     # above the floor the closed form is untouched
     rho, h, rc = 300.0, 1.2, 0.35

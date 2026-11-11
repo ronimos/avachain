@@ -156,8 +156,9 @@ nothing. The runout runs it as a second set.
 ## 4. Crack propagation (BFS)
 
 `propagate_release` in `release_geometry.py`, `ARREST_MODE = 'legacy'`. Every
-BFS parameter sits in the **PROPAGATION MODEL PARAMETERS** block at the top of
-the module. None is a literal inside the functions.
+BFS parameter sits in the **PROPAGATION MODEL** section of `model_params.py`
+(since 2026-11-11; before that, at the top of `release_geometry.py`). None is a
+literal inside the functions.
 
 ### 4.1 Flood fill
 

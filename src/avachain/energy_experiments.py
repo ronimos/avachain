@@ -32,6 +32,7 @@ import pandas as pd
 import energy_path as ep
 import release_geometry as rg
 from config import ProjectConfig
+import model_params as mp
 
 SNAPSHOT = '2026-01-18'
 MODES = ('legacy', 'energy', 'slope_only', 'stability_connected')
@@ -241,7 +242,7 @@ def run(scene, trigger, mode, mask_mode='gate'):
         for a in arrested:
             legacy_rej[a['cid']] = a['reason']
 
-    with setting(rg, ARREST_MODE=mode, MASK_MODE=mask_mode):
+    with setting(mp, ARREST_MODE=mode, MASK_MODE=mask_mode):
         poly = make_release_polygon_2d(
             trigger_cluster_id=trigger, A_ca=scene.a_ca(trigger, mel), meloche_df=mel,
             cluster_map=scene.cluster_map, dem=scene.dem, transform=scene.transform,
@@ -322,7 +323,7 @@ def envelope_pool(scene):
     """Start-zone clusters with psi >= stauchwall and a weak layer."""
     sz = {int(c) for c in np.unique(scene.cluster_map[scene.sz_mask]) if c > 0}
     wl = scene.feats_dom['wl_shear_strength'].notna()
-    return sorted(c for c in sz if scene.psi.get(c, 0.0) >= rg.STAUCHWALL_DEG
+    return sorted(c for c in sz if scene.psi.get(c, 0.0) >= mp.STAUCHWALL_DEG
                   and bool(wl.get(c, False)))
 
 
@@ -417,7 +418,7 @@ def step_params(scene, n_sampled=20):
     pi_rows, run_rows = [], []
     for param, variants in PARAM_VARIANTS.items():
         for attr, val in variants:
-            with setting(ep, **{attr: val}):
+            with setting(mp, **{attr: val}):
                 lp = ln_pi_by_cluster(scene).dropna()
                 inside, outside = lp[lp.index.isin(crown)], lp[~lp.index.isin(crown)]
                 bi, bo = lp[lp.index.isin(b_in)], lp[lp.index.isin(b_out)]
@@ -476,7 +477,7 @@ def step_check(scene, trigger=None):
         print(f"  {k:22s} {v:.3f}" if isinstance(v, float) else f"  {k:22s} {v}")
     t = trigger or SHIPPED_TRIGGERS[0]
     state = {}
-    with setting(rg, ARREST_MODE='energy', MASK_MODE='diagnostic'):
+    with setting(mp, ARREST_MODE='energy', MASK_MODE='diagnostic'):
         rg.make_release_polygon_2d(
             trigger_cluster_id=t, A_ca=50.0, meloche_df=scene.mel_dom,
             cluster_map=scene.cluster_map, dem=scene.dem, transform=scene.transform,
@@ -490,10 +491,10 @@ def step_check(scene, trigger=None):
         r = scene.feats_dom.loc[c]
         rho, h, psi = r['slab_density'], r['slab_thickness'], scene.psi[c]
         tn = rho * G_ACC * h * (np.sin(np.radians(psi)) - np.cos(np.radians(psi))
-                                * np.tan(np.radians(ep.PHI_DEG)))
-        D = r['wl_thickness'] if np.isfinite(r['wl_thickness']) else ep.D_WL_FALLBACK
-        gc = r['wl_shear_strength']**2 * (1 + ep.ENERGY_DELTA) / (2 * ep.G_WL / D)
-        gs = r['sigma_t_mean']**2 * h / (2 * plane_stress_modulus(r['E_eff'], ep.NU))
+                                * np.tan(np.radians(mp.PHI_DEG)))
+        D = r['wl_thickness'] if np.isfinite(r['wl_thickness']) else mp.D_WL_FALLBACK
+        gc = r['wl_shear_strength']**2 * (1 + mp.ENERGY_DELTA) / (2 * mp.G_WL / D)
+        gs = r['sigma_t_mean']**2 * h / (2 * plane_stress_modulus(r['E_eff'], mp.NU))
         rec = rec or ep.cell_energy(r, psi)
         checks.append({'cluster': c, 'tau_net_hand': tn, 'tau_net': rec['tau_net'],
                        'G_c_hand': gc, 'G_c': rec['G_c'], 'G_slab_hand': gs,
@@ -512,7 +513,7 @@ def fit_g_wl(lnpi: pd.Series, g_wl: float = None) -> float:
     zone can carry a saturated crack. R and D_wl enter Pi as the same product,
     so this one scale stands for all three.
     """
-    g_wl = ep.G_WL if g_wl is None else g_wl
+    g_wl = mp.G_WL if g_wl is None else g_wl
     return float(g_wl * np.exp(-np.nanmedian(lnpi)))
 
 
@@ -521,7 +522,7 @@ def step_fit(scene):
     lp = ln_pi_by_cluster(scene).dropna()
     sz = lp[lp.index.isin(szc)]
     out = {'date': SNAPSHOT, 'n_start_zone': int(len(sz)),
-           'lnPi_median_at_default': float(sz.median()), 'G_wl_default': ep.G_WL,
+           'lnPi_median_at_default': float(sz.median()), 'G_wl_default': mp.G_WL,
            'G_wl_fit': fit_g_wl(sz)}
     # Same fit on the other dates on disk (start-zone features only)
     for f in sorted(scene.cfg_live.analysis_dir.glob('all_start_zone_features_2026-*.csv')):
@@ -541,18 +542,18 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('step', choices=('fixed', 'envelope', 'params', 'check', 'fit'))
     ap.add_argument('--g-wl', type=float, default=None,
-                    help='energy_path.G_WL for this run (e.g. the value from the fit step)')
+                    help='model_params.G_WL for this run (e.g. the value from the fit step)')
     ap.add_argument('--tag', default='', help='write to experiments/<tag>/')
     ap.add_argument('--trigger-saturated', action='store_true',
-                    help='start the energy BFS at N = N_max (energy_path.ENERGY_TRIGGER_SATURATED)')
+                    help='start the energy BFS at N = N_max (model_params.ENERGY_TRIGGER_SATURATED)')
     ap.add_argument('--project-dir', type=Path, default=Path(__file__).resolve().parents[2])
     ap.add_argument('--n-sampled', type=int, default=20)
     ap.add_argument('--n', type=int, default=300)
     ap.add_argument('--modes', nargs='+', default=list(MODES))
     args = ap.parse_args()
     if args.g_wl is not None:
-        ep.G_WL = args.g_wl
-    ep.ENERGY_TRIGGER_SATURATED = args.trigger_saturated
+        mp.G_WL = args.g_wl
+    mp.ENERGY_TRIGGER_SATURATED = args.trigger_saturated
     scene = Scene(args.project_dir, args.tag)
     scene.out.mkdir(parents=True, exist_ok=True)
     if args.step == 'fit':

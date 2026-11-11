@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "avachai
 
 from snowpack_analysis import (split_wl_slab, assign_cluster_groups,
                                profile_features)
+import model_params as mp
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +120,7 @@ class TestSplitWlSlab:
 
     def test_basal_fcxr_switch_off_restores_the_old_rule(self, monkeypatch):
         import snowpack_analysis as sa
-        monkeypatch.setattr(sa, 'BASAL_FCXR_IS_WL', False)
+        monkeypatch.setattr(mp, 'BASAL_FCXR_IS_WL', False)
         slab, wl, iface = split_wl_slab(np.array([990.0, 450.0, 310.0]),
                                         np.array([-1.5, -1.0, -0.5]))
         assert slab is None
@@ -377,8 +378,8 @@ def test_guard_boundary_is_inclusive_of_equal_depth():
 # so cannot be caught by the acceptance test.
 
 def test_tau_g_feature_floor_matches_standalone():
-    from snowpack_analysis import TAU_G_FEATURE_FLOOR
-    assert TAU_G_FEATURE_FLOOR == 50.0
+    import model_params as mp
+    assert mp.TAU_G_FEATURE_FLOOR == 50.0
 
 
 def test_feature_floor_sits_above_the_trigger_gate():
@@ -387,9 +388,9 @@ def test_feature_floor_sits_above_the_trigger_gate():
     If someone closes it, that is a modelling decision that has to be made in
     ~/avalanche-release-areas first — not a local cleanup.
     """
-    from snowpack_analysis import TAU_G_FEATURE_FLOOR
+    import model_params as mp
     trigger_gate = 40.0
-    assert TAU_G_FEATURE_FLOOR > trigger_gate
+    assert mp.TAU_G_FEATURE_FLOOR > trigger_gate
 
 
 # ---------------------------------------------------------------------------
@@ -509,14 +510,14 @@ class TestFacetSource:
 
     def test_default_is_grain_class(self):
         import snowpack_analysis as sa
-        assert sa.FACET_SOURCE == 'grain_class'
+        assert mp.FACET_SOURCE == 'grain_class'
 
     def test_grain_type_reaches_the_aggregation(self, monkeypatch):
         import snowpack_analysis as sa
         dz, z, sel = np.array([0.5, 0.5]), np.array([-0.25, -0.75]), np.ones(2, bool)
-        monkeypatch.setattr(sa, 'FACET_SOURCE', 'grain_class')
+        monkeypatch.setattr(mp, 'FACET_SOURCE', 'grain_class')
         by_class = sa._slab_layer_aggregate(self._ds(), sel, dz, z)
-        monkeypatch.setattr(sa, 'FACET_SOURCE', 'sphericity')
+        monkeypatch.setattr(mp, 'FACET_SOURCE', 'sphericity')
         by_sph = sa._slab_layer_aggregate(self._ds(), sel, dz, z)
         assert by_class['f_mean_weighted'] == pytest.approx(0.5)
         assert by_sph['f_mean_weighted'] == pytest.approx(0.25)

@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "avachai
 
 import snowpack_analysis as sa                              # noqa: E402
 from snowpack_analysis import theta_knn, theta_plane_fit     # noqa: E402
+import model_params as mp
 
 
 def _grid(step=4.0, extent=60.0):
@@ -144,8 +145,8 @@ class TestThetaPlaneFit:
         tau = 1000.0 + 3.0 * e - 4.0 * n
         a, _, _ = theta_plane_fit(e, n, tau)
         b, _, _ = theta_plane_fit(e, n, tau,
-                                  radius_m=sa.THETA_FIT_RADIUS_M,
-                                  min_neighbours=sa.THETA_FIT_MIN_NEIGHBOURS)
+                                  radius_m=mp.THETA_FIT_RADIUS_M,
+                                  min_neighbours=mp.THETA_FIT_MIN_NEIGHBOURS)
         assert a == pytest.approx(b, nan_ok=True)
 
 
@@ -153,9 +154,9 @@ class TestEstimatorDefault:
     def test_plane_fit_is_the_default(self):
         """Default since 2026-10-09, argued from the L_ss calibration scale.
         'knn' is retained to reproduce every pre-change CSV."""
-        assert sa.THETA_ESTIMATOR == 'plane_fit'
+        assert mp.THETA_ESTIMATOR == 'plane_fit'
 
     def test_fit_radius_is_the_propagation_length(self):
         """The whole argument for 'plane_fit' is that the neighbourhood matches
         the scale Meloche's ramp was calibrated over."""
-        assert sa.THETA_FIT_RADIUS_M == sa.L_SS
+        assert mp.THETA_FIT_RADIUS_M == mp.L_SS

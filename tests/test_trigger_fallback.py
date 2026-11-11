@@ -25,6 +25,7 @@ import jan18_fixture as fx   # puts src/avachain on sys.path
 import analysis_pipeline as ap
 import release_geometry as _rg
 from config import ProjectConfig
+import model_params as mp
 
 # Little Professor shot locations (Ron), [lat, lon] WGS84: the centres of
 # 2025-26 clusters 3500, 2568, 2480 and 4137, as in the slope TOML.
@@ -74,8 +75,8 @@ def _thin_day(tmp_path, monkeypatch, depth_m, points=POINTS, model=False,
     monkeypatch.setattr(ap, "_build_scour_depth_map", lambda *a, **k: {})
     # _build_scenarios writes these module flags; keep them out of other tests.
     for name in ("USE_SLAB_TENSILE_GATE", "ARREST_MODE", "MASK_MODE"):
-        monkeypatch.setattr(_rg, name, getattr(_rg, name))
-    monkeypatch.setattr(_rg, "USE_SLAB_TENSILE_GATE", False)
+        monkeypatch.setattr(mp, name, getattr(mp, name))
+    monkeypatch.setattr(mp, "USE_SLAB_TENSILE_GATE", False)
 
     out = tmp_path / "set"
     out.mkdir()

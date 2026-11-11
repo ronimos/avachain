@@ -7,12 +7,12 @@ without [calibration] runs exactly as before.
 
     [calibration]
     version     = "2026-11-xx.1"        # stamped on every set, report and record
-    c_fit       = 0.045                 # Eq. 20 prefactor (arrest_indices.C_FIT)
+    c_fit       = 0.045                 # Eq. 20 prefactor (model_params.C_FIT)
     size_scale  = 1.0                   # multiplies every [scenarios] size factor
-    facet_a     = 0.5                   # facet strength knockdown (snowpack_analysis)
-    distance_caps = true                # BFS distance caps (release_geometry)
-    tau_g_floor = 350.0                 # Pa, BFS driving-stress floor (release_geometry)
-    tau_ratio_floor = 0.0               # BFS tau_g/tau_p floor, 0 = off (release_geometry)
+    facet_a     = 0.5                   # facet strength knockdown (FACET_STRENGTH_FACTOR)
+    distance_caps = true                # BFS distance caps (USE_DISTANCE_CAPS)
+    tau_g_floor = 350.0                 # Pa, BFS driving-stress floor (TAU_G_ABS_FLOOR)
+    tau_ratio_floor = 0.0               # BFS tau_g/tau_p floor, 0 = off (TAU_RATIO_FLOOR)
     # provenance (free-form, not read by the model):
     events = ["2026-01-18"]; no_event_dates = [...]; objective = "..."; fitted = "..."; commit = "..."
 
@@ -23,22 +23,23 @@ Knobs, and why only these two:
   size_scale  The scenario size factors scale the BFS distance caps and the
               rectangle fallback; their weights are centred on the median log
               factor, so a uniform scale leaves the weights unchanged.
-  facet_a     snowpack_analysis.FACET_STRENGTH_FACTOR, the J&J 1990 sigma_t
+  facet_a     model_params.FACET_STRENGTH_FACTOR, the J&J 1990 sigma_t
               knockdown for faceted layers (module default 0.5). It moves the
               sigma_t_mean / _wl / _ligament columns and the tensile gate, so
               analyze must be re-run (--force) after a change.
-  distance_caps  release_geometry.USE_DISTANCE_CAPS. A structural switch, not
+  distance_caps  model_params.USE_DISTANCE_CAPS. A structural switch, not
               a fitted value: false opens the BFS up/down/cross caps. With the
               caps off, size_scale and the size factors scale nothing in the
               BFS.
-  tau_g_floor release_geometry.TAU_G_ABS_FLOOR, the per-cluster tau_g floor
+  tau_g_floor model_params.TAU_G_ABS_FLOOR, the per-cluster tau_g floor
               of the BFS (module default 350 Pa). Scenarios only; analyze is
               unaffected.
-  tau_ratio_floor release_geometry.TAU_RATIO_FLOOR, the per-cluster tau_g /
+  tau_ratio_floor model_params.TAU_RATIO_FLOOR, the per-cluster tau_g /
               tau_p floor of the BFS (module default 0 = off). Scenarios only.
 The Λ factors are not knobs: with USE_MELOCHE_ARREST they never run.
 """
 from __future__ import annotations
+import model_params as mp
 
 KNOBS = ("c_fit", "size_scale", "facet_a", "distance_caps", "tau_g_floor", "tau_ratio_floor")
 PROVENANCE = ("version", "events", "no_event_dates", "objective", "fitted",
@@ -65,33 +66,28 @@ def _check(cal: dict) -> None:
 
 
 def apply(cfg, quiet: bool = False) -> dict:
-    """Set the module values a slope's [calibration] overrides. Returns what
+    """Set the model_params values a slope's [calibration] overrides. Returns what
     was applied ({} when uncalibrated). Call before analyze or scenarios."""
     cal = dict(getattr(cfg, "calibration", None) or {})
     _check(cal)
-    import arrest_indices as _ai
     applied = {}
     if "c_fit" in cal:
-        _ai.C_FIT = float(cal["c_fit"])
-        applied["c_fit"] = _ai.C_FIT
+        mp.C_FIT = float(cal["c_fit"])
+        applied["c_fit"] = mp.C_FIT
     if "size_scale" in cal:
         applied["size_scale"] = float(cal["size_scale"])
     if "facet_a" in cal:
-        import snowpack_analysis as _sa
-        _sa.FACET_STRENGTH_FACTOR = float(cal["facet_a"])
-        applied["facet_a"] = _sa.FACET_STRENGTH_FACTOR
+        mp.FACET_STRENGTH_FACTOR = float(cal["facet_a"])
+        applied["facet_a"] = mp.FACET_STRENGTH_FACTOR
     if "distance_caps" in cal:
-        import release_geometry as _rg
-        _rg.USE_DISTANCE_CAPS = bool(cal["distance_caps"])
-        applied["distance_caps"] = _rg.USE_DISTANCE_CAPS
+        mp.USE_DISTANCE_CAPS = bool(cal["distance_caps"])
+        applied["distance_caps"] = mp.USE_DISTANCE_CAPS
     if "tau_g_floor" in cal:
-        import release_geometry as _rg
-        _rg.TAU_G_ABS_FLOOR = float(cal["tau_g_floor"])
-        applied["tau_g_floor"] = _rg.TAU_G_ABS_FLOOR
+        mp.TAU_G_ABS_FLOOR = float(cal["tau_g_floor"])
+        applied["tau_g_floor"] = mp.TAU_G_ABS_FLOOR
     if "tau_ratio_floor" in cal:
-        import release_geometry as _rg
-        _rg.TAU_RATIO_FLOOR = float(cal["tau_ratio_floor"])
-        applied["tau_ratio_floor"] = _rg.TAU_RATIO_FLOOR
+        mp.TAU_RATIO_FLOOR = float(cal["tau_ratio_floor"])
+        applied["tau_ratio_floor"] = mp.TAU_RATIO_FLOOR
     if applied and not quiet:
         print(f"  calibration {cal.get('version', '(no version)')}: "
               + ", ".join(f"{k}={v:g}" if not isinstance(v, bool) else f"{k}={v}"

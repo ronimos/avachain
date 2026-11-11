@@ -25,6 +25,7 @@ import jan18_fixture as fx   # puts src/avachain on sys.path
 
 import analysis_pipeline as ap
 import release_geometry as _rg
+import model_params as mp
 
 SNAP = "2026-11-08"
 
@@ -47,7 +48,7 @@ def _run(tmp_path, monkeypatch, hs_m, with_hs=True, shots=False):
     ds = xr.Dataset(data, coords={'location': locs, 'time': times})
     monkeypatch.setattr(ap, "load_dataset", lambda *a, **k: ds)
     for name in ("USE_SLAB_TENSILE_GATE", "ARREST_MODE", "MASK_MODE"):
-        monkeypatch.setattr(_rg, name, getattr(_rg, name))
+        monkeypatch.setattr(mp, name, getattr(mp, name))
 
     cfg = SimpleNamespace(
         analysis_dir=an, resampled_dir=fx.DATA, start_zone_kml=fx.START_ZONE_KML,
