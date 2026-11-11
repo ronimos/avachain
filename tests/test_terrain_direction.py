@@ -29,13 +29,13 @@ from affine import Affine
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "avachain"))
 
 from release_geometry import (  # noqa: E402
-    GAUME_ASPECT_CAP,
     compute_slope_aspect,
     estimate_cross_slope_width,
     find_stauchwall,
     pixel_to_utm,
     project_along_aspect,
 )
+import model_params as mp
 
 # North-up 1 m transform: col -> +easting, row -> -northing.
 T = Affine(1.0, 0.0, 400000.0, 0.0, -1.0, 4000000.0)
@@ -229,7 +229,7 @@ class TestEstimateCrossSlopeWidth:
             1, A_ca=40.0, meloche_df=df, cluster_map=cmap, transform=T_,
             aspect_deg=ASPECT)
         # theta_cross == 0 -> fall back to the aspect cap, not a leaked gradient
-        assert got == pytest.approx(40.0 * GAUME_ASPECT_CAP)
+        assert got == pytest.approx(40.0 * mp.GAUME_ASPECT_CAP)
 
     def test_cross_slope_gradient_is_recovered_exactly(self):
         g = 2.0          # Pa/m along the cross axis
@@ -259,7 +259,7 @@ class TestEstimateCrossSlopeWidth:
         got = estimate_cross_slope_width(
             1, A_ca=40.0, meloche_df=df, cluster_map=cmap, transform=T_,
             aspect_deg=ASPECT)
-        assert got == pytest.approx(40.0 * GAUME_ASPECT_CAP)
+        assert got == pytest.approx(40.0 * mp.GAUME_ASPECT_CAP)
 
     def test_both_flanks_contribute(self):
         """The sector test uses |d.cross|, so neighbours on either flank count."""

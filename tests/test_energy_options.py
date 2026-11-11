@@ -13,6 +13,7 @@ import xarray as xr
 import arrest_indices as ai
 import energy_path as ep
 from snowpack_analysis import profile_features
+import model_params as mp
 
 
 class TestJamieson1990:
@@ -35,7 +36,7 @@ class TestJamieson1990:
         assert 'sigma_t_mean__jamieson1990' not in base
         assert out['sigma_t_mean'] == base['sigma_t_mean']
         f = ai.facetedness(sp, dd)
-        st = ai.slab_tensile_strength_jamieson1990(rho) * (1 - ai.FACET_STRENGTH_FACTOR * f)
+        st = ai.slab_tensile_strength_jamieson1990(rho) * (1 - mp.FACET_STRENGTH_FACTOR * f)
         assert out['sigma_t_mean__jamieson1990'] == pytest.approx(
             ai.tensile_strength_mean(st, dz))
         assert np.isfinite(out['sigma_t_wl__jamieson1990'])
@@ -66,14 +67,14 @@ class TestKwlThickness:
 
     def test_missing_column_falls_back(self):
         row = self.ROW.drop('wl_weakest_thickness')
-        assert ep.wl_thickness(row, 'weakest_element') == ep.D_WL_FALLBACK
+        assert ep.wl_thickness(row, 'weakest_element') == mp.D_WL_FALLBACK
 
     def test_unknown_choice_raises(self):
         with pytest.raises(ValueError):
             ep.wl_thickness(self.ROW, 'nonsense')
 
     def test_default_is_sequence(self):
-        assert ep.KWL_THICKNESS == 'sequence'
+        assert mp.KWL_THICKNESS == 'sequence'
 
 
 def test_ln_pi_is_the_saturated_admit_test():
@@ -101,5 +102,5 @@ def test_energy_e_relation_switch(monkeypatch):
     row = TestKwlThickness.ROW.copy()
     row['E_eff__project_fit'] = 2.5e6
     base = ep.cell_energy(row, 35.0)['G_slab_path']
-    monkeypatch.setattr(ep, 'ENERGY_E_RELATION', 'project_fit')
+    monkeypatch.setattr(mp, 'ENERGY_E_RELATION', 'project_fit')
     assert ep.cell_energy(row, 35.0)['G_slab_path'] == pytest.approx(2.0 * base)

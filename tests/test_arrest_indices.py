@@ -21,7 +21,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "avachain"))
 
 from arrest_indices import (
-    R_FIT,
     arrest_length,
     arrest_length_energy,
     critical_strength,
@@ -36,6 +35,7 @@ from arrest_indices import (
     tensile_length,
     weak_layer_fracture_energy,
 )
+import model_params as mp
 
 # ---------------------------------------------------------------------------
 # Shared calibration inputs (Meloche et al. 2025, Table 1 / §3)
@@ -59,7 +59,7 @@ def _ev(**kw):
         rho=p['rho'], h=p['h'], psi_deg=p['psi_deg'], E=p['E'],
         sigma_t=p['sigma_t'], D_wl=p['D_wl'], G_wl=p['G_wl'],
         theta=p['theta'], nu=p['nu'], phi_deg=p['phi_deg'], delta=p['delta'],
-        tau_p0=p.get('tau_p0'), C=0.045, R=R_FIT,
+        tau_p0=p.get('tau_p0'), C=0.045, R=mp.R_FIT,
     )
 
 
@@ -220,9 +220,9 @@ class TestPrimitiveFunctions:
         sigma_t, h, E, nu = 6e3, 0.5, 4e6, 0.3
         K_wl = 0.2e6 / 0.04  # G_wl / D_wl = 5e6 Pa/m
         delta = 0.0
-        tau_p_star = critical_strength(sigma_t, h, E, K_wl, delta=delta, R=R_FIT, nu=nu)
+        tau_p_star = critical_strength(sigma_t, h, E, K_wl, delta=delta, R=mp.R_FIT, nu=nu)
         R = energy_ratio(tau_p_star, K_wl, sigma_t, h, E, delta=delta, nu=nu)
-        assert R == pytest.approx(R_FIT, rel=1e-6)
+        assert R == pytest.approx(mp.R_FIT, rel=1e-6)
 
     def test_tensile_length_positive_for_positive_k(self):
         val = tensile_length(6e3, 300.0)

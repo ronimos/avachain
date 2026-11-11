@@ -32,110 +32,7 @@ import arrest_indices as _ai
 from arrest_indices import evaluate as _ai_evaluate
 import energy_path as _ep
 from config import RASTER_EPSG
-
-# Slab/weak-layer material constants shared across profile_features and
-# compute_meloche_features (Reiweger et al. 2010; Gaume et al. 2018)
-G_WL = 0.2e6    # weak-layer shear modulus (Pa)
-NU   = 0.3      # slab Poisson's ratio
-
-# Layered-slab aggregation of sigma_t / E (arrest_indices.aggregate_slab).
-# Faceted snow is ~half as strong in tension as rounded snow at equal density
-# (Jamieson & Johnston 1990): sigma_t,i = sigma_t,RG(rho_i) (1 - a f_i).
-# FACET_SOURCE = 'grain_class' (Ron, 2026-10-27) sets f = 1 for J&J's group
-# II: primary FC/DH/FCxr, or a PP/DF/RG primary with a faceted secondary
-# (e.g. 341, "both faceting and rounding"), and 0 otherwise. Code 341 is 24%
-# of Jan 18 slab thickness inside the release, 12% outside.
-# 'grain_class_primary' ignores the secondary form (163ea0f). 'sphericity' is
-# the earlier continuous f = 1 - sphericity, which under-counts FCxr: over the
-# Jan 18 start-zone slabs it gave f 0.35 inside the release / 0.52 outside,
-# against 0.50 / 1.00 by primary class. FACET_SP_REF applies to 'sphericity' only
-# (None = 1 - sphericity outright; rounded layers at ~0.86 keep f ~0.14).
-# The legacy Eq. 20 arrest reads the plain sigma_t column, which has no
-# knockdown, so this moves sigma_t_mean/_wl/_ligament (and A_ca_* built on
-# them), the energy mode and the slab tensile gate.
-FACET_STRENGTH_FACTOR = 0.5
-FACET_SOURCE          = 'grain_class'
-FACET_SP_REF          = None
-# Edge-crack bound: HYPOTHESIS, off because snow has no sourced slab-tension
-# K_Ic(rho). Supply SLAB_K_IC (Pa m^0.5) to enable.
-USE_LIGAMENT_BOUND = True
-# SLAB_K_IC overrides the relation with a constant (Pa m^0.5); None = use
-# K_IC_RELATION. 'borstad2013'/'schweizer2004' are NOT implemented -- their
-# published equations have not been sourced and quoted back for checking.
-SLAB_K_IC          = None
-K_IC_RELATION      = 'schweizer2004'
-LIGAMENT_MODEL     = 'elhaddad'   # or 'lefm' for the uncorrected form
-SELF_CONSISTENT_A0 = False        # True evaluates a0 at F(a0/h) iteratively
-DMAX_FACTOR        = 1.0          # d_max = DMAX_FACTOR * grain_size (both m)
-E_RELATION         = 'vanherwijnen2016'   # or 'project_fit'
-E_RELATIONS_EXTRA  = ('project_fit',)
-ST_RELATIONS_EXTRA = ('jamieson1990',)    # extra sigma_t(rho), emitted as sigma_t_*__<name>
-LIGAMENT_VARIANTS = (
-    ('kirchner2000',     'kirchner2000',  1.0),
-    ('schweizer2004_d1', 'schweizer2004', 1.0),
-    ('schweizer2004_d2', 'schweizer2004', 2.0),
-)
-
-# How θ is estimated from the per-cluster τp field. θ is a property of the LAG
-# it is measured at, not of the snowpack.
-#   'knn'        mean |Δτp|/d over the K_NEIGHBORS nearest cluster centroids.
-#                Reproduces every pre-2026-10-09 CSV and published number.
-#   'plane_fit'  local least-squares plane through τp over all centroids within
-#                THETA_FIT_RADIUS_M, θ = |∇τp|. Estimates the slope-scale ramp
-#                that Meloche's θ represents, instead of the local noise.
-#
-# Measured on Jan 18: start-zone clusters are 3.0 m across and the k = 6
-# neighbourhood averages 3.3 m, so 'knn' samples θ inside the 0.5-10 m band the
-# paper treats as local noise. The τp variogram gives θ(d) = 3.87 + 72/d Pa/m,
-# i.e. at 3.3 m θ is 15% slope-scale trend and 85% local noise. A_ca ∝ 1/θ, so
-# the two estimators differ by ~3.3x in A_ca (median θ 25.19 vs 7.28 Pa/m).
-#
-# Default 'plane_fit' since 2026-10-09, argued from the calibration scale, not
-# the fit: Meloche's θ is the gradient of a linear ramp over L_ss, so the
-# estimator's neighbourhood should be L_ss, not whatever the cluster spacing
-# happens to be. Do NOT pick the estimator by Jan 18 IoU — changing θ moves Π₁,
-# hence the trigger ranking and the whole filter chain.
-#
-# Open caveat: under 'plane_fit' 97.2% of Jan 18 start-zone clusters fall below
-# Meloche's 20 Pa/m validity floor, against 36.2% under 'knn'. That is the
-# strongest objection to the θ-based arrest route as a whole, and it is NOT an
-# argument for reverting — 'knn' only looked compliant because it was measuring
-# noise. See ~/avalanche-release-areas/docs/release_area_methods.md §5.
-L_SS                     = 20.0   # m; steady-state propagation length, Meloche et al. (2025)
-THETA_ESTIMATOR          = 'plane_fit'   # 'knn' | 'plane_fit'
-# The radius IS L_ss, and that identity is the argument for the default: θ is
-# the gradient of a ramp over L_ss, so the neighbourhood must be L_ss.
-THETA_FIT_RADIUS_M       = L_SS
-THETA_FIT_MIN_NEIGHBOURS = 8      # minimum centroids in radius, else θ = NaN
-THETA_MIN                = 1e-6   # Pa/m; below this there is no usable gradient
-
-# Pa; below this the arrest scaling laws are not evaluated and the cluster gets
-# no arrest indices. Deliberately ABOVE the 40 Pa trigger gate
-# (analysis_pipeline.MIN_TAU_G), which leaves a 40-50 Pa band that passes
-# trigger selection with no indices — kept to match
-# ~/avalanche-release-areas config.TAU_G_FEATURE_FLOOR, whose value this is.
-# UNSUPPORTED there and here: Meloche et al. never varied tau_g (h=0.5 m,
-# rho=250, psi=35 fixed in all four campaigns, so tau_g = 703 Pa is the only
-# simulated value). The paper's size caveat is "size 3 or more", not D2+.
-# See THETA_VALID_* for the thresholds the paper does give.
-TAU_G_FEATURE_FLOOR      = 50.0
-
-# Validity range of the arrest scaling laws in θ, from Meloche et al. (2025).
-# The only quantitative propagation thresholds the paper gives:
-#   p.12 "Shear strength gradients of more than 20 Pa m-1 were needed to obtain
-#         crack arrest within the PST simulated length."
-#   p.13 runs with θ < 20 Pa/m were REMOVED from their analysis (no arrest).
-#   p.10 "When the shear strength gradient is larger than around 5,000 Pa m-1,
-#         the gradient is too large, causing crack arrest after L_ss."
-# Recorded, not enforced.
-THETA_VALID_MIN = 20.0      # Pa/m
-THETA_VALID_MAX = 5000.0    # Pa/m
-
-# Crack-speed ratios for the mode II / mode III dynamic tension gradient; the
-# source of truth is arrest_indices. Mode III cannot exceed c_s (Broberg 1989)
-# where mode II runs supershear at ~1.6 c_s.
-MODE2_SPEED_RATIO = _ai.MODE2_SPEED_RATIO
-MODE3_SPEED_RATIO = _ai.MODE3_SPEED_RATIO
+import model_params as mp
 
 # SNOWPACK grain type codes (first digit = grain class)
 WL_TYPES   = set(range(400, 500)) | set(range(500, 600))  # FC (4xx), DH (5xx)
@@ -275,13 +172,6 @@ def assign_cluster_groups(cluster_map, release_mask, start_zone_mask,
 # WL / slab boundary detection
 # -----------------------------------------------------------------------
 
-# Basal FCxr (9xx, rounding facets) under the FC/DH sequence counts as part of
-# the basal weak layer (Ron, 2026-10-25). Without it, 251 of 732 Jan 18 crown
-# clusters had no weak layer: 1-4 basal 990 elements (median 4.7 cm) sat under
-# FC and the first-element test failed. Only a run of FCxr AT THE GROUND is
-# admitted; FCxr above the first FC/DH element still ends the block, so every
-# profile with an FC/DH base splits exactly as before.
-BASAL_FCXR_IS_WL = True
 
 
 def split_wl_slab(grain_type, z):
@@ -312,7 +202,7 @@ def split_wl_slab(grain_type, z):
     # FCxr (9xx) run when BASAL_FCXR_IS_WL.
     is_wl_sorted = (gt_sorted // 100 == 4) | (gt_sorted // 100 == 5)
     n_fcxr = 0
-    if BASAL_FCXR_IS_WL:
+    if mp.BASAL_FCXR_IS_WL:
         while n_fcxr < len(gt_sorted) and gt_sorted[n_fcxr] // 100 == 9:
             n_fcxr += 1
         is_wl_sorted[:n_fcxr] = True
@@ -405,7 +295,7 @@ def profile_features(ds_t_loc, min_depth_cm: float) -> dict:
         return {}
 
     result = {'hs': hs}
-    nu = NU
+    nu = mp.NU
 
     slab_m, wl_m, interface_z = split_wl_slab(gt, z)
 
@@ -568,7 +458,7 @@ def profile_features(ds_t_loc, min_depth_cm: float) -> dict:
         E_slab  = float(_ai.slab_modulus(rho))            # Pa
         sigma_t = float(_ai.slab_tensile_strength(rho))   # Pa
         E_prime = E_slab / (1.0 - nu**2)
-        K_wl    = G_WL / D_wl_m
+        K_wl    = mp.G_WL / D_wl_m
         Lambda  = float(np.sqrt(E_prime * h_m / K_wl))  # characteristic elastic length (m)
         result['E_slab']  = E_slab
         result['sigma_t'] = sigma_t
@@ -602,18 +492,18 @@ def _slab_layer_aggregate(ds_t_loc, slab_sel, dz, z) -> dict:
         gsz = None   # schweizer2004 needs d_max; it degrades to NaN without it
     return _ai.aggregate_slab(
         rho, dz[slab_sel], sp, dd,
-        a=FACET_STRENGTH_FACTOR, sp_ref=FACET_SP_REF,
-        grain_type_i=gt, facet_source=FACET_SOURCE,
+        a=mp.FACET_STRENGTH_FACTOR, sp_ref=mp.FACET_SP_REF,
+        grain_type_i=gt, facet_source=mp.FACET_SOURCE,
         depth_i=-z[slab_sel],
-        K_Ic=SLAB_K_IC if USE_LIGAMENT_BOUND else None,
-        k_ic_relation=(K_IC_RELATION if USE_LIGAMENT_BOUND
-                       and SLAB_K_IC is None else None),
-        ligament_model=LIGAMENT_MODEL,
-        grain_size_i=gsz, dmax_factor=DMAX_FACTOR,
-        e_relation=E_RELATION, e_relations_extra=E_RELATIONS_EXTRA,
-        k_ic_variants=LIGAMENT_VARIANTS if USE_LIGAMENT_BOUND else (),
-        self_consistent_a0=SELF_CONSISTENT_A0,
-        st_relations_extra=ST_RELATIONS_EXTRA)
+        K_Ic=mp.SLAB_K_IC if mp.USE_LIGAMENT_BOUND else None,
+        k_ic_relation=(mp.K_IC_RELATION if mp.USE_LIGAMENT_BOUND
+                       and mp.SLAB_K_IC is None else None),
+        ligament_model=mp.LIGAMENT_MODEL,
+        grain_size_i=gsz, dmax_factor=mp.DMAX_FACTOR,
+        e_relation=mp.E_RELATION, e_relations_extra=mp.E_RELATIONS_EXTRA,
+        k_ic_variants=mp.LIGAMENT_VARIANTS if mp.USE_LIGAMENT_BOUND else (),
+        self_consistent_a0=mp.SELF_CONSISTENT_A0,
+        st_relations_extra=mp.ST_RELATIONS_EXTRA)
 
 
 # -----------------------------------------------------------------------
@@ -753,9 +643,9 @@ def theta_plane_fit(east_m, north_m, tau_p_arr,
     time so a caller can override them by setting the module attribute.
     """
     if radius_m is None:
-        radius_m = THETA_FIT_RADIUS_M
+        radius_m = mp.THETA_FIT_RADIUS_M
     if min_neighbours is None:
-        min_neighbours = THETA_FIT_MIN_NEIGHBOURS
+        min_neighbours = mp.THETA_FIT_MIN_NEIGHBOURS
 
     east_m = np.asarray(east_m, float)
     north_m = np.asarray(north_m, float)
@@ -893,17 +783,17 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
 
     # θ for every cluster up front, by the configured estimator. `cents` are
     # pixel (row, col); row increases southward, so north = -row.
-    if THETA_ESTIMATOR == 'plane_fit':
+    if mp.THETA_ESTIMATOR == 'plane_fit':
         theta_arr, theta_ge, theta_gn = theta_plane_fit(
             east_m=cents[:, 1] * px_m, north_m=-cents[:, 0] * px_m,
             tau_p_arr=tau_p_arr)
-    elif THETA_ESTIMATOR == 'knn':
+    elif mp.THETA_ESTIMATOR == 'knn':
         theta_arr = theta_knn(tau_p_arr, indices, distances, px_m)
         theta_ge = theta_gn = np.full(len(cids_arr), np.nan)
     else:
         raise ValueError(
             f"THETA_ESTIMATOR must be 'knn' or 'plane_fit', "
-            f"got {THETA_ESTIMATOR!r}")
+            f"got {mp.THETA_ESTIMATOR!r}")
     theta_by_cid = {int(c): theta_arr[i] for i, c in enumerate(cids_arr)}
     theta_vec_by_cid = {int(c): (theta_ge[i], theta_gn[i])
                         for i, c in enumerate(cids_arr)}
@@ -939,7 +829,7 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
         # Validity guard: use full gravitational shear (not friction-adjusted) to match
         # the tau_g definition in arrest_indices.evaluate() and the paper.
         tau_g_guard = rho * G_GRAV * h_m * sin_psi
-        if tau_g_guard < TAU_G_FEATURE_FLOOR:
+        if tau_g_guard < mp.TAU_G_FEATURE_FLOOR:
             rows_out.append({'cluster_id': cid, 'tau_g': tau_g_guard,
                              'slope_angle': psi_deg, **energy,
                              'note': 'tau_g below valid range for scaling law'})
@@ -948,7 +838,7 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
         # θ — WL shear strength gradient (Pa/m), by THETA_ESTIMATOR
         theta = float(theta_by_cid.get(int(cid), np.nan))
 
-        if np.isnan(theta) or theta < THETA_MIN:
+        if np.isnan(theta) or theta < mp.THETA_MIN:
             rows_out.append({'cluster_id': cid, 'tau_g': tau_g_guard, 'theta': theta,
                              'slope_angle': psi_deg, **energy})
             continue
@@ -960,11 +850,11 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
 
         ai = _ai_evaluate(
             rho=rho, h=h_m, psi_deg=psi_deg, E=E_slab,
-            sigma_t=sigma_t, D_wl=D_wl_val, G_wl=G_WL,
-            theta=theta, nu=NU, phi_deg=PHI_DEG, delta=DELTA,
+            sigma_t=sigma_t, D_wl=D_wl_val, G_wl=mp.G_WL,
+            theta=theta, nu=mp.NU, phi_deg=PHI_DEG, delta=DELTA,
             tau_p0=tau_p0_val if not np.isnan(tau_p0_val) else None,
-            speed_ratio_along=MODE2_SPEED_RATIO,
-            speed_ratio_cross=MODE3_SPEED_RATIO,
+            speed_ratio_along=mp.MODE2_SPEED_RATIO,
+            speed_ratio_cross=mp.MODE3_SPEED_RATIO,
         )
 
         tau_g_ai   = ai['tau_g']
@@ -1004,7 +894,7 @@ def compute_meloche_features(snap_data: dict, cluster_map: np.ndarray,
             'Lambda':        Lambda_ai,
             # Mode III elastic length from the current (unpublished) derivation.
             # Written so the data side is ready; propagation only reads it when
-            # release_geometry.USE_MODE3_LAMBDA is set.
+            # model_params.USE_MODE3_LAMBDA is set.
             'Lambda_cross':  ai.get('Lambda_cross', np.nan),
             'L_t':           L_t_ai,
             # Distance to first slab fracture, along-slope (supershear) and
@@ -1047,8 +937,8 @@ def _layered_arrest(row, tau_g, theta, psi_deg, h_m, rho_bulk,
             and np.isfinite(h_m) and np.isfinite(theta) and theta > 0):
         return out
 
-    E_prime_eff = E_eff / (1.0 - NU ** 2)
-    out['Lambda_eff'] = float(np.sqrt(E_prime_eff * h_m / (G_WL / D_wl)))
+    E_prime_eff = E_eff / (1.0 - mp.NU ** 2)
+    out['Lambda_eff'] = float(np.sqrt(E_prime_eff * h_m / (mp.G_WL / D_wl)))
     k_f = float(_ai.tension_gradient(rho_bulk, psi_deg, phi_deg))
 
     for key, st in (('A_ca_mean', out['sigma_t_mean']),

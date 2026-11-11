@@ -28,6 +28,7 @@ import release_geometry as _rg
 import runout_step
 from config import ProjectConfig
 from test_trigger_fallback import POINTS, SHOTS
+import model_params as mp
 
 
 def _run(tmp_path, monkeypatch, *, depth_m=0.5, thin=False, no_propagation=False,
@@ -63,8 +64,8 @@ def _run(tmp_path, monkeypatch, *, depth_m=0.5, thin=False, no_propagation=False
                         lambda cm, *a, **k: np.full(cm.shape, depth_m, np.float32))
     monkeypatch.setattr(ap, "_build_scour_depth_map", lambda *a, **k: {})
     for name in ("USE_SLAB_TENSILE_GATE", "ARREST_MODE", "MASK_MODE"):
-        monkeypatch.setattr(_rg, name, getattr(_rg, name))
-    monkeypatch.setattr(_rg, "USE_SLAB_TENSILE_GATE", tensile)
+        monkeypatch.setattr(mp, name, getattr(mp, name))
+    monkeypatch.setattr(mp, "USE_SLAB_TENSILE_GATE", tensile)
     out, shot = tmp_path / "set", tmp_path / "shots"
     out.mkdir()
     ap._build_scenarios(cfg, args, out, shot_dir=shot if shots else None)

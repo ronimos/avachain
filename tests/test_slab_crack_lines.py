@@ -1,4 +1,4 @@
-"""Running slab cracks (release_geometry.USE_SLAB_CRACK_LINES, Ron 2026-11-10).
+"""Running slab cracks (model_params.USE_SLAB_CRACK_LINES, Ron 2026-11-10).
 
 A crack started by the tensile gate runs as a crown (cross-slope) or flank
 (fall line) line through the admitted region while the slab is loaded, and the
@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "avachain"))
 import release_geometry as rg    # noqa: E402
+import model_params as mp
 
 N, S = 12, 3            # N x N clusters, each S x S pixels of 1 m
 FALL = (0.0, -1.0)      # due south, map frame (east, north)
@@ -72,7 +73,7 @@ def test_crown_line_severs_upslope_of_a_downslope_trigger():
 def test_no_net_load_no_line():
     _, cid, cent, _, _ = _grid()
     x = cid(6, 6)
-    severed, st = _run({x: 'flank'}, cid(6, 2), set(cent) - {x}, slope=rg.FRICTION_DEG - 1)
+    severed, st = _run({x: 'flank'}, cid(6, 2), set(cent) - {x}, slope=mp.PHI_DEG - 1)
     assert severed == set() and st['line_clusters'] == 0
 
 
@@ -100,8 +101,8 @@ def test_result_does_not_depend_on_order():
 
 
 def test_defaults_and_cli():
-    assert rg.USE_SLAB_CRACK_LINES is True
-    assert rg.SLAB_CRACK_BAND_M == 5.0 and rg.SLAB_CRACK_ALIGN_COS == 0.707
+    assert mp.USE_SLAB_CRACK_LINES is True
+    assert mp.SLAB_CRACK_BAND_M == 5.0 and mp.SLAB_CRACK_ALIGN_COS == 0.707
     import analysis_pipeline as ap
     import inspect
     assert "--slab-crack-lines" in inspect.getsource(ap)

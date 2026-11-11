@@ -34,6 +34,7 @@ from release_geometry import (                                  # noqa: E402
     compute_slope_aspect,
     propagate_release,
 )
+import model_params as mp
 
 T = Affine(1.0, 0.0, 400000.0, 0.0, -1.0, 4000000.0)
 BLOCK = 4          # cluster side in pixels -> 4 m hop, as on Little Professor
@@ -110,26 +111,26 @@ def _extent(scene, reached):
 @pytest.fixture(autouse=True)
 def no_speed_cap(monkeypatch):
     """Isolate the rings: the mode III distance cap would otherwise bind first."""
-    monkeypatch.setattr(rg, 'USE_MODE3_SPEED_CAP', False)
-    monkeypatch.setattr(rg, 'USE_ANISOTROPIC_RINGS', False)
+    monkeypatch.setattr(mp, 'USE_MODE3_SPEED_CAP', False)
+    monkeypatch.setattr(mp, 'USE_ANISOTROPIC_RINGS', False)
 
 
 class TestDefaults:
     def test_rings_are_off_by_default(self):
         """Checked on the module source, which the autouse fixture overrides."""
-        src = (Path(rg.__file__).read_text()
+        src = (Path(mp.__file__).read_text()
                .split('USE_ANISOTROPIC_RINGS = ')[1].split('\n')[0])
         assert src.strip() == 'False'
 
     def test_ring_step_is_derived_not_hardcoded(self):
-        assert rg.RING_STEP_M is None
+        assert mp.RING_STEP_M is None
 
     def test_speed_ratio_is_broberg_not_a_free_parameter(self):
         """1.6 / 1.0 comes from Broberg (1989) via arrest_indices, and the ring
         budget must reuse it rather than introduce a second constant."""
-        assert rg.MODE2_SPEED_RATIO == 1.6
-        assert rg.MODE3_SPEED_RATIO == 1.0
-        assert rg.MODE3_SPEED_RATIO / rg.MODE2_SPEED_RATIO == 0.625
+        assert mp.MODE2_SPEED_RATIO == 1.6
+        assert mp.MODE3_SPEED_RATIO == 1.0
+        assert mp.MODE3_SPEED_RATIO / mp.MODE2_SPEED_RATIO == 0.625
 
 
 class TestHopLength:
@@ -151,9 +152,9 @@ class TestHopLength:
 class TestAnisotropicGrowth:
     def test_rings_shorten_the_flanks_but_not_the_fall_line(self, scene, monkeypatch):
         """The whole point: cross-slope reach shrinks, along-slope reach does not."""
-        monkeypatch.setattr(rg, 'USE_ANISOTROPIC_RINGS', False)
+        monkeypatch.setattr(mp, 'USE_ANISOTROPIC_RINGS', False)
         _, iso = _run(scene)
-        monkeypatch.setattr(rg, 'USE_ANISOTROPIC_RINGS', True)
+        monkeypatch.setattr(mp, 'USE_ANISOTROPIC_RINGS', True)
         _, ani = _run(scene)
 
         iso_along, iso_cross = _extent(scene, iso)
@@ -164,10 +165,10 @@ class TestAnisotropicGrowth:
         assert len(ani) < len(iso)
 
     def test_released_aspect_ratio_moves_toward_the_speed_ratio(self, scene, monkeypatch):
-        monkeypatch.setattr(rg, 'USE_ANISOTROPIC_RINGS', True)
+        monkeypatch.setattr(mp, 'USE_ANISOTROPIC_RINGS', True)
         _, ani = _run(scene)
         along, cross = _extent(scene, ani)
-        ratio = rg.MODE2_SPEED_RATIO / rg.MODE3_SPEED_RATIO
+        ratio = mp.MODE2_SPEED_RATIO / mp.MODE3_SPEED_RATIO
         assert along / cross == pytest.approx(ratio, rel=0.25)
 
     def test_isotropic_region_is_not_elongated(self, scene):
@@ -180,7 +181,7 @@ class TestAnisotropicGrowth:
     def test_flanks_stay_within_the_reported_budget(self, scene, monkeypatch, capsys):
         """The budget the run reports must actually bound the flank reach, to
         within one cluster width of granularity."""
-        monkeypatch.setattr(rg, 'USE_ANISOTROPIC_RINGS', True)
+        monkeypatch.setattr(mp, 'USE_ANISOTROPIC_RINGS', True)
         _, ani = _run(scene)
         budget = float(capsys.readouterr().out
                        .split('cross-slope budget (')[1].split(' m)')[0])
@@ -199,18 +200,18 @@ class TestAnisotropicGrowth:
         after the fall-line front has stopped. Bounded here at 2x the ideal,
         which the self-inflating version blew through by a factor of ~2.5.
         """
-        monkeypatch.setattr(rg, 'USE_ANISOTROPIC_RINGS', True)
+        monkeypatch.setattr(mp, 'USE_ANISOTROPIC_RINGS', True)
         _, ani = _run(scene)
         along, cross = _extent(scene, ani)
-        ratio = rg.MODE3_SPEED_RATIO / rg.MODE2_SPEED_RATIO
+        ratio = mp.MODE3_SPEED_RATIO / mp.MODE2_SPEED_RATIO
         assert cross < along
         assert cross <= 2.0 * ratio * along
 
     def test_a_zero_budget_is_refused_rather_than_hanging(self, scene, monkeypatch):
         """A zero step or ratio would defer every flank cluster forever."""
-        monkeypatch.setattr(rg, 'USE_ANISOTROPIC_RINGS', True)
-        monkeypatch.setattr(rg, 'RING_STEP_M', 0.0)
-        monkeypatch.setattr(rg, 'MODE3_SPEED_RATIO', 0.0)
+        monkeypatch.setattr(mp, 'USE_ANISOTROPIC_RINGS', True)
+        monkeypatch.setattr(mp, 'RING_STEP_M', 0.0)
+        monkeypatch.setattr(mp, 'MODE3_SPEED_RATIO', 0.0)
         with pytest.raises(ValueError, match='positive ring_step'):
             _run(scene)
 
@@ -223,13 +224,13 @@ class TestMelocheArrestPrefactor:
         import arrest_indices as ai
         a, X = ai.arrest_length(800.0, 300.0, 2.0, 4000.0, delta=1.0, L_t=30.0)
         assert a == pytest.approx(
-            ai.C_FIT * 30.0 * X * np.sqrt(4000.0 / 800.0))
+            mp.C_FIT * 30.0 * X * np.sqrt(4000.0 / 800.0))
 
     def test_stronger_wl_downslope_arrests_at_the_first_hop(self, scene, monkeypatch):
         """WL strength rises 300 Pa/m down the fall line. With C the arrest
         length is ~2.9 m, under the 4 m hop, so the crack must not enter any
         cluster downslope of the trigger. Without C it is ~63 m and runs on."""
-        monkeypatch.setattr(rg, 'USE_MELOCHE_ARREST', True)
+        monkeypatch.setattr(mp, 'USE_MELOCHE_ARREST', True)
         px = scene['pixel_index']
         snap = scene['snap_features'].copy()
         for cid, (rows, _cols) in px.items():

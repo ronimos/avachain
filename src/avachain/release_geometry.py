@@ -36,143 +36,7 @@ import xarray as xr
 from pyproj import Transformer
 
 import arrest_indices as _ai
-
-# ============================================================================
-# PROPAGATION MODEL PARAMETERS
-# Every parameter of the release BFS (propagate_release / _qualifies) is
-# defined between this banner and "END OF PROPAGATION MODEL PARAMETERS" below
-# (Ron, 2026-11-10: no literals inside the functions). They are read at call
-# time, so a slope's [calibration] (calibration.py) or a CLI flag can set them.
-# Defined elsewhere, because analyze shares them:
-#   arrest_indices.C_FIT (Eq. 20 C), MODE2/3_SPEED_RATIO, TOUGHNESS_EDGE_F,
-#   TOUGHNESS_A_FRAC, K_IC_RANGE_MODE; snowpack_analysis.FACET_STRENGTH_FACTOR.
-# The standalone keeps the same values in its config.py.
-# ============================================================================
-
-# ---- Terrain and polygon -----------------------------------------------------
-STAUCHWALL_DEG   = 29.0   # slope threshold for downslope arrest (degrees); Ron 2026-10-27, was 28.0
-FRICTION_DEG     = 27.0   # snow friction angle (degrees), Meloche Table 1
-GAUME_ASPECT_CAP = 2.5    # max width/A_ca ratio (prevents runaway cross-slope)
-MIN_POLYGON_AREA = 200.0  # m² — discard degenerate polygons smaller than this
-
-# ---- Per-cluster arrest floors (_qualifies) ---------------------------------
-# Absolute gravitational-driving-stress floor for crack propagation (Pa).
-# tau_g is the driving LOAD on the weak layer; below this value the WL
-# cannot sustain dynamic fracture, regardless of slope or trigger. Unlike a
-# relative floor, an absolute one can represent a stable slope: if no
-# connected terrain exceeds it, the crack does not propagate.
-# The 540/230 Pa (inside/adjacent) reference this was set from is from older
-# features. On the 11-10 calibrated Jan 18 features the start-zone minimum is
-# 409 Pa (release p5 1554, ski p5 605 Pa), so 350 never binds and Jan 18 does
-# not move below ~1200 Pa (sweep 200-2500, 11-10). Was a function-local literal in propagate_release
-# until 2026-11-10; per slope: [calibration] tau_g_floor.
-TAU_G_ABS_FLOOR        = 350.0  # Pa
-# Load-to-strength floor (Ron, 2026-11-10; both repos; default 0 = off): arrest
-# a cluster whose tau_g / tau_p (wl_shear_strength) is below it. Dimensionless,
-# so unlike TAU_G_ABS_FLOOR it does not encode one snowpack's slab density. On
-# Jan 18 (calibrated features) it separates release from the skied slope like
-# tau_g does (AUC 0.97; medians 0.92 release, 0.54 ski), because SNOWPACK's
-# tau_p is a function of WL density alone (r = 0.99 with rho_wl^2) and varies
-# little. Per slope: [calibration] tau_ratio_floor (Little Professor 0.65 since
-# calibration 2026-11-10.2; Jan 18 IoU plateau 0.60-0.70).
-TAU_RATIO_FLOOR        = 0.0
-MIN_PROPAGATION_SLAB   = 0.50   # m — slab too thin to sustain crack propagation
-MIN_PROPAGATION_LAMBDA = 0.1    # m — slab too weak/compliant to transmit fracture
-                                # Λ = √(E×h³ / (12×G_wl×D_wl)): integrates
-                                # slab thickness, stiffness, and WL properties
-
-# ---- Λ / thickness gradient arrest (dead while USE_MELOCHE_ARREST) ----------
-# DIRECTIONAL relative change. Softening/thinning (a DROP in Lambda or slab
-# thickness) is the physical arrest mechanism and uses a tight threshold;
-# stiffening/thickening (a RISE) favors continued propagation and uses a
-# looser threshold, so the crack is not stopped prematurely by running into
-# stronger/thicker snow.
-#   arrest if  (Λ_nbr - Λ_cur)/Λ_cur  < -LAMBDA_DROP_FACTOR    (softening)
-#   arrest if  (Λ_nbr - Λ_cur)/Λ_cur  > +LAMBDA_RISE_FACTOR    (stiffening)
-#   (same pattern for slab thickness h)
-# size_factor multiplies thresholds → larger size_factor = more tolerant = larger release.
-LAMBDA_DROP_FACTOR     = 0.20   # tight: softening arrests readily
-LAMBDA_RISE_FACTOR     = 0.30   # loose: stiffening rarely arrests
-THICKNESS_DROP_FACTOR  = 0.20   # tight: thinning arrests readily
-THICKNESS_RISE_FACTOR  = 0.30   # loose: thickening rarely arrests
-
-# ---- Distance caps (used only while USE_DISTANCE_CAPS) ----------------------
-# d_up = max(A_ca, D_UP_MIN_M) (D_CAP_DEFAULT_M without an A_ca),
-# d_down = max(Stauchwall distance, D_DOWN_MIN_M), d_lat = max(Gaume width,
-# D_LAT_MIN_M); all but the floor on d_lat scale with size_factor.
-D_UP_MIN_M       = 20.0   # m
-D_DOWN_MIN_M     = 20.0   # m
-D_LAT_MIN_M      = 15.0   # m
-D_CAP_DEFAULT_M  = 50.0   # m; A_ca stand-in when the trigger has none
-
-# Meloche (2025) directional crack-arrest criterion. When True, _qualifies
-# replaces the heuristic Lambda/thickness gradient gates with the field-
-# validated A_ca scaling (Eq. 20): arrest a C->N step where the directed WL
-# shear-strength gradient makes the arrest length shorter than the step.
-# ON since 2026-10-23 (Ron). The Lambda/thickness gates are then skipped, not
-# run alongside. Eq. 20 comes from arrest_indices.arrest_length so the C = 0.045
-# prefactor cannot be dropped; the inline copy that did drop it was 22x too long.
-USE_MELOCHE_ARREST = True
-MELOCHE_DELTA      = 1.0   # softening coefficient δ (Meloche default; their Table 1)
-NU                 = 0.3   # slab Poisson's ratio
-
-# Slab tensile-failure gate (Ron, 2026-10-26; ON by default since 2026-10-27,
-# Ron, both repos; CLI --no-slab-tensile-gate turns it off). Arrest a
-# candidate whose slab would break in tension before its weak-layer crack
-# reaches critical length: S_t = sigma_t / (3 rho g r_c^2 / h) < 1, Schweizer et
-# al. (2014), via arrest_indices.slab_tensile_support. Per-cluster, like gates
-# 4-6, and placed after them. sigma_t is Jamieson & Johnston (1990) with the
-# facet knockdown (FACET_STRENGTH_FACTOR; f by grain class since 2026-10-27,
-# snowpack_analysis.FACET_SOURCE), the strength relation the 2014 paper uses; faceted slabs are ~half as strong at equal density, which is the
-# RG-inside / FC-outside contrast at Jan 18. The threshold is 1, not a fit.
-# Why on: S_t beat every random-arrest control of the same count, and with
-# grain-class sigma_t it costs no trigger it lets through. Against: where
-# S_t = 1 falls depends on how r_c is scaled. A features CSV without
-# SLAB_TENSILE_SIGMA_COL makes it a no-op; step_scenarios warns.
-USE_SLAB_TENSILE_GATE = True
-SLAB_TENSILE_SIGMA_COL = 'sigma_t_mean__jamieson1990'
-
-# Trigger fracture toughness (Ron, 2026-11-10; both repos; CLI
-# --no-trigger-toughness). At the TRIGGER only, sigma_t in S_t is capped by the
-# slab's edge-crack strength K_Ic / (1.122 sqrt(pi h/2))
-# (arrest_indices.toughness_limited_strength), K_Ic the ligament column
-# (Schweizer 2004, extrapolated past its density range). The BFS per-cluster
-# tensile gate is unchanged. On 2026-11-09 it took the Jan 18 ski-track
-# non-triggers from 13/46 releasing to 0/46 and left the five Jan 18 triggers
-# and IoU unchanged; it does not cut the no-event false alarms. A features CSV
-# without TOUGHNESS_K_COL leaves the plain S_t.
-USE_TRIGGER_TOUGHNESS = True
-TOUGHNESS_K_COL = 'K_Ic_ligament'
-
-# BFS distance caps (up: A_ca, down: Stauchwall distance, cross: Gaume width).
-# Default on, both repos. Off (a slope's [calibration] distance_caps = false,
-# or CLI --no-distance-caps) leaves the release bounded by the per-cluster
-# gates, the start zone and MAX_BFS_CLUSTERS. Off, the scenario size factors
-# scale nothing in the BFS (they scale the caps and the rectangle fallback;
-# the Λ/thickness factors are dead while USE_MELOCHE_ARREST is on).
-USE_DISTANCE_CAPS = True
-
-# Running slab cracks (Ron, 2026-11-10; both repos; CLI --no-slab-crack-lines).
-# A slab that the per-cluster tensile gate breaks (slab_tensile_failure) starts
-# a crack IN THE SLAB: a crown if the BFS reached it by an upslope step (runs
-# cross-slope), a flank if by a cross-slope step (runs along the fall line);
-# downslope steps start none (Stauchwall, compression). After the BFS each crack
-# runs as a line, one best-aligned neighbour per step (within
-# SLAB_CRACK_ALIGN_COS of the line), while the slab there is loaded: inside the
-# admitted region, with detached slab below a crown / beside a flank within
-# SLAB_CRACK_BAND_M, and the band-mean slope above FRICTION_DEG. The area the
-# lines sever from the trigger (4-connected pixels) is removed; the line
-# clusters stay (they are the boundary). Order-independent by construction.
-# No fracture toughness in the run test: with any static load of a detached
-# slab (full weight, or Stauchwall- and flank-supported, q*min(L,W)/2), K was
-# 10-75x the slab K_Ic on Jan 18 (0 of 2220 steps stopped), because a crack a
-# few metres long needs < ~0.5 kPa to arrest. Jan 18 (calibration 2026-11-10.2):
-# IoU 0.601 -> 0.610, area 7429 -> 6831 m2, AUC 0.801 -> 0.848, ski 0/46, same
-# five triggers; 419 m2 overshoot removed for 179 m2 of release; 9/10 no-event
-# days unchanged (the tensile gate never fires there).
-USE_SLAB_CRACK_LINES = True
-SLAB_CRACK_BAND_M    = 5.0     # m; half-width of the strip that sets L and W
-SLAB_CRACK_ALIGN_COS = 0.707   # a line step must lie within 45 deg of the line
+import model_params as mp
 
 
 def cluster_tensile_support(cid, meloche_df, snap_features) -> float:
@@ -191,130 +55,22 @@ def cluster_tensile_support(cid, meloche_df, snap_features) -> float:
             return float(v)
         except (TypeError, ValueError):
             return np.nan
-    sigma_t = _get(snap_features, SLAB_TENSILE_SIGMA_COL)
+    sigma_t = _get(snap_features, mp.SLAB_TENSILE_SIGMA_COL)
     h = _get(snap_features, 'slab_thickness')
-    if USE_TRIGGER_TOUGHNESS:
+    if mp.USE_TRIGGER_TOUGHNESS:
         sigma_t = _ai.toughness_limited_strength(
-            sigma_t, _get(snap_features, TOUGHNESS_K_COL), h)
+            sigma_t, _get(snap_features, mp.TOUGHNESS_K_COL), h)
     return float(_ai.slab_tensile_support(
         sigma_t, _get(snap_features, 'slab_density'), h,
         _get(meloche_df, 'rc_wl')))
 
-THETA_MIN = 1e-6   # Pa/m; θ below this is treated as no usable gradient
-
-# Cross-slope θ sampling in estimate_cross_slope_width(). The lateral sample has
-# to sit near the true cross-slope axis (aspect ± 90°). Selecting it by raster
-# row/col instead — "same row ± 50 px, column offset > 5 px" — silently assumes
-# the fall line runs north-south. On the Jan 18 ESE start zone (aspect 113-120°,
-# cross axis 23-30°) that put the chosen neighbours a mean 30° off the cross
-# axis, with some within 1.2° of the fall line, so theta_cross was contaminated
-# by the along-slope gradient. Fixed 2026-10-09 in release_areas, ported here.
-THETA_CROSS_SECTOR_DEG = 30.0  # ± half-angle accepted about the sampling axis
-THETA_CROSS_MIN_SEP_M  = 5.0   # m; closer pairs make |Δτp|/d noise-dominated
-THETA_CROSS_MAX_SEP_M  = 50.0  # m; beyond this the pair is not abeam
-
-# ---- Mode III (cross-slope) elastic length -----------------------------
-# Λ_III is a different and SMALLER quantity than the along-slope (mode II) Λ.
-# elastic_length_cross() now matches Gaume's own antiplane-shear derivation
-# exactly (personal communication, 2026-10-18; not yet published) — see
-# ~/avalanche-release-areas/docs/release_area_methods.md §3. Whether antiplane
-# shear (vs. bending) is the right cross-slope regime is still open; Gaume's
-# open item. The flag stays off because a single global NU makes Λ_III/Λ_II
-# a constant, which the continuity gate is provably invariant to. Only a
-# Λ_III with different spatial structure can move the flanks.
-USE_MODE3_LAMBDA = False
-
-# Λ continuity thresholds, cross-slope (mode III / flanks). Separate knobs so
-# the flanks can be tuned independently once Λ_III is known; identical to the
-# along-slope pair for now, so splitting the code changed no results.
-LAMBDA_CROSS_DROP_FACTOR = 0.20
-LAMBDA_CROSS_RISE_FACTOR = 0.30
-
-# ---- Mode III (cross-slope) crack-speed cap ----------------------------
-# Upslope (mode II) cracks run supershear at ~1.6 c_s; mode III cracks cannot
-# exceed c_s (Broberg 1989). Since k_x = k_f c_p²/(c_p² + ȧ²), a slower crack
-# builds slab tension FASTER per unit advance, so the distance to first slab
-# fracture is shorter cross-slope: L_dyn,III / L_dyn,II = 0.712 at ν = 0.3.
-# Unlike USE_MODE3_LAMBDA this is an absolute distance cap, so it does change
-# results. Only the restrictive half of mode III is coded — because G < E′ an
-# equal-strength slab has a *larger* energy cap cross-slope, but that needs a
-# flank strength τ_flank with no parameterisation. Left on because Broberg's
-# limit holds independently of any one event; do not tune it to Jan 18.
-MODE2_SPEED_RATIO   = _ai.MODE2_SPEED_RATIO   # ȧ / c_s upslope, Meloche et al. (2025)
-MODE3_SPEED_RATIO   = _ai.MODE3_SPEED_RATIO   # ȧ / c_s cross-slope, Broberg (1989)
-#
-# DEFAULT FLIPPED True -> False on 2026-10-10 (Ron's call), mirroring
-# release_areas/config.py. The argument is COMPLETENESS, not fit: only the
-# restrictive half of mode III is coded. Because G < E′ an equal-strength slab
-# also has a LARGER energy cap cross-slope (G_slab,III = τ_flank²h/2G against
-# σt²h/2E′), which pushes the other way, but that needs a flank strength
-# τ_flank with no parameterisation (blocked on a Cam-Clay β ambiguity). The
-# honest default for one side of a two-sided effect is off.
-#
-# Jan 18 corroborates without deciding it: cap off gives mean IoU 0.622 vs
-# 0.562 and area/observed 0.78 vs 0.63, i.e. the cap is what makes the model
-# under-predict area. On n = 1 that cannot carry the decision.
-#
-# TO FLIP BACK: once τ_flank lands, enable BOTH halves together — the cap and
-# slab_energy_cap_cross. This one alone restores the same one-sided bias.
-#
-# Consequence worth knowing: with the cap off, d_lat IS the Gaume θ-ratio
-# width, so that path is live again rather than dormant.
-USE_MODE3_SPEED_CAP = False  # apply the ratio to the lateral distance cap
-
-# ---- Anisotropic BFS rings (cross-slope growth rate) -------------------
-# The same speed ratio applied to the *growth* of the flood-fill rather than
-# only to a terminal distance cap: if one ring stands for one increment of
-# crack-front advance in TIME, the front should already be ~1.6x further
-# along-slope when it arrives. A cross-slope candidate is admitted at ring k
-# only once dist <= k * RING_STEP_M * (MODE3/MODE2), and is otherwise DEFERRED,
-# so arrest is still evaluated on arrival. The clock counts only rings that
-# admitted an along-slope cluster — the flanks are fed by the advancing front,
-# so driving the budget from the global ring counter lets flank growth buy
-# itself time and the constraint evaporates.
-#
-# RING_STEP_M = None derives the step from the median adjacent-cluster centroid
-# separation, i.e. one hop, so the fast axis keeps the unmodified BFS rate.
-#
-# Measured on Jan 18 (release-areas, 2026-10-10): with the default caps this is
-# INERT — d_lat = A_ca x 0.712 = 29-38 m binds before the ring budget (50-62 m),
-# so areas and IoU are unchanged. With the lateral cap removed it recovers most
-# of the cap's effect from the speed ratio alone (mean area 1.69x -> 0.85x
-# observed, best IoU 0.392 -> 0.642) and aligns the crown axis to 119 deg
-# against an observed 120.5 deg, but it under-elongates: L/W 1.9-2.1 against an
-# observed 3.2. Off by default. Do not tune the ratio — it is Broberg's.
-USE_ANISOTROPIC_RINGS = False
-RING_STEP_M           = None
-
-# ---- BFS region-size cap ---------------------------------------------------
-# Safety cap on the BFS flood-fill.  When it binds, the polygon is labelled
-# [CAP-BOUND] so it is never mistaken for a physics-limited result.
-# Measured on Jan 18: 500 → 2000 moves median area ~20 % (5 366 → 6 405 m²)
-# and best IoU 0.639 → 0.667; region size saturates by ~1 000 clusters so
-# any value ≥ 1 000 gives the same answer — raising it is not tuning.
-MAX_BFS_CLUSTERS = 2000
-
-# ---- Arrest rule and start-zone mask use (path-energy brief) ---------------
-# 'legacy' is propagate_release as before. 'energy' is the path-energy
-# hypothesis (energy_path.py, propagate_release_energy). 'slope_only' and
-# 'stability_connected' are mechanics-free baselines (baselines.py). Every
-# mode but 'legacy' has no rectangle fallback and no MIN_POLYGON_AREA floor.
-ARREST_MODE = 'legacy'
-# 'gate': the BFS rejects clusters outside the start-zone KML and the polygon is
-# clipped to it. 'diagnostic': the KML is used only in reporting
-# (frac_outside_mask); 17% of the observed Jan 18 crown lies outside it.
-MASK_MODE   = 'gate'
-
-# ============================================================================
-# END OF PROPAGATION MODEL PARAMETERS
-# ============================================================================
 
 
 def slab_crack_orientation(xy_from, xy_to, fall_xy, align_cos=None):
     """'crown' for an upslope step from xy_from to xy_to, 'flank' for a
     cross-slope step, None for downslope or a zero step. fall_xy is the unit
     downslope vector in the map frame (east, north)."""
-    align_cos = SLAB_CRACK_ALIGN_COS if align_cos is None else align_cos
+    align_cos = mp.SLAB_CRACK_ALIGN_COS if align_cos is None else align_cos
     dx, dy = xy_to[0] - xy_from[0], xy_to[1] - xy_from[1]
     d = float(np.hypot(dx, dy))
     if d < 1e-9:
@@ -346,9 +102,9 @@ def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
     The result does not depend on the order of reached, cracks or neighbours.
     """
     from scipy import ndimage
-    phi_deg = FRICTION_DEG if phi_deg is None else phi_deg
-    band = SLAB_CRACK_BAND_M if band_m is None else band_m
-    align_cos = SLAB_CRACK_ALIGN_COS if align_cos is None else align_cos
+    phi_deg = mp.PHI_DEG if phi_deg is None else phi_deg
+    band = mp.SLAB_CRACK_BAND_M if band_m is None else band_m
+    align_cos = mp.SLAB_CRACK_ALIGN_COS if align_cos is None else align_cos
     reached = set(reached)
     fx, fy = fall_xy
     tan_phi = np.tan(np.radians(phi_deg))
@@ -457,7 +213,7 @@ def mode3_speed_cap_ratio(trigger_cluster_id: int,
     predating the column still get the cap. Returns None when
     USE_MODE3_SPEED_CAP is off, which restores pre-cap behaviour.
     """
-    if not USE_MODE3_SPEED_CAP:
+    if not mp.USE_MODE3_SPEED_CAP:
         return None
 
     if (not meloche_df.empty and 'mode3_length_ratio' in meloche_df.columns
@@ -469,7 +225,7 @@ def mode3_speed_cap_ratio(trigger_cluster_id: int,
 
     # E and rho cancel out of the ratio, so any positive pair works here.
     return float(_ai.mode3_length_ratio(
-        4.0e6, 250.0, NU, MODE2_SPEED_RATIO, MODE3_SPEED_RATIO))
+        4.0e6, 250.0, mp.NU, mp.MODE2_SPEED_RATIO, mp.MODE3_SPEED_RATIO))
 
 
 def _hop_length_m(neighbours: dict, centroids: dict) -> float:
@@ -504,7 +260,7 @@ def directional_lambda(props: dict, is_cross: bool) -> float:
     update `arrest_indices.elastic_length_cross()` and set USE_MODE3_LAMBDA —
     no other change should be needed.
     """
-    if is_cross and USE_MODE3_LAMBDA:
+    if is_cross and mp.USE_MODE3_LAMBDA:
         lam = props.get('Lambda_cross', np.nan)
         if not np.isnan(lam):
             return lam
@@ -635,7 +391,7 @@ def find_stauchwall(trigger_row: int,
                     slope_grid: np.ndarray,
                     aspect_grid: np.ndarray,
                     transform=None,
-                    threshold_deg: float = STAUCHWALL_DEG,
+                    threshold_deg: float = None,
                     max_steps: int = 500
                     ) -> tuple[int, int]:
     """
@@ -660,6 +416,7 @@ def find_stauchwall(trigger_row: int,
     References: Perzl (2007) JRC; Swiss ALIP/PRA; Maggioni & Gruber;
                 Bühler et al.; Veitinger et al. (2016).
     """
+    threshold_deg = mp.STAUCHWALL_DEG if threshold_deg is None else threshold_deg
     nrows, ncols = slope_grid.shape
     row, col     = trigger_row, trigger_col
     row_f, col_f = float(trigger_row), float(trigger_col)
@@ -718,7 +475,7 @@ def _sector_theta(offsets, axis_x: float, axis_y: float,
     Gaume width is formed from two estimates made the same way, at the same
     lag, from the same τp field.
     """
-    cos_min = np.cos(np.radians(THETA_CROSS_SECTOR_DEG))
+    cos_min = np.cos(np.radians(mp.THETA_CROSS_SECTOR_DEG))
     sel = sorted(((cid, d) for cid, dx, dy, d in offsets
                   if abs(dx * axis_x + dy * axis_y) / d >= cos_min),
                  key=lambda t: t[1])[:n_neighbors]
@@ -743,7 +500,7 @@ def estimate_cross_slope_width(
         snap_features: Optional[pd.DataFrame] = None,
         pixel_index: Optional[dict] = None,
         n_lateral_neighbors: int = 6,
-        gaume_aspect_cap: float = GAUME_ASPECT_CAP,
+        gaume_aspect_cap: float = None,
         aspect_deg: Optional[float] = None) -> float:
     """
     Estimate cross-slope release width (m) using Gaume et al. (2015) / θ.
@@ -778,6 +535,7 @@ def estimate_cross_slope_width(
     Gaume et al. (2015) The Cryosphere 9(2):795–804
     Meloche et al. (2025) JGR Earth Surface, Fig.13 and Sec.4
     """
+    gaume_aspect_cap = mp.GAUME_ASPECT_CAP if gaume_aspect_cap is None else gaume_aspect_cap
     if meloche_df.empty or 'theta' not in meloche_df.columns:
         return A_ca
 
@@ -789,7 +547,7 @@ def estimate_cross_slope_width(
     except (KeyError, TypeError):
         return A_ca
 
-    if np.isnan(theta_down) or theta_down < THETA_MIN:
+    if np.isnan(theta_down) or theta_down < mp.THETA_MIN:
         return A_ca
 
     tau_frame, tau_col = _tau_p_lookup(meloche_df, snap_features)
@@ -821,7 +579,7 @@ def estimate_cross_slope_width(
         c_x, c_y = pixel_to_utm(int(round(c_row)), int(round(c_col)), transform)
         dx, dy   = c_x - t_x, c_y - t_y
         dist_m   = float(np.hypot(dx, dy))
-        if THETA_CROSS_MIN_SEP_M <= dist_m <= THETA_CROSS_MAX_SEP_M:
+        if mp.THETA_CROSS_MIN_SEP_M <= dist_m <= mp.THETA_CROSS_MAX_SEP_M:
             offsets.append((cid, dx, dy, dist_m))
     if not offsets:
         return A_ca
@@ -835,10 +593,10 @@ def estimate_cross_slope_width(
     # CSV θ reintroduces the estimator/lag mismatch, so it is a last resort.
     theta_along = _sector_theta(offsets, fall_x, fall_y, tau_trigger,
                                 tau_frame, tau_col, n_lateral_neighbors)
-    if np.isnan(theta_along) or theta_along < THETA_MIN:
+    if np.isnan(theta_along) or theta_along < mp.THETA_MIN:
         theta_along = theta_down
 
-    if theta_cross > THETA_MIN:
+    if theta_cross > mp.THETA_MIN:
         width_factor = min(theta_along / theta_cross, gaume_aspect_cap)
     else:
         width_factor = gaume_aspect_cap
@@ -885,8 +643,8 @@ def make_release_polygon_2d(
         start_zone_mask: Optional[np.ndarray] = None,
         snap_features: 'Optional[pd.DataFrame]' = None,
         size_factor: float = 1.0,
-        stauchwall_deg: float = STAUCHWALL_DEG,
-        max_clusters: int = MAX_BFS_CLUSTERS,
+        stauchwall_deg: float = None,
+        max_clusters: int = None,
         use_propagation: bool = True,
         pixel_index: Optional[dict] = None,
         state_out: Optional[dict] = None,
@@ -918,9 +676,11 @@ def make_release_polygon_2d(
 
     Returns shapely Polygon (UTM) or None.
     """
-    if MASK_MODE not in ('gate', 'diagnostic'):
-        raise ValueError(f"unknown MASK_MODE {MASK_MODE!r}")
-    if MASK_MODE == 'diagnostic':
+    stauchwall_deg = mp.STAUCHWALL_DEG if stauchwall_deg is None else stauchwall_deg
+    max_clusters = mp.MAX_BFS_CLUSTERS if max_clusters is None else max_clusters
+    if mp.MASK_MODE not in ('gate', 'diagnostic'):
+        raise ValueError(f"unknown MASK_MODE {mp.MASK_MODE!r}")
+    if mp.MASK_MODE == 'diagnostic':
         start_zone_mask = None      # mask is used only in reporting
 
     slope_grid, _ = compute_slope_aspect(dem)
@@ -952,8 +712,9 @@ def make_release_polygon_2d(
         # Simplify to keep intersection fast — 1m tolerance at 1m grid
         sw_polygon = sw_polygon.simplify(1.0, preserve_topology=True)
 
-    def _clip_polygon(poly, min_area=MIN_POLYGON_AREA):
+    def _clip_polygon(poly, min_area=None):
         """Clip polygon to start zone AND stauchwall, return largest piece."""
+        min_area = mp.MIN_POLYGON_AREA if min_area is None else min_area
         if poly is None or poly.is_empty:
             return None
         if sz_polygon is not None:
@@ -976,12 +737,12 @@ def make_release_polygon_2d(
             return None
         return poly
 
-    energy_mode = ARREST_MODE != 'legacy'    # energy and the baselines
+    energy_mode = mp.ARREST_MODE != 'legacy'    # energy and the baselines
 
     # Slab tensile gate on the trigger itself: no release, and no rectangle
     # fallback, which would otherwise put a polygon on a slab that cannot
     # carry a crack.
-    if USE_SLAB_TENSILE_GATE and not energy_mode and use_propagation:
+    if mp.USE_SLAB_TENSILE_GATE and not energy_mode and use_propagation:
         s_t = cluster_tensile_support(trigger_cluster_id, meloche_df, snap_features)
         if np.isfinite(s_t) and s_t < 1.0:
             print(f"  Trigger {trigger_cluster_id}: slab tensile support "
@@ -1010,7 +771,7 @@ def make_release_polygon_2d(
             wave_callback      = wave_callback,
         )
         if polygon is not None:
-            polygon = _clip_polygon(polygon, 0.0 if energy_mode else MIN_POLYGON_AREA)
+            polygon = _clip_polygon(polygon, 0.0 if energy_mode else mp.MIN_POLYGON_AREA)
             if polygon is not None:
                 return polygon
         if energy_mode:
@@ -1089,12 +850,12 @@ def propagate_release(
         slope_grid: np.ndarray,
         transform,
         start_zone_mask: Optional[np.ndarray] = None,
-        stauchwall_deg: float = STAUCHWALL_DEG,
+        stauchwall_deg: float = None,
         size_factor: float = 1.0,
         A_ca: Optional[float] = None,
         snap_features: 'Optional[pd.DataFrame]' = None,
-        k_neighbours: int = 8,
-        max_clusters: int = MAX_BFS_CLUSTERS,
+        k_neighbours: Optional[int] = None,
+        max_clusters: int = None,
         wave_callback=None,
         pixel_index: Optional[dict] = None,
         aspect_grid: Optional[np.ndarray] = None,
@@ -1131,7 +892,10 @@ def propagate_release(
       < 1.0 → looser threshold  → larger release  (more terrain qualifies)
       = 1.0 → baseline: all terrain as unstable as trigger
     """
-    if ARREST_MODE == 'energy':
+    stauchwall_deg = mp.STAUCHWALL_DEG if stauchwall_deg is None else stauchwall_deg
+    max_clusters = mp.MAX_BFS_CLUSTERS if max_clusters is None else max_clusters
+    k_neighbours = mp.BFS_K_NEIGHBOURS if k_neighbours is None else k_neighbours
+    if mp.ARREST_MODE == 'energy':
         return propagate_release_energy(
             trigger_cluster_id, cluster_map, dem, slope_grid, transform,
             start_zone_mask=start_zone_mask, stauchwall_deg=stauchwall_deg,
@@ -1139,16 +903,16 @@ def propagate_release(
             max_clusters=max_clusters, pixel_index=pixel_index,
             aspect_grid=aspect_grid, wave_callback=wave_callback,
             state_out=state_out)
-    if ARREST_MODE in ('slope_only', 'stability_connected'):
+    if mp.ARREST_MODE in ('slope_only', 'stability_connected'):
         from baselines import propagate_baseline
         return propagate_baseline(
-            ARREST_MODE, trigger_cluster_id, cluster_map, dem, slope_grid,
+            mp.ARREST_MODE, trigger_cluster_id, cluster_map, dem, slope_grid,
             transform, start_zone_mask=start_zone_mask,
             stauchwall_deg=stauchwall_deg, snap_features=snap_features,
             k_neighbours=k_neighbours, max_clusters=max_clusters,
             pixel_index=pixel_index, state_out=state_out)
-    if ARREST_MODE != 'legacy':
-        raise ValueError(f"unknown ARREST_MODE {ARREST_MODE!r}")
+    if mp.ARREST_MODE != 'legacy':
+        raise ValueError(f"unknown ARREST_MODE {mp.ARREST_MODE!r}")
 
     from collections import deque
     from shapely.geometry import MultiPolygon
@@ -1175,10 +939,10 @@ def propagate_release(
     # Pi1 retained for reporting only
     threshold = pi1_trigger  # informational
 
-    # TAU_G_ABS_FLOOR and the other BFS parameters: PROPAGATION MODEL PARAMETERS, module top.
+    # TAU_G_ABS_FLOOR and the other BFS parameters: model_params, PROPAGATION MODEL.
 
     print(f"    Pi1_trigger={pi1_trigger:.3f}  "
-          f"tau_g_floor={TAU_G_ABS_FLOOR:.0f}Pa  tau_ratio_floor={TAU_RATIO_FLOOR:g}  "
+          f"tau_g_floor={mp.TAU_G_ABS_FLOOR:.0f}Pa  tau_ratio_floor={mp.TAU_RATIO_FLOOR:g}  "
           f"size_factor={size_factor:.2f}")
 
     # --- Build per-cluster lookup: Pi1, mean slope ---
@@ -1207,8 +971,8 @@ def propagate_release(
     t_aspect = float(aspect_grid[t_row, t_col])
 
     # Upslope distance cap: A_ca (Meloche) — no upslope limit for downslope/lateral
-    d_up = (max(A_ca, D_UP_MIN_M) if A_ca else D_CAP_DEFAULT_M) * size_factor
-    caps = USE_DISTANCE_CAPS
+    d_up = (max(A_ca, mp.D_UP_MIN_M) if A_ca else mp.D_CAP_DEFAULT_M) * size_factor
+    caps = mp.USE_DISTANCE_CAPS
 
     # Stauchwall distance (downslope hard cap)
     sw_row, sw_col = find_stauchwall(
@@ -1216,7 +980,7 @@ def propagate_release(
         threshold_deg=stauchwall_deg)
     sw_x, sw_y = pixel_to_utm(sw_row, sw_col, transform)
     d_down = max(float(np.sqrt((sw_x - t_x)**2 + (sw_y - t_y)**2)),
-                 D_DOWN_MIN_M) * size_factor
+                 mp.D_DOWN_MIN_M) * size_factor
 
     print(f"    distance caps: up={d_up:.0f}m  down={d_down:.0f}m")
 
@@ -1250,7 +1014,7 @@ def propagate_release(
               f"WL strength criterion disabled")
 
     # Lateral distance cap from Gaume cross-slope width estimate
-    A_ca_base   = A_ca if A_ca else D_CAP_DEFAULT_M
+    A_ca_base   = A_ca if A_ca else mp.D_CAP_DEFAULT_M
     d_lat_gaume = estimate_cross_slope_width(
         trigger_cluster_id, A_ca_base,
         meloche_df, cluster_map, transform,
@@ -1266,13 +1030,13 @@ def propagate_release(
     if mode3_ratio is not None:
         d_lat_speed = A_ca_base * mode3_ratio * size_factor
         d_lat = min(d_lat, d_lat_speed)
-        print(f"    d_lat={max(d_lat, D_LAT_MIN_M):.0f}m  "
+        print(f"    d_lat={max(d_lat, mp.D_LAT_MIN_M):.0f}m  "
               f"(gaume={d_lat_gaume:.0f}m, mode3_speed_cap={d_lat_speed:.0f}m "
               f"@ ratio {mode3_ratio:.3f})")
     else:
-        print(f"    d_lat={max(d_lat, D_LAT_MIN_M):.0f}m  (gaume only, "
+        print(f"    d_lat={max(d_lat, mp.D_LAT_MIN_M):.0f}m  (gaume only, "
               f"mode III speed cap off)")
-    d_lat = max(d_lat, D_LAT_MIN_M)
+    d_lat = max(d_lat, mp.D_LAT_MIN_M)
     if not caps:
         d_up = d_down = d_lat = np.inf
         print("    distance caps OFF (USE_DISTANCE_CAPS)")
@@ -1310,7 +1074,7 @@ def propagate_release(
                     props[col] = float(v)
         if snap_features is not None and cid in snap_features.index:
             for col in ['slab_thickness', 'slab_density',
-                        'wl_shear_strength', 'sigma_t', SLAB_TENSILE_SIGMA_COL]:
+                        'wl_shear_strength', 'sigma_t', mp.SLAB_TENSILE_SIGMA_COL]:
                 if col in snap_features.columns:
                     v = snap_features.loc[cid, col]
                     if isinstance(v, pd.Series): v = v.iloc[0]
@@ -1383,36 +1147,36 @@ def propagate_release(
         # relative floor, which could never represent a genuinely stable slope.
         nbr_props = _get_props(cid)
         tau_g_nbr = nbr_props.get('tau_g', np.nan)
-        if not np.isnan(tau_g_nbr) and tau_g_nbr < TAU_G_ABS_FLOOR:
+        if not np.isnan(tau_g_nbr) and tau_g_nbr < mp.TAU_G_ABS_FLOOR:
             return False, 'tau_g_below_floor'
-        if TAU_RATIO_FLOOR > 0:
+        if mp.TAU_RATIO_FLOOR > 0:
             tau_p_nbr = nbr_props.get('wl_shear_strength', np.nan)
             if (np.isfinite(tau_g_nbr) and np.isfinite(tau_p_nbr) and tau_p_nbr > 0
-                    and tau_g_nbr / tau_p_nbr < TAU_RATIO_FLOOR):
+                    and tau_g_nbr / tau_p_nbr < mp.TAU_RATIO_FLOOR):
                 return False, 'tau_ratio_below_floor'
 
         # Minimum slab thickness
         h_nbr = nbr_props.get('slab_thickness', np.nan)
-        if not np.isnan(h_nbr) and h_nbr < MIN_PROPAGATION_SLAB:
+        if not np.isnan(h_nbr) and h_nbr < mp.MIN_PROPAGATION_SLAB:
             return False, 'thin_slab'
 
         # Minimum Lambda — slab too weak/compliant
         lam_nbr_abs = directional_lambda(nbr_props, is_cross)
-        if not np.isnan(lam_nbr_abs) and lam_nbr_abs < MIN_PROPAGATION_LAMBDA:
+        if not np.isnan(lam_nbr_abs) and lam_nbr_abs < mp.MIN_PROPAGATION_LAMBDA:
             return False, 'low_lambda'
 
         # Slab tensile failure — the slab breaks before the crack reaches r_c.
         # A cluster missing any input is not gated (as for gates 4-6).
-        if USE_SLAB_TENSILE_GATE:
+        if mp.USE_SLAB_TENSILE_GATE:
             s_t = _ai.slab_tensile_support(
-                nbr_props.get(SLAB_TENSILE_SIGMA_COL, np.nan),
+                nbr_props.get(mp.SLAB_TENSILE_SIGMA_COL, np.nan),
                 nbr_props.get('slab_density', np.nan), h_nbr,
                 nbr_props.get('rc_wl', np.nan))
             if np.isfinite(s_t) and s_t < 1.0:
                 return False, 'slab_tensile_failure'
 
         # --- Crack-arrest gradient test -------------------------------------
-        if USE_MELOCHE_ARREST:
+        if mp.USE_MELOCHE_ARREST:
             # Directional Meloche (2025) A_ca arrest. The crack arrests when it
             # propagates INTO stronger weak layer (positive directed θ) and the
             # resulting arrest length is shorter than the C->N step. Propagation
@@ -1439,7 +1203,7 @@ def propagate_release(
                                 and tg > 0.0):
                             A_ca_d, _ = _ai.arrest_length(
                                 tg, theta_dir, Lam, sig_t,
-                                delta=MELOCHE_DELTA, L_t=L_t)  # Eq. 20 (m)
+                                delta=mp.DELTA, L_t=L_t)  # Eq. 20 (m)
                             if A_ca_d < dist_cn:
                                 return False, 'meloche_arrest'
             return True, 'propagated'
@@ -1454,9 +1218,9 @@ def propagate_release(
         lam_current = directional_lambda(current_props, is_cross)
         lam_nbr     = directional_lambda(nbr_props,     is_cross)
         lam_drop, lam_rise = (
-            (LAMBDA_CROSS_DROP_FACTOR, LAMBDA_CROSS_RISE_FACTOR)
+            (mp.LAMBDA_CROSS_DROP_FACTOR, mp.LAMBDA_CROSS_RISE_FACTOR)
             if is_cross else
-            (LAMBDA_DROP_FACTOR, LAMBDA_RISE_FACTOR))
+            (mp.LAMBDA_DROP_FACTOR, mp.LAMBDA_RISE_FACTOR))
         if (not np.isnan(lam_current) and not np.isnan(lam_nbr)
                 and lam_current > 0):
             signed_change = (lam_nbr - lam_current) / lam_current
@@ -1477,16 +1241,16 @@ def propagate_release(
                 and h_current > 0):
             signed_change = (h_nbr - h_current) / h_current
             if signed_change < 0:   # thinning — arrest-prone
-                if -signed_change > THICKNESS_DROP_FACTOR * size_factor:
+                if -signed_change > mp.THICKNESS_DROP_FACTOR * size_factor:
                     return False, 'thickness_discontinuity_drop'
             else:                   # thickening — propagation-favorable
-                if signed_change > THICKNESS_RISE_FACTOR * size_factor:
+                if signed_change > mp.THICKNESS_RISE_FACTOR * size_factor:
                     return False, 'thickness_discontinuity_rise'
 
         return True, 'propagated'
 
     # Arrest thresholds (Λ/thickness factors, MIN_PROPAGATION_*, TAU_G_ABS_FLOOR)
-    # are module-level: PROPAGATION MODEL PARAMETERS at the top.
+    # are in model_params, PROPAGATION MODEL.
 
     # (tau_g arrest is now an absolute floor, TAU_G_ABS_FLOOR, applied directly
     # in _qualifies — no per-trigger or per-region reference value to compute.)
@@ -1515,10 +1279,10 @@ def propagate_release(
     # front, so a flank candidate waits ("deferred") until the budget reaches
     # it. The clock counts only rings that admitted an along-slope cluster —
     # see the USE_ANISOTROPIC_RINGS note at the top of this module.
-    rings_on   = USE_ANISOTROPIC_RINGS
-    ring_ratio = (MODE3_SPEED_RATIO / MODE2_SPEED_RATIO
-                  if MODE2_SPEED_RATIO > 0 else 1.0)
-    ring_step  = RING_STEP_M if RING_STEP_M else _hop_length_m(neighbours,
+    rings_on   = mp.USE_ANISOTROPIC_RINGS
+    ring_ratio = (mp.MODE3_SPEED_RATIO / mp.MODE2_SPEED_RATIO
+                  if mp.MODE2_SPEED_RATIO > 0 else 1.0)
+    ring_step  = mp.RING_STEP_M if mp.RING_STEP_M else _hop_length_m(neighbours,
                                                                centroids)
     deferred: list = []     # (cid, parent_props, dist) still outside the budget
     along_clock = 0
@@ -1626,7 +1390,7 @@ def propagate_release(
 
     # Running slab cracks: lines from the tensile-gate failures; the area they
     # sever from the trigger is removed (USE_SLAB_CRACK_LINES).
-    if USE_SLAB_CRACK_LINES and slab_cracks:
+    if mp.USE_SLAB_CRACK_LINES and slab_cracks:
         slope_cache = {}
         def _slope_cached(c):
             if c not in slope_cache:
@@ -1676,7 +1440,7 @@ def propagate_release(
     polygon = unary_union(polys)
     if polygon.geom_type == 'MultiPolygon':
         polygon = max(polygon.geoms, key=lambda p: p.area)
-    if polygon.is_empty or polygon.area < MIN_POLYGON_AREA:
+    if polygon.is_empty or polygon.area < mp.MIN_POLYGON_AREA:
         return None, failed
 
     # Fill interior holes (arrested interior clusters / pixelation) so com1DFA
@@ -1721,8 +1485,9 @@ def _cluster_graph(pixel_index: dict, transform, k_neighbours: int):
 
 
 def _reached_polygon(reached, cluster_map, transform, min_clusters: int = 2,
-                     min_area: float = MIN_POLYGON_AREA):
+                     min_area: float = None):
     """Largest hole-filled polygon of the reached clusters, or None if too small."""
+    min_area = mp.MIN_POLYGON_AREA if min_area is None else min_area
     from shapely.ops import unary_union
     from shapely.geometry import shape as shapely_shape
     import rasterio.features
@@ -1749,10 +1514,10 @@ def propagate_release_energy(
         slope_grid: np.ndarray,
         transform,
         start_zone_mask: Optional[np.ndarray] = None,
-        stauchwall_deg: float = STAUCHWALL_DEG,
+        stauchwall_deg: float = None,
         snap_features: 'Optional[pd.DataFrame]' = None,
-        k_neighbours: int = 8,
-        max_clusters: int = MAX_BFS_CLUSTERS,
+        k_neighbours: Optional[int] = None,
+        max_clusters: int = None,
         pixel_index: Optional[dict] = None,
         aspect_grid: Optional[np.ndarray] = None,
         wave_callback=None,
@@ -1771,6 +1536,9 @@ def propagate_release_energy(
 
     Returns (polygon, reached_cluster_ids); a trigger-only region still gives a polygon.
     """
+    stauchwall_deg = mp.STAUCHWALL_DEG if stauchwall_deg is None else stauchwall_deg
+    max_clusters = mp.MAX_BFS_CLUSTERS if max_clusters is None else max_clusters
+    k_neighbours = mp.BFS_K_NEIGHBOURS if k_neighbours is None else k_neighbours
     import heapq
     import energy_path as ep
 
@@ -1860,7 +1628,7 @@ def propagate_release_energy(
         return None, kind, N, G_av
 
     N0 = 0.0
-    if ep.ENERGY_TRIGGER_SATURATED:
+    if mp.ENERGY_TRIGGER_SATURATED:
         n0 = _cell(trigger_cluster_id)['N_max']
         N0 = float(n0) if np.isfinite(n0) else 0.0
     best = {trigger_cluster_id: {'N': N0, 'G_avail': 0.0, 'parent': None,
@@ -1905,8 +1673,8 @@ def propagate_release_energy(
     cap_bound = bool(heap) and len(reached) >= max_clusters
     rejected = {n: r for n, (_, r) in offers.items() if n not in best}
     counts = pd.Series(list(rejected.values()), dtype=object).value_counts().to_dict()
-    print(f"  Energy region: {len(reached)} clusters (R={R}, delta={ep.ENERGY_DELTA}, "
-          f"sigma_t={ep.SIGMA_T_COLUMN}); boundary rejections {counts}"
+    print(f"  Energy region: {len(reached)} clusters (R={R}, delta={mp.ENERGY_DELTA}, "
+          f"sigma_t={mp.SIGMA_T_COLUMN}); boundary rejections {counts}"
           f"{'  [CAP-BOUND]' if cap_bound else ''}")
     if cap_bound:
         print(f"  WARNING: BFS hit the max_clusters cap ({max_clusters}); this "

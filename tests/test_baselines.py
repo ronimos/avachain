@@ -13,9 +13,10 @@ from baselines import propagate_baseline
 from release_geometry import propagate_release
 
 from test_energy_propagation import BLOCK, T, scene
+import model_params as mp
 
 
-def _run(mode, s, stauchwall_deg=rg.STAUCHWALL_DEG, mask=None, state=None):
+def _run(mode, s, stauchwall_deg=mp.STAUCHWALL_DEG, mask=None, state=None):
     return propagate_baseline(
         mode, s['trigger'], s['cluster_map'], s['dem'], s['slope_grid'], T,
         start_zone_mask=mask, stauchwall_deg=stauchwall_deg,
@@ -67,7 +68,7 @@ def test_mask_gate():
 
 
 def test_routed_through_propagate_release(monkeypatch):
-    monkeypatch.setattr(rg, 'ARREST_MODE', 'slope_only')
+    monkeypatch.setattr(mp, 'ARREST_MODE', 'slope_only')
     s = scene(30, 30, (16, 16), lambda y, x: {})
     poly, reached = propagate_release(
         trigger_cluster_id=s['trigger'], meloche_df=pd.DataFrame(),

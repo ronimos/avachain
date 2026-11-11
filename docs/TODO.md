@@ -226,7 +226,7 @@ pipeline.** Do that before trusting any avachain release polygon.
   along-slope pair). `compute_meloche_features` emits `Lambda_cross`. Both
   branches are still fed by the mode II formula, so results are unchanged. To
   land the real formula: (1) update `arrest_indices.elastic_length_cross()`,
-  (2) set `release_geometry.USE_MODE3_LAMBDA = True`, (3) regenerate the meloche
+  (2) set `model_params.USE_MODE3_LAMBDA = True`, (3) regenerate the meloche
   CSV. Nothing else should need to change — if it does, the split has drifted.
   **Measured caveat — a constant Λ_III/Λ_II ratio changes nothing.** The Λ
   continuity gate tests the *relative* change (Λ_nbr − Λ_cur)/Λ_cur, which is
@@ -264,7 +264,7 @@ pipeline.** Do that before trusting any avachain release polygon.
   minimum: `d_lat = min(gaume_width, A_ca·0.712)·size_factor`, via
   `release_geometry.mode3_speed_cap_ratio()`, which prefers the CSV column and
   falls back to computing the ratio from ν so pre-column CSVs still get the cap.
-  Behind `release_geometry.USE_MODE3_SPEED_CAP` (default on); off is
+  Behind `model_params.USE_MODE3_SPEED_CAP` (default on); off is
   bit-for-bit identical to pre-cap.
   **Measured on Jan 18:** unlike Λ_III this is *not* scale-invariant — it is an
   absolute distance cap, so it does change results. Binds on 2 of 5 triggers

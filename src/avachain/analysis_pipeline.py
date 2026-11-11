@@ -62,6 +62,7 @@ from scenario_writer import (
     write_summary_csv,
     write_metadata,
 )
+import model_params as mp
 
 # ---------------------------------------------------------------------------
 # Defaults — path and parameter defaults are in config.py.
@@ -865,25 +866,25 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
     _NEAR_MISS.clear()
 
     # make_release_polygon_2d reads these module flags, so set them before any run.
-    _rg.ARREST_MODE  = getattr(args, 'arrest_mode', _rg.ARREST_MODE)
-    _rg.MASK_MODE    = getattr(args, 'mask_mode', _rg.MASK_MODE)
-    _ep.ENERGY_DELTA = getattr(args, 'energy_delta', _ep.ENERGY_DELTA)
+    mp.ARREST_MODE  = getattr(args, 'arrest_mode', mp.ARREST_MODE)
+    mp.MASK_MODE    = getattr(args, 'mask_mode', mp.MASK_MODE)
+    mp.ENERGY_DELTA = getattr(args, 'energy_delta', mp.ENERGY_DELTA)
     if getattr(args, 'slab_tensile_gate', None) is not None:
-        _rg.USE_SLAB_TENSILE_GATE = args.slab_tensile_gate
+        mp.USE_SLAB_TENSILE_GATE = args.slab_tensile_gate
     if getattr(args, 'trigger_toughness', None) is not None:
-        _rg.USE_TRIGGER_TOUGHNESS = args.trigger_toughness
+        mp.USE_TRIGGER_TOUGHNESS = args.trigger_toughness
     if getattr(args, 'distance_caps', None) is not None:
-        _rg.USE_DISTANCE_CAPS = args.distance_caps
+        mp.USE_DISTANCE_CAPS = args.distance_caps
     if getattr(args, 'slab_crack_lines', None) is not None:
-        _rg.USE_SLAB_CRACK_LINES = args.slab_crack_lines
-    print(f"  trigger toughness {'ON' if _rg.USE_TRIGGER_TOUGHNESS else 'OFF'}  "
-          f"distance caps {'ON' if _rg.USE_DISTANCE_CAPS else 'OFF'}  "
-          f"slab-crack lines {'ON' if _rg.USE_SLAB_CRACK_LINES else 'OFF'}")
-    if _rg.USE_SLAB_TENSILE_GATE:
-        print(f"  slab tensile-failure gate ON ({_rg.SLAB_TENSILE_SIGMA_COL})")
-    if _rg.ARREST_MODE != 'legacy' or _rg.MASK_MODE != 'gate':
-        print(f"  arrest_mode={_rg.ARREST_MODE}  mask_mode={_rg.MASK_MODE}  "
-              f"energy_delta={_ep.ENERGY_DELTA}")
+        mp.USE_SLAB_CRACK_LINES = args.slab_crack_lines
+    print(f"  trigger toughness {'ON' if mp.USE_TRIGGER_TOUGHNESS else 'OFF'}  "
+          f"distance caps {'ON' if mp.USE_DISTANCE_CAPS else 'OFF'}  "
+          f"slab-crack lines {'ON' if mp.USE_SLAB_CRACK_LINES else 'OFF'}")
+    if mp.USE_SLAB_TENSILE_GATE:
+        print(f"  slab tensile-failure gate ON ({mp.SLAB_TENSILE_SIGMA_COL})")
+    if mp.ARREST_MODE != 'legacy' or mp.MASK_MODE != 'gate':
+        print(f"  arrest_mode={mp.ARREST_MODE}  mask_mode={mp.MASK_MODE}  "
+              f"energy_delta={mp.ENERGY_DELTA}")
 
     # --- Load inputs ---
     dem, transform, crs_wkt, raster_profile = _load_dem(cfg)
@@ -948,21 +949,11 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
     # Group assignment (release/adjacent/reference) is for validation
     # comparison, NOT for trigger selection — operationally we don't know
     # which clusters will be in the release area.
-    # Pa — minimum gravitational driving shear stress to accept as a trigger.
-    # Distinct from snowpack_analysis.TAU_G_FEATURE_FLOOR (50 Pa), which gates
-    # whether arrest indices are computed at all; see the note there.
-    MIN_TAU_G   = 40.0
-    MIN_SLOPE   = 30.0   # degrees — well above the 27° friction angle
-    MAX_SK38    = 1.0    # Sk38 >= 1.0 = stable for skier triggering (Schweizer & Jamieson 2007)
-    MIN_SLAB_THICKNESS = 0.5  # metres — too thin = D1 at most
-    # metres — the deepest slab we expect explosive control to trigger at the
-    # basal WL. This is an operational choice, not a physical result, and it
-    # binds hard. Sk38 at the WL falls almost monotonically with slab
-    # thickness (Spearman -0.93 within the 2026-01-18 pool), so ranking by
-    # Sk38 picks the thickest slabs under this cap. 2.0 -> 2.5 m replaced all
-    # five triggers on both 2026-01-18 and 2026-03-07. 1.5 m left only two
-    # candidates on 2026-03-07 (median slab 1.8 m). Change it only for an
-    # operational reason.
+    # Trigger gates: model_params (values and reasons there). The slab cap is
+    # --max-slab-thickness, whose default is mp.MAX_SLAB_THICKNESS.
+    MIN_TAU_G          = mp.MIN_TAU_G
+    MAX_SK38           = mp.MAX_SK38
+    MIN_SLAB_THICKNESS = mp.MIN_SLAB_THICKNESS
     MAX_SLAB_THICKNESS = args.max_slab_thickness
 
     # All clusters that overlap the start zone mask.
@@ -984,7 +975,7 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
         if isinstance(v, pd.Series): v = v.iloc[0]
         return float(v)
 
-    MIN_SLOPE_TRIGGER = args.stauchwall_deg + 2.0  # must be above stauchwall
+    MIN_SLOPE_TRIGGER = args.stauchwall_deg + mp.SLOPE_MARGIN_DEG  # must be above stauchwall
 
     if not meloche_df.empty and 'tau_g' in meloche_df.columns:
         # Pre-compute per-cluster mean slope from DEM
@@ -1025,12 +1016,12 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
         _FUNNEL['slab_thickness'] = len(candidate_ids)
     # Slab tensile gate on the trigger: rank only triggers whose slab can carry
     # a crack to r_c, so the ranking still yields n_triggers releases.
-    if (_rg.USE_SLAB_TENSILE_GATE and _rg.ARREST_MODE == 'legacy'
-            and _rg.SLAB_TENSILE_SIGMA_COL not in snap_features.columns):
+    if (mp.USE_SLAB_TENSILE_GATE and mp.ARREST_MODE == 'legacy'
+            and mp.SLAB_TENSILE_SIGMA_COL not in snap_features.columns):
         print(f"  WARNING: slab tensile gate is on but the features have no "
-              f"'{_rg.SLAB_TENSILE_SIGMA_COL}' column, so it never fires; "
+              f"'{mp.SLAB_TENSILE_SIGMA_COL}' column, so it never fires; "
               f"re-run analyze")
-    if _rg.USE_SLAB_TENSILE_GATE and _rg.ARREST_MODE == 'legacy':
+    if mp.USE_SLAB_TENSILE_GATE and mp.ARREST_MODE == 'legacy':
         candidate_ids = [
             cid for cid in candidate_ids
             if not (_rg.cluster_tensile_support(cid, meloche_df, snap_features) < 1.0)]
@@ -1054,7 +1045,8 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
     # Elevation filter: triggers must be in upper portion of candidate zone
     # Use P75 in validation mode (release area = known crown terrain)
     # Use P50 in operational mode (full start zone)
-    elev_pct = 75 if args.restrict_to_release_area else 50
+    elev_pct = (mp.ELEVATION_PCTILE_RESTRICTED if args.restrict_to_release_area
+                else mp.ELEVATION_PCTILE)
     if candidate_ids:
         elevs = []
         for cid in candidate_ids:
@@ -1177,7 +1169,7 @@ def _polygon_density(polygon, cluster_map, snap_features, transform):
 
 def _no_release_reason(cid, meloche_df, snap_features) -> str:
     """Why a trigger gave no polygon: the slab tensile gate, else no propagation."""
-    if _rg.USE_SLAB_TENSILE_GATE and _rg.ARREST_MODE == 'legacy':
+    if mp.USE_SLAB_TENSILE_GATE and mp.ARREST_MODE == 'legacy':
         s_t = _rg.cluster_tensile_support(cid, meloche_df, snap_features)
         if np.isfinite(s_t) and s_t < 1.0:
             return 'slab_tensile'
@@ -1297,12 +1289,12 @@ def _model_triggers(candidate_ids, snap_features, meloche_df, sk38_col, args,
         valid_triggers = []
         _mid_sf = args.size_factors[len(args.size_factors) // 2]
         for t_cid_check in triggers.index:
-            _a_ca_check = 50.0
+            _a_ca_check = mp.A_CA_FALLBACK_M
             if 'A_ca_brittle' in meloche_df.columns and t_cid_check in meloche_df.index:
                 _v = meloche_df.loc[t_cid_check, 'A_ca_brittle']
                 if isinstance(_v, pd.Series): _v = _v.iloc[0]
                 if not np.isnan(float(_v)):
-                    _a_ca_check = min(float(_v), 300.0)
+                    _a_ca_check = min(float(_v), mp.A_CA_MAX_M)
             _poly_check = make_release_polygon_2d(
                 trigger_cluster_id=t_cid_check,
                 A_ca=_a_ca_check,
@@ -1413,16 +1405,14 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
             'n_scenarios': 0, 'n_below_depth_floor': 0, 'n_no_release': 0,
             'no_release_reason': None})
         # A_ca from Meloche features, fallback to 50m
-        A_ca    = 50.0   # default fallback (m)
-        A_CA_MAX = 300.0 # cap — start zone is ~250m wide; beyond this
-                         # the scaling law is unreliable (very low tau_g)
+        A_ca = mp.A_CA_FALLBACK_M   # cap and fallback: model_params
         # No column at all when no cluster reached TAU_G_FEATURE_FLOOR.
         if 'A_ca_brittle' in meloche_df.columns and t_cid in meloche_df.index:
             val = meloche_df.loc[t_cid, 'A_ca_brittle']
             if isinstance(val, pd.Series):
                 val = val.iloc[0]
             if not np.isnan(float(val)):
-                A_ca = min(float(val), A_CA_MAX)
+                A_ca = min(float(val), mp.A_CA_MAX_M)
         a_ca_list.append(A_ca)
 
         # Extract scour depth at trigger cluster from SNOWPACK profile
@@ -1483,7 +1473,7 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
                         xfact=size_f, yfact=size_f,
                         origin=centroid)
                 else:
-                    arrest_state = {} if _rg.ARREST_MODE != 'legacy' else None
+                    arrest_state = {} if mp.ARREST_MODE != 'legacy' else None
                     polygon = make_release_polygon_2d(
                         trigger_cluster_id = t_cid,
                         A_ca               = A_ca,
@@ -1568,7 +1558,7 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
                 row['density_kgm3'] = round(density_mean, 1)
                 row['sk38_rank'] = t_rank + 1
                 row['min_sk38']  = float(sk38_vals[t_rank])
-                if _rg.MASK_MODE == 'diagnostic':
+                if mp.MASK_MODE == 'diagnostic':
                     row['frac_outside_mask'] = frac_outside_mask(
                         polygon, start_zone_mask, transform)
                 if not args.use_observed_release and arrest_state:
@@ -1618,7 +1608,7 @@ def _write_scenario_set(cfg, args, out_dir, triggers, trigger_source,
     write_scenario_weights(weight_map, out_dir / "scenario_weights.json",
                            normalise=rectangle_fallback)
     write_summary_csv(rows, out_dir / "summary.csv",
-                      extra_cols=('frac_outside_mask',) if _rg.MASK_MODE == 'diagnostic' else ())
+                      extra_cols=('frac_outside_mask',) if mp.MASK_MODE == 'diagnostic' else ())
     write_metadata(
         out_path          = out_dir / "metadata.json",
         snapshot_date     = args.snapshot_date,
@@ -1785,7 +1775,7 @@ def build_parser():
     parser.add_argument('--mu',            type=float, default=None)
     parser.add_argument('--xi',            type=float, default=None)
     parser.add_argument('--stauchwall-deg',type=float, default=None)
-    parser.add_argument('--max-slab-thickness', type=float, default=2.0,
+    parser.add_argument('--max-slab-thickness', type=float, default=mp.MAX_SLAB_THICKNESS,
                         help='Maximum slab thickness to accept as a trigger (m). '
                              'Default 2.0, sized for explosive control. Use 1.5 for '
                              'skier-triggered scenarios (skier stress is negligible '
@@ -1807,36 +1797,36 @@ def build_parser():
     parser.add_argument('--feature-buffer-m', type=float, default=0.0,
                         help='analyze: also extract features within this distance (m) '
                              'of the start zone, for --mask-mode diagnostic (default 0).')
-    parser.add_argument('--arrest-mode', default=_rg.ARREST_MODE,
+    parser.add_argument('--arrest-mode', default=mp.ARREST_MODE,
                         choices=('legacy', 'energy', 'slope_only', 'stability_connected'),
-                        help=f"BFS arrest rule (default: {_rg.ARREST_MODE}). 'energy' is the "
+                        help=f"BFS arrest rule (default: {mp.ARREST_MODE}). 'energy' is the "
                              "path-energy hypothesis (energy_path.py) and writes "
                              "energy_cells.csv / energy_rejected.csv per scenario; "
                              "'slope_only' and 'stability_connected' are mechanics-free "
                              "baselines (baselines.py) and write rejected.csv.")
-    parser.add_argument('--mask-mode', default=_rg.MASK_MODE, choices=('gate', 'diagnostic'),
-                        help=f"Start-zone KML use (default: {_rg.MASK_MODE}). 'diagnostic' "
+    parser.add_argument('--mask-mode', default=mp.MASK_MODE, choices=('gate', 'diagnostic'),
+                        help=f"Start-zone KML use (default: {mp.MASK_MODE}). 'diagnostic' "
                              "runs the BFS without it and adds frac_outside_mask to summary.csv.")
     parser.add_argument('--slab-tensile-gate', action=argparse.BooleanOptionalAction,
                         default=None,
                         help='legacy mode: also arrest where the slab breaks in tension '
                              'before the crack reaches r_c (Schweizer et al. 2014; '
-                             'default: release_geometry.USE_SLAB_TENSILE_GATE, on).')
+                             'default: model_params.USE_SLAB_TENSILE_GATE, on).')
     parser.add_argument('--trigger-toughness', action=argparse.BooleanOptionalAction,
                         default=None,
                         help='cap the trigger slab strength by its edge-crack toughness '
                              'K_Ic/(1.122 sqrt(pi h/2)) (default: '
-                             'release_geometry.USE_TRIGGER_TOUGHNESS, on).')
+                             'model_params.USE_TRIGGER_TOUGHNESS, on).')
     parser.add_argument('--distance-caps', action=argparse.BooleanOptionalAction,
                         default=None,
                         help='BFS up/down/cross distance caps (default: [calibration] '
-                             'distance_caps, else release_geometry.USE_DISTANCE_CAPS, on). '
+                             'distance_caps, else model_params.USE_DISTANCE_CAPS, on). '
                              'Overrides the TOML.')
     parser.add_argument('--slab-crack-lines', action=argparse.BooleanOptionalAction,
                         default=None,
                         help='run slab cracks started by the tensile gate as crown/flank '
                              'lines and cut off the area they sever (default: '
-                             'release_geometry.USE_SLAB_CRACK_LINES, on).')
+                             'model_params.USE_SLAB_CRACK_LINES, on).')
     parser.add_argument('--force-explosive-triggers', action=argparse.BooleanOptionalAction,
                         default=None,
                         help='scenarios: also publish a forced-shot set at '
@@ -1844,8 +1834,8 @@ def build_parser():
                              '[scenarios] explosive_trigger_points location, no '
                              'initiation gate, propagation physics only (default: '
                              '[scenarios] force_explosive_triggers, off).')
-    parser.add_argument('--energy-delta', type=float, default=_ep.ENERGY_DELTA,
-                        help=f"delta in the energy-mode G_c (default: {_ep.ENERGY_DELTA}; "
+    parser.add_argument('--energy-delta', type=float, default=mp.ENERGY_DELTA,
+                        help=f"delta in the energy-mode G_c (default: {mp.ENERGY_DELTA}; "
                              "R was fitted at 0). The Eq. 20 delta is unchanged.")
     return parser
 

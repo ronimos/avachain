@@ -29,6 +29,7 @@ import pytest
 import jan18_fixture as fx
 import energy_path as ep
 import release_geometry as rg
+import model_params as mp
 
 # trigger_cluster -> (release_area_m2, iou)
 REFERENCE = {
@@ -52,7 +53,7 @@ GATE_OFF = {
 
 @pytest.fixture(scope='module')
 def legacy():
-    assert rg.ARREST_MODE == 'legacy' and rg.MASK_MODE == 'gate'
+    assert mp.ARREST_MODE == 'legacy' and mp.MASK_MODE == 'gate'
     return {t: fx.polygon_for(t) for t in REFERENCE}
 
 
@@ -68,9 +69,9 @@ def test_legacy_area_and_iou(legacy, trig):
 
 
 def test_tensile_gate_is_on_and_fires(legacy, monkeypatch):
-    assert rg.USE_SLAB_TENSILE_GATE
+    assert mp.USE_SLAB_TENSILE_GATE
     assert 'sigma_t_mean__jamieson1990' in fx.load()['snap_features'].columns
-    monkeypatch.setattr(rg, 'USE_SLAB_TENSILE_GATE', False)
+    monkeypatch.setattr(mp, 'USE_SLAB_TENSILE_GATE', False)
     for trig, (area, iou) in GATE_OFF.items():
         poly = fx.polygon_for(trig)
         assert poly.area == pytest.approx(area, abs=1.0)
@@ -80,15 +81,15 @@ def test_tensile_gate_is_on_and_fires(legacy, monkeypatch):
 
 def test_energy_switches_do_not_touch_legacy(legacy, monkeypatch):
     """ENERGY_DELTA / SIGMA_T_COLUMN / ENERGY_R feed only the energy mode."""
-    monkeypatch.setattr(ep, 'ENERGY_DELTA', 1.0)
-    monkeypatch.setattr(ep, 'SIGMA_T_COLUMN', 'sigma_t_wl')
-    monkeypatch.setattr(ep, 'ENERGY_R', 0.7)
+    monkeypatch.setattr(mp, 'ENERGY_DELTA', 1.0)
+    monkeypatch.setattr(mp, 'SIGMA_T_COLUMN', 'sigma_t_wl')
+    monkeypatch.setattr(mp, 'ENERGY_R', 0.7)
     assert fx.polygon_for(1772).equals(legacy[1772])
 
 
 def test_slab_crack_lines_on_and_cut(legacy, monkeypatch):
-    assert rg.USE_SLAB_CRACK_LINES
-    monkeypatch.setattr(rg, 'USE_SLAB_CRACK_LINES', False)
+    assert mp.USE_SLAB_CRACK_LINES
+    monkeypatch.setattr(mp, 'USE_SLAB_CRACK_LINES', False)
     for trig, (area, iou) in CRACK_OFF.items():
         poly = fx.polygon_for(trig)
         assert poly.area == pytest.approx(area, abs=1.0)

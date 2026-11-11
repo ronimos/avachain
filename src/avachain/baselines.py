@@ -13,18 +13,14 @@ import numpy as np
 import pandas as pd
 
 from release_geometry import (
-    STAUCHWALL_DEG,
-    MAX_BFS_CLUSTERS,
     _cluster_graph,
     _domain_edge_pixels,
     _reached_polygon,
     cluster_pixel_index,
 )
+import model_params as mp
 
 BASELINE_MODES = ('slope_only', 'stability_connected')
-# Same threshold as analysis_pipeline's trigger gate MAX_SK38 (function-local
-# there): Sk38 >= 1 is stable for skier triggering (Schweizer & Jamieson 2007).
-STABILITY_MAX = 1.0
 
 
 def _row(snap_features, cid):
@@ -46,13 +42,16 @@ def propagate_baseline(
         slope_grid: np.ndarray,
         transform,
         start_zone_mask: Optional[np.ndarray] = None,
-        stauchwall_deg: float = STAUCHWALL_DEG,
+        stauchwall_deg: float = None,
         snap_features: 'Optional[pd.DataFrame]' = None,
-        k_neighbours: int = 8,
-        max_clusters: int = MAX_BFS_CLUSTERS,
+        k_neighbours: Optional[int] = None,
+        max_clusters: int = None,
         pixel_index: Optional[dict] = None,
         state_out: Optional[dict] = None):
     """Flood-fill on the BFS cluster graph with a per-cell admission test; returns (polygon, reached)."""
+    stauchwall_deg = mp.STAUCHWALL_DEG if stauchwall_deg is None else stauchwall_deg
+    max_clusters = mp.MAX_BFS_CLUSTERS if max_clusters is None else max_clusters
+    k_neighbours = mp.BFS_K_NEIGHBOURS if k_neighbours is None else k_neighbours
     if mode not in BASELINE_MODES:
         raise ValueError(f"unknown baseline mode {mode!r}")
     if pixel_index is None:
@@ -75,7 +74,7 @@ def propagate_baseline(
             if not (np.isfinite(_num(row, 'wl_shear_strength'))
                     and np.isfinite(_num(row, 'slab_thickness'))):
                 return 'no_weak_layer'
-        elif not _num(row, sk_col) < STABILITY_MAX:     # NaN fails too
+        elif not _num(row, sk_col) < mp.MAX_SK38:     # NaN fails too
             return 'stability_stable'
         return None
 
