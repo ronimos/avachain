@@ -577,8 +577,10 @@ Regenerate before trusting any release polygon.
 
 - `dev` is the active branch; `main` is stable operational.
 - When something is deployment-ready, merge **and push both** `dev` and `main`.
-- `science` is dormant — last touched 2026-09-02, 63 commits behind `dev` with
-  8 of its own. Don't branch from it or assume it reflects current behaviour.
+- The old `science` branch (the ISSW 2026 version, last touched 2026-09-02) was
+  deleted in the 2026-11-12 cleanup; tag `v1.0-issw2026` holds its tip. Parked
+  work lives in `archive/*` tags (`archive/thin-slab-options`), not branches.
+  Delete a feature branch once it is merged.
 - Commit messages here explain the *why*, at length, including what was ruled
   out and what measurement justified the change. Match that; follow `git log`.
 - Operational deployment lives at `/home/snowpath/avachain/` via `install.py`.
