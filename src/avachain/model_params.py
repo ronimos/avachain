@@ -126,6 +126,25 @@ MIXED_PRIMARY_CLASSES = (1, 2, 3)
 # profile with an FC/DH base splits exactly as before.
 BASAL_FCXR_IS_WL = True
 
+# Which weak layer the release model uses (snowpack_analysis.select_wl_slab).
+# 'basal' (default, operational): the basal FC/DH block above. It stays the
+# operational choice because the forecast cares about the larger avalanches
+# (Ron, 2026-11-12). 'threshold_sum' is an ADDITION, the layer of concern by
+# the threshold-sum approach (Schweizer & Jamieson 2007, Cold Reg. Sci. Technol.
+# 47, 50-59; Monti et al. 2014): the interface with the most "lemons". On the
+# Jan 18 re-referenced replay it put the bed at a median 0.53 m against the
+# observed 0.44 m (basal: 0.82 m). CLI: analyze --wl-selection.
+WL_SELECTION = 'basal'
+WL_SELECTIONS = ('basal', 'threshold_sum')
+
+# Threshold-sum lemons (Schweizer & Jamieson 2007, Table 3). One lemon each:
+TSA_GS_DIFF_MM   = 0.75    # grain size difference across the interface >= (mm)
+TSA_HH_DIFF      = 1.7     # hand-hardness index difference >= (1 F, 2 4F, 3 1F, 4 P, 5 K)
+TSA_DEPTH_M      = (0.18, 0.94)  # weak-layer depth within (m)
+TSA_PERSISTENT   = (4, 5, 6, 9)  # weak-layer primary grain class FC, DH, SH, FCxr
+TSA_WL_GS_MM     = 1.25    # weak-layer grain size >= (mm)
+TSA_WL_HH        = 1.3     # weak-layer hand-hardness index <=
+
 # ============================================================================
 # SHEAR-STRENGTH GRADIENT θ AND THE ARREST-INDEX FLOOR (snowpack_analysis)
 # ============================================================================

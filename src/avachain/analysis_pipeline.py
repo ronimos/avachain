@@ -339,6 +339,8 @@ def step_analyze(cfg, args):
         cmd.append('--classifier')
     if getattr(args, 'feature_buffer_m', 0.0):
         cmd += ['--feature-buffer-m', str(args.feature_buffer_m)]
+    if getattr(args, 'wl_selection', None):
+        cmd += ['--wl-selection', args.wl_selection]
     if args.plots:
         cmd.append('--plots')
     else:
@@ -1794,6 +1796,10 @@ def build_parser():
                              'release area estimation.')
     parser.add_argument('--toml', default=None,
                         help="Path to slope_config.toml; overrides --project-dir when provided")
+    parser.add_argument('--wl-selection', choices=mp.WL_SELECTIONS, default=None,
+                        help="analyze: weak layer for the release model, 'basal' "
+                             "(default) or 'threshold_sum' (layer of concern). Use its "
+                             "own --features-dir: CSV names carry only the date.")
     parser.add_argument('--feature-buffer-m', type=float, default=0.0,
                         help='analyze: also extract features within this distance (m) '
                              'of the start zone, for --mask-mode diagnostic (default 0).')

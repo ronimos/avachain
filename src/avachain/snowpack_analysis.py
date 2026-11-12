@@ -236,6 +236,92 @@ def split_wl_slab(grain_type, z):
     return slab_mask, wl_mask, interface_z
 
 
+def tsa_lemons(wl_gt, wl_hh, wl_gs_mm, nb_hh, nb_gs_mm, wl_depth_m):
+    """Threshold-sum lemons (0-6) of one weak-layer element against its neighbour
+    across the interface (Schweizer & Jamieson 2007). Hand hardness is the
+    index (1 F ... 5 K, sign ignored); grain size in mm; depth in m."""
+    lo, hi = mp.TSA_DEPTH_M
+    return int(abs(wl_gs_mm - nb_gs_mm) >= mp.TSA_GS_DIFF_MM) \
+        + int(abs(abs(wl_hh) - abs(nb_hh)) >= mp.TSA_HH_DIFF) \
+        + int(lo <= wl_depth_m <= hi) \
+        + int(int(round(wl_gt)) // 100 in mp.TSA_PERSISTENT) \
+        + int(wl_gs_mm >= mp.TSA_WL_GS_MM) \
+        + int(abs(wl_hh) <= mp.TSA_WL_HH)
+
+
+def split_wl_slab_tsa(grain_type, z, hand_hardness, grain_size_m,
+                      min_depth_m: float = 0.0):
+    """
+    Layer of concern by the threshold-sum approach; same contract as
+    split_wl_slab: (slab_mask, wl_mask, interface_z) or (None, None, None).
+
+    Every interface between adjacent elements is scored twice, once with the
+    element below and once with the element above as the weak layer (a soft
+    layer can fail on either side of a hard one). The weak layer's top is the
+    interface, so the slab is everything above it. Only weak layers whose top
+    is at least min_depth_m deep are candidates. Highest lemon count wins;
+    ties go to the larger hardness difference, then the larger grain-size
+    difference, then the deeper one. wl_mask is the weak-layer element plus
+    the contiguous persistent elements under it when it is persistent itself.
+
+    z is depth below the surface, negative down, and is each element's top.
+    grain_size_m is in metres (the store's unit; xsnow attrs say m).
+    """
+    gt = np.asarray(grain_type, dtype=float)
+    z = np.asarray(z, dtype=float)
+    hh = np.asarray(hand_hardness, dtype=float)
+    gs = np.asarray(grain_size_m, dtype=float) * 1000.0      # mm
+    ok = ~np.isnan(z) & ~np.isnan(gt) & (z != 0) & (gt > 0) \
+        & np.isfinite(hh) & np.isfinite(gs)
+    if ok.sum() < 3:
+        return None, None, None
+    idx = np.where(ok)[0]
+    order = idx[np.argsort(-z[idx])]          # top -> bottom
+    best = None
+    for k in range(len(order) - 1):
+        up, lo = order[k], order[k + 1]
+        for w, nb in ((lo, up), (up, lo)):
+            depth = -z[w]
+            if depth < min_depth_m:
+                continue
+            n = tsa_lemons(gt[w], hh[w], gs[w], hh[nb], gs[nb], depth)
+            key = (n, abs(abs(hh[w]) - abs(hh[nb])), abs(gs[w] - gs[nb]), depth)
+            if best is None or key > best[0]:
+                best = (key, w)
+    if best is None:
+        return None, None, None
+    w = best[1]
+    interface_z = float(z[w])
+    slab_mask = np.zeros(len(gt), dtype=bool)
+    wl_mask = np.zeros(len(gt), dtype=bool)
+    slab_mask[idx[z[idx] > interface_z]] = True
+    wl_mask[w] = True
+    if int(round(gt[w])) // 100 in mp.TSA_PERSISTENT:
+        below = order[np.where(order == w)[0][0] + 1:]
+        for e in below:
+            if int(round(gt[e])) // 100 not in mp.TSA_PERSISTENT:
+                break
+            wl_mask[e] = True
+    return slab_mask, wl_mask, interface_z
+
+
+def select_wl_slab(grain_type, z, hand_hardness=None, grain_size_m=None,
+                   min_depth_m: float = 0.0, method: str = None):
+    """The release model's weak layer: mp.WL_SELECTION (or method) picks
+    split_wl_slab ('basal') or split_wl_slab_tsa ('threshold_sum')."""
+    method = mp.WL_SELECTION if method is None else method
+    if method == 'basal':
+        return split_wl_slab(grain_type, z)
+    if method == 'threshold_sum':
+        if hand_hardness is None or grain_size_m is None:
+            raise ValueError("threshold_sum weak-layer selection needs "
+                             "hand_hardness and grain_size")
+        return split_wl_slab_tsa(grain_type, z, hand_hardness, grain_size_m,
+                                 min_depth_m=min_depth_m)
+    raise ValueError(f"unknown WL_SELECTION {method!r}; expected one of "
+                     f"{mp.WL_SELECTIONS}")
+
+
 def element_thickness(z, hs, valid):
     """
     Per-element thickness dz (m), in the original element index order.
@@ -297,7 +383,13 @@ def profile_features(ds_t_loc, min_depth_cm: float) -> dict:
     result = {'hs': hs}
     nu = mp.NU
 
-    slab_m, wl_m, interface_z = split_wl_slab(gt, z)
+    if mp.WL_SELECTION == 'basal':
+        slab_m, wl_m, interface_z = split_wl_slab(gt, z)
+    else:
+        slab_m, wl_m, interface_z = select_wl_slab(
+            gt, z, ds_t_loc['hand_hardness'].values.ravel(),
+            ds_t_loc['grain_size'].values.ravel(),
+            min_depth_m=min_depth_cm / 100.0)
 
     if slab_m is None:
         return result
