@@ -23,6 +23,12 @@ Re-pinned 2026-11-10 for USE_SLAB_CRACK_LINES on by default (Ron): 37 goes
 3657 -> 3498 m2 (IoU 0.2670 -> 0.2664) because a crack line from a tensile-gate
 failure cuts off part of its region; the other three start no line that cuts
 anything. CRACK_OFF pins the old value with the flag off.
+
+Re-pinned 2026-11-13 for USE_SEVERED_SLIDE on by default (Ron): 37 goes
+3498 -> 3542 m2 (IoU 0.2664 -> 0.2707) because part of the piece its crack line
+cut off lies above atan(0.62) and slides. SLIDE_OFF pins the 11-10 value. The
+fixture CSVs are precomputed, so the 11-13 facet-rule and slab-floor defaults
+do not reach this test.
 """
 import pytest
 
@@ -36,6 +42,11 @@ REFERENCE = {
     1772: (612.0, 0.05067835270873417),
     1998: (1385.0, 0.029587436796836643),
     4300: (1676.0, 0.10518130657424013),
+    37: (3542.0, 0.2707061518182006),
+}
+
+# Same trigger with USE_SEVERED_SLIDE off (the reference 2026-11-10 to 11-13).
+SLIDE_OFF = {
     37: (3498.0, 0.26644425400377847),
 }
 
@@ -95,3 +106,13 @@ def test_slab_crack_lines_on_and_cut(legacy, monkeypatch):
         assert poly.area == pytest.approx(area, abs=1.0)
         assert fx.iou(poly) == pytest.approx(iou, abs=1e-3)
         assert poly.area > legacy[trig].area
+
+
+def test_severed_slide_is_on_and_moves_37(legacy, monkeypatch):
+    assert mp.USE_SEVERED_SLIDE
+    monkeypatch.setattr(mp, 'USE_SEVERED_SLIDE', False)
+    for trig, (area, iou) in SLIDE_OFF.items():
+        poly = fx.polygon_for(trig)
+        assert poly.area == pytest.approx(area, abs=1.0)
+        assert fx.iou(poly) == pytest.approx(iou, abs=1e-3)
+        assert poly.area < legacy[trig].area

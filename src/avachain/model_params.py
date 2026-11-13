@@ -103,8 +103,13 @@ LIGAMENT_VARIANTS = (
 # The legacy Eq. 20 arrest reads the plain sigma_t column, which has no
 # knockdown, so this moves sigma_t_mean/_wl/_ligament (and A_ca_* built on
 # them), the energy mode and the slab tensile gate.
+# 2026-11-13 (Ron): 'grain_class_primary' is the default. The mixed RG/FC
+# forms keep RG strength: they are 51% of the top 0.45 m of the Jan 18 release
+# slab (pure RG 6%), so the secondary rule knocked the shallow slab down as if
+# it were facets and its S_t came out 0.44x a uniformly thinned slab; with the
+# primary rule it equals it (start-zone median f 0.97 -> 0.79).
 FACET_STRENGTH_FACTOR = 0.5
-FACET_SOURCE          = 'grain_class'
+FACET_SOURCE          = 'grain_class_primary'
 FACET_SP_REF          = None
 # Grain classes counted as faceted (SNOWPACK codes: 4 FC, 5 DH, 9 FCxr).
 # Jamieson & Johnston (1990), Microstructure: group II is "layers of faceted
@@ -254,7 +259,7 @@ TOUGHNESS_A_FRAC = 0.5
 MIN_TAU_G          = 40.0   # Pa; minimum gravitational driving shear stress
 MAX_SK38           = 1.0    # Sk38 >= 1.0 = stable for skier triggering (Schweizer & Jamieson 2007);
                             # also the 'stability_connected' baseline threshold
-MIN_SLAB_THICKNESS = 0.5    # m; too thin = D1 at most
+MIN_SLAB_THICKNESS = 0.3    # m; Ron 2026-11-13: was 0.5 ("D1 at most"), but Jan 18 failed at ~0.45 m
 # m; the deepest slab we expect explosive control to trigger at the basal WL.
 # This is an operational choice, not a physical result, and it binds hard. Sk38
 # at the WL falls almost monotonically with slab thickness (Spearman -0.93
@@ -322,7 +327,7 @@ TAU_G_ABS_FLOOR        = 350.0  # Pa
 # little. Per slope: [calibration] tau_ratio_floor (Little Professor 0.65 since
 # calibration 2026-11-10.2; Jan 18 IoU plateau 0.60-0.70).
 TAU_RATIO_FLOOR        = 0.0
-MIN_PROPAGATION_SLAB   = 0.50   # m — slab too thin to sustain crack propagation
+MIN_PROPAGATION_SLAB   = 0.30   # m — slab too thin to sustain crack propagation (0.50 until 2026-11-13; Jan 18 failed at ~0.45 m)
 MIN_PROPAGATION_LAMBDA = 0.1    # m — slab too weak/compliant to transmit fracture
                                 # Λ = √(E×h³ / (12×G_wl×D_wl)): integrates
                                 # slab thickness, stiffness, and WL properties
@@ -422,7 +427,7 @@ USE_SLAB_CRACK_LINES = True
 SLAB_CRACK_BAND_M    = 5.0     # m; half-width of the strip that sets L and W
 SLAB_CRACK_ALIGN_COS = 0.707   # a line step must lie within 45 deg of the line
 
-# Severed slab slides (Ron, 2026-11-13; experiment, avachain only, off). The
+# Severed slab slides (Ron, 2026-11-13; on, both repos). The
 # crack lines above drop every piece they cut off from the trigger. But the
 # weak layer under that piece has already fractured (the BFS reached it), so
 # once the slab breaks around it nothing holds it but crack-face friction. With
@@ -432,7 +437,7 @@ SLAB_CRACK_ALIGN_COS = 0.707   # a line step must lie within 45 deg of the line
 # to rest, van Herwijnen & Heierli 2009 GRL (31.8 deg). Motivation: on a 0.45 m
 # slab (Jan 18, h x 0.324) one line across the neck at the trigger dropped
 # ~410 of ~650 reached clusters at facet_a 0.5 and none at 0.6.
-USE_SEVERED_SLIDE = False
+USE_SEVERED_SLIDE = True     # adopted 2026-11-13 (Ron), both repos
 SEVERED_SLIDE_MU  = 0.62
 
 # ---- Cross-slope θ sampling (estimate_cross_slope_width) ----------------------

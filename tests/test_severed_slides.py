@@ -41,7 +41,7 @@ def test_threshold_is_atan_mu_and_order_independent():
 
 
 def test_defaults():
-    assert mp.USE_SEVERED_SLIDE is False
+    assert mp.USE_SEVERED_SLIDE is True   # adopted 2026-11-13 (Ron)
     assert mp.SEVERED_SLIDE_MU == 0.62
     import inspect
     src = inspect.getsource(rg.propagate_release)
