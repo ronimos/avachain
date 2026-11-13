@@ -66,6 +66,34 @@ def cluster_tensile_support(cid, meloche_df, snap_features) -> float:
 
 
 
+def severed_slides(severed, neighbours, slope_of, mu=None) -> set:
+    """Clusters of `severed` that slide anyway (USE_SEVERED_SLIDE): each piece
+    (connected component of `severed` in the BFS graph, made symmetric) whose
+    mean cluster slope exceeds atan(mu). Order-independent."""
+    mu = mp.SEVERED_SLIDE_MU if mu is None else mu
+    lim = np.degrees(np.arctan(mu))
+    severed = set(severed)
+    adj = {c: set() for c in severed}
+    for c, nb in neighbours.items():
+        for u in nb:
+            if c in severed and u in severed:
+                adj[c].add(u); adj[u].add(c)
+    slides, seen = set(), set()
+    for c0 in sorted(severed):
+        if c0 in seen:
+            continue
+        comp, stack = set(), [c0]
+        while stack:
+            c = stack.pop()
+            if c in comp:
+                continue
+            comp.add(c); stack.extend(adj[c] - comp)
+        seen |= comp
+        if np.mean([slope_of(c) for c in comp]) > lim:
+            slides |= comp
+    return slides
+
+
 def slab_crack_orientation(xy_from, xy_to, fall_xy, align_cos=None):
     """'crown' for an upslope step from xy_from to xy_to, 'flank' for a
     cross-slope step, None for downslope or a zero step. fall_xy is the unit
@@ -1400,6 +1428,10 @@ def propagate_release(
         severed, sc_stats = slab_crack_lines(
             failed, slab_cracks, trigger_cluster_id, neighbours, centroids,
             fall_xy, cluster_props, _slope_cached, cluster_map)
+        if mp.USE_SEVERED_SLIDE and severed:
+            slides = severed_slides(severed, neighbours, _slope_cached)
+            sc_stats['severed_slides'] = len(slides)
+            severed = severed - slides
         failed -= severed
         print(f"    slab-crack lines: {n_before} -> {len(failed)} clusters {sc_stats}")
 

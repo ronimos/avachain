@@ -403,6 +403,19 @@ USE_SLAB_CRACK_LINES = True
 SLAB_CRACK_BAND_M    = 5.0     # m; half-width of the strip that sets L and W
 SLAB_CRACK_ALIGN_COS = 0.707   # a line step must lie within 45 deg of the line
 
+# Severed slab slides (Ron, 2026-11-13; experiment, avachain only, off). The
+# crack lines above drop every piece they cut off from the trigger. But the
+# weak layer under that piece has already fractured (the BFS reached it), so
+# once the slab breaks around it nothing holds it but crack-face friction. With
+# this on, a severed piece (connected in the BFS graph) stays in the release
+# when its mean cluster slope exceeds atan(SEVERED_SLIDE_MU); only a piece on
+# gentler ground is dropped. 0.62 is the crack-face friction where slabs came
+# to rest, van Herwijnen & Heierli 2009 GRL (31.8 deg). Motivation: on a 0.45 m
+# slab (Jan 18, h x 0.324) one line across the neck at the trigger dropped
+# ~410 of ~650 reached clusters at facet_a 0.5 and none at 0.6.
+USE_SEVERED_SLIDE = False
+SEVERED_SLIDE_MU  = 0.62
+
 # ---- Cross-slope θ sampling (estimate_cross_slope_width) ----------------------
 # The lateral sample has to sit near the true cross-slope axis (aspect ± 90°).
 # Selecting it by raster row/col instead — "same row ± 50 px, column offset
