@@ -92,7 +92,10 @@ hour_utc = 3
 # Approved by Ron 2026-11-10: trigger toughness (module default) + caps off + facet 0.75 (.1);
 # tau_g/tau_p load-to-strength floor 0.65 (.2); running slab-crack lines, a physics
 # change with no knob (.3, release_geometry.USE_SLAB_CRACK_LINES).
-version        = "2026-11-10.3"
+# 2026-11-13.1 (Ron): physics defaults changed, knobs NOT refitted: severed slab
+# slides (USE_SEVERED_SLIDE), primary-class facet rule (FACET_SOURCE), 0.3 m slab
+# floors. Jan 18: E[IoU] 0.626, E[area] 7098 m2, AUC 0.838, ski 0/46 (was .3: 0.610).
+version        = "2026-11-13.1"
 facet_a        = 0.75     # the one fitted knob: J&J 1990 facet knockdown (module default 0.5)
 distance_caps  = false    # structural: BFS up/down/cross caps open
 tau_ratio_floor = 0.65    # second (last) fitted knob: BFS stops where tau_g/tau_p < 0.65 (module default 0 = off)

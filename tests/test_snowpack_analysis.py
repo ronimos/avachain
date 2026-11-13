@@ -508,9 +508,9 @@ class TestFacetSource:
             'grain_type': ('layer', np.array([330.0, 990.0])),
         })
 
-    def test_default_is_grain_class(self):
-        import snowpack_analysis as sa
-        assert mp.FACET_SOURCE == 'grain_class'
+    def test_default_is_grain_class_primary(self):
+        # 2026-11-13 (Ron): RG/FC keeps RG strength
+        assert mp.FACET_SOURCE == 'grain_class_primary'
 
     def test_grain_type_reaches_the_aggregation(self, monkeypatch):
         import snowpack_analysis as sa

@@ -42,6 +42,7 @@ from pyproj import Transformer
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import xsnow
 from config import ProjectConfig
+import model_params as mp
 from snowpack_io import (load_dataset, kml_to_mask, MAX_SNAPSHOT_GAP,
                          snapshot_gap)
 from snowpack_analysis import (
@@ -654,7 +655,14 @@ def main():
                         help='Skip release/adjacent/reference group comparison '
                              '(~46k Zarr loads). Only produces '
                              'all_start_zone_features and meloche_features_all CSVs.')
+    parser.add_argument('--wl-selection', choices=mp.WL_SELECTIONS, default=None,
+                        help="Weak layer for the release model: 'basal' (default, "
+                             "model_params.WL_SELECTION) or 'threshold_sum' (layer of "
+                             "concern; write to its own --features-dir).")
     args = parser.parse_args()
+    if args.wl_selection:
+        mp.WL_SELECTION = args.wl_selection
+    print(f"  weak-layer selection: {mp.WL_SELECTION}")
 
     if args.toml:
         cfg = ProjectConfig.from_toml(args.toml)

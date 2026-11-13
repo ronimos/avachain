@@ -103,8 +103,13 @@ LIGAMENT_VARIANTS = (
 # The legacy Eq. 20 arrest reads the plain sigma_t column, which has no
 # knockdown, so this moves sigma_t_mean/_wl/_ligament (and A_ca_* built on
 # them), the energy mode and the slab tensile gate.
+# 2026-11-13 (Ron): 'grain_class_primary' is the default. The mixed RG/FC
+# forms keep RG strength: they are 51% of the top 0.45 m of the Jan 18 release
+# slab (pure RG 6%), so the secondary rule knocked the shallow slab down as if
+# it were facets and its S_t came out 0.44x a uniformly thinned slab; with the
+# primary rule it equals it (start-zone median f 0.97 -> 0.79).
 FACET_STRENGTH_FACTOR = 0.5
-FACET_SOURCE          = 'grain_class'
+FACET_SOURCE          = 'grain_class_primary'
 FACET_SP_REF          = None
 # Grain classes counted as faceted (SNOWPACK codes: 4 FC, 5 DH, 9 FCxr).
 # Jamieson & Johnston (1990), Microstructure: group II is "layers of faceted
@@ -125,6 +130,25 @@ MIXED_PRIMARY_CLASSES = (1, 2, 3)
 # admitted; FCxr above the first FC/DH element still ends the block, so every
 # profile with an FC/DH base splits exactly as before.
 BASAL_FCXR_IS_WL = True
+
+# Which weak layer the release model uses (snowpack_analysis.select_wl_slab).
+# 'basal' (default, operational): the basal FC/DH block above. It stays the
+# operational choice because the forecast cares about the larger avalanches
+# (Ron, 2026-11-12). 'threshold_sum' is an ADDITION, the layer of concern by
+# the threshold-sum approach (Schweizer & Jamieson 2007, Cold Reg. Sci. Technol.
+# 47, 50-59; Monti et al. 2014): the interface with the most "lemons". On the
+# Jan 18 re-referenced replay it put the bed at a median 0.53 m against the
+# observed 0.44 m (basal: 0.82 m). CLI: analyze --wl-selection.
+WL_SELECTION = 'basal'
+WL_SELECTIONS = ('basal', 'threshold_sum')
+
+# Threshold-sum lemons (Schweizer & Jamieson 2007, Table 3). One lemon each:
+TSA_GS_DIFF_MM   = 0.75    # grain size difference across the interface >= (mm)
+TSA_HH_DIFF      = 1.7     # hand-hardness index difference >= (1 F, 2 4F, 3 1F, 4 P, 5 K)
+TSA_DEPTH_M      = (0.18, 0.94)  # weak-layer depth within (m)
+TSA_PERSISTENT   = (4, 5, 6, 9)  # weak-layer primary grain class FC, DH, SH, FCxr
+TSA_WL_GS_MM     = 1.25    # weak-layer grain size >= (mm)
+TSA_WL_HH        = 1.3     # weak-layer hand-hardness index <=
 
 # ============================================================================
 # SHEAR-STRENGTH GRADIENT θ AND THE ARREST-INDEX FLOOR (snowpack_analysis)
@@ -235,7 +259,7 @@ TOUGHNESS_A_FRAC = 0.5
 MIN_TAU_G          = 40.0   # Pa; minimum gravitational driving shear stress
 MAX_SK38           = 1.0    # Sk38 >= 1.0 = stable for skier triggering (Schweizer & Jamieson 2007);
                             # also the 'stability_connected' baseline threshold
-MIN_SLAB_THICKNESS = 0.5    # m; too thin = D1 at most
+MIN_SLAB_THICKNESS = 0.3    # m; Ron 2026-11-13: was 0.5 ("D1 at most"), but Jan 18 failed at ~0.45 m
 # m; the deepest slab we expect explosive control to trigger at the basal WL.
 # This is an operational choice, not a physical result, and it binds hard. Sk38
 # at the WL falls almost monotonically with slab thickness (Spearman -0.93
@@ -272,9 +296,27 @@ A_CA_FALLBACK_M = 50.0
 STAUCHWALL_DEG   = 29.0   # slope threshold for downslope arrest (degrees); Ron 2026-10-27, was 28.0
 GAUME_ASPECT_CAP = 2.5    # max width/A_ca ratio (prevents runaway cross-slope)
 MIN_POLYGON_AREA = 200.0  # m² — discard degenerate polygons smaller than this
+# Which piece to publish when the release (the BFS cluster set, or its clip to
+# start zone + Stauchwall) falls into several pixel pieces. The BFS joins
+# clusters through k-nearest-neighbour links that need not share a pixel edge.
+# 'largest' keeps the biggest piece (every polygon before 2026-11-13);
+# 'trigger' keeps the piece holding the trigger cluster's pixels, so the
+# release always contains its own trigger (falls back to the nearest piece).
+# Jan 18 threshold-sum WL, tau_ratio_floor 0.35: 'largest' dropped the
+# trigger piece (371-405 m2) for a 3897 m2 piece elsewhere. Cal .3 basal:
+# the trigger is in the largest piece for all 5 triggers. Experiment, avachain
+# only so far (not yet in the standalone).
+POLYGON_PIECE = 'largest'
 
 # ---- BFS graph and region-size cap -------------------------------------------
 BFS_K_NEIGHBOURS = 8      # cluster adjacency degree for the flood-fill
+# BFS links. 'knn': the BFS_K_NEIGHBOURS nearest centroids (every polygon
+# before 2026-11-13). 'pixel': clusters that share a pixel edge (4-connected),
+# so a crack cannot jump across a cluster it arrested in. Jan 18
+# threshold-sum WL at tau_ratio_floor 0.33: ten arrested neck clusters
+# (tau_g/tau_p 0.321-0.329) split the release, but k-NN links still carried the
+# BFS across them to a 3.9k m2 body. Experiment, avachain only so far.
+BFS_ADJACENCY = 'knn'
 # Safety cap on the BFS flood-fill.  When it binds, the polygon is labelled
 # [CAP-BOUND] so it is never mistaken for a physics-limited result.
 # Measured on Jan 18: 500 → 2000 moves median area ~20 % (5 366 → 6 405 m²)
@@ -303,7 +345,7 @@ TAU_G_ABS_FLOOR        = 350.0  # Pa
 # little. Per slope: [calibration] tau_ratio_floor (Little Professor 0.65 since
 # calibration 2026-11-10.2; Jan 18 IoU plateau 0.60-0.70).
 TAU_RATIO_FLOOR        = 0.0
-MIN_PROPAGATION_SLAB   = 0.50   # m — slab too thin to sustain crack propagation
+MIN_PROPAGATION_SLAB   = 0.30   # m — slab too thin to sustain crack propagation (0.50 until 2026-11-13; Jan 18 failed at ~0.45 m)
 MIN_PROPAGATION_LAMBDA = 0.1    # m — slab too weak/compliant to transmit fracture
                                 # Λ = √(E×h³ / (12×G_wl×D_wl)): integrates
                                 # slab thickness, stiffness, and WL properties
@@ -402,6 +444,19 @@ D_CAP_DEFAULT_M = 50.0   # m; A_ca stand-in when the trigger has none
 USE_SLAB_CRACK_LINES = True
 SLAB_CRACK_BAND_M    = 5.0     # m; half-width of the strip that sets L and W
 SLAB_CRACK_ALIGN_COS = 0.707   # a line step must lie within 45 deg of the line
+
+# Severed slab slides (Ron, 2026-11-13; on, both repos). The
+# crack lines above drop every piece they cut off from the trigger. But the
+# weak layer under that piece has already fractured (the BFS reached it), so
+# once the slab breaks around it nothing holds it but crack-face friction. With
+# this on, a severed piece (connected in the BFS graph) stays in the release
+# when its mean cluster slope exceeds atan(SEVERED_SLIDE_MU); only a piece on
+# gentler ground is dropped. 0.62 is the crack-face friction where slabs came
+# to rest, van Herwijnen & Heierli 2009 GRL (31.8 deg). Motivation: on a 0.45 m
+# slab (Jan 18, h x 0.324) one line across the neck at the trigger dropped
+# ~410 of ~650 reached clusters at facet_a 0.5 and none at 0.6.
+USE_SEVERED_SLIDE = True     # adopted 2026-11-13 (Ron), both repos
+SEVERED_SLIDE_MU  = 0.62
 
 # ---- Cross-slope θ sampling (estimate_cross_slope_width) ----------------------
 # The lateral sample has to sit near the true cross-slope axis (aspect ± 90°).

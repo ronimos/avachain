@@ -39,6 +39,44 @@ import arrest_indices as _ai
 import model_params as mp
 
 
+
+def pick_release_piece(geom, cluster_map, transform, trigger_cluster_id, piece=None):
+    """One polygon from a possibly multi-part release (mp.POLYGON_PIECE).
+    'largest': biggest piece. 'trigger': the piece holding most of the trigger
+    cluster's pixel centres; if none holds any, the piece nearest to them."""
+    piece = mp.POLYGON_PIECE if piece is None else piece
+    if piece not in ('largest', 'trigger'):
+        raise ValueError(f"unknown POLYGON_PIECE {piece!r}")
+    if geom is None or geom.geom_type != 'MultiPolygon':
+        return geom
+    parts = list(geom.geoms)
+    if piece == 'trigger' and trigger_cluster_id is not None and cluster_map is not None:
+        from shapely.geometry import MultiPoint
+        rc = np.argwhere(cluster_map == trigger_cluster_id)
+        if len(rc):
+            pts = [transform * (c + 0.5, r + 0.5) for r, c in rc]
+            mpts = MultiPoint(pts)
+            hits = [sum(p.covers(pt) for pt in mpts.geoms) for p in parts]
+            if max(hits) > 0:
+                return parts[int(np.argmax(hits))]
+            return min(parts, key=lambda p: p.distance(mpts))
+    return max(parts, key=lambda p: p.area)
+
+
+def pixel_adjacency(cluster_map: np.ndarray) -> dict:
+    """{cid: [cid, ...]}: clusters sharing a pixel edge (4-connected), cid > 0.
+    Every cluster > 0 gets an entry, possibly empty."""
+    pairs = []
+    for a, b in ((cluster_map[:, :-1], cluster_map[:, 1:]),
+                 (cluster_map[:-1, :], cluster_map[1:, :])):
+        m = (a != b) & (a > 0) & (b > 0)
+        pairs.append(np.stack([a[m], b[m]], axis=1))
+    pr = np.unique(np.concatenate(pairs), axis=0)
+    adj = {int(c): set() for c in np.unique(cluster_map) if c > 0}
+    for x, y in pr:
+        adj[int(x)].add(int(y)); adj[int(y)].add(int(x))
+    return {c: sorted(v) for c, v in adj.items()}
+
 def cluster_tensile_support(cid, meloche_df, snap_features) -> float:
     """S_t of a TRIGGER cluster (NaN if an input is missing): r_c from the
     Meloche CSV, slab density / thickness / sigma_t from the snapshot features.
@@ -64,6 +102,34 @@ def cluster_tensile_support(cid, meloche_df, snap_features) -> float:
         sigma_t, _get(snap_features, 'slab_density'), h,
         _get(meloche_df, 'rc_wl')))
 
+
+
+def severed_slides(severed, neighbours, slope_of, mu=None) -> set:
+    """Clusters of `severed` that slide anyway (USE_SEVERED_SLIDE): each piece
+    (connected component of `severed` in the BFS graph, made symmetric) whose
+    mean cluster slope exceeds atan(mu). Order-independent."""
+    mu = mp.SEVERED_SLIDE_MU if mu is None else mu
+    lim = np.degrees(np.arctan(mu))
+    severed = set(severed)
+    adj = {c: set() for c in severed}
+    for c, nb in neighbours.items():
+        for u in nb:
+            if c in severed and u in severed:
+                adj[c].add(u); adj[u].add(c)
+    slides, seen = set(), set()
+    for c0 in sorted(severed):
+        if c0 in seen:
+            continue
+        comp, stack = set(), [c0]
+        while stack:
+            c = stack.pop()
+            if c in comp:
+                continue
+            comp.add(c); stack.extend(adj[c] - comp)
+        seen |= comp
+        if np.mean([slope_of(c) for c in comp]) > lim:
+            slides |= comp
+    return slides
 
 
 def slab_crack_orientation(xy_from, xy_to, fall_xy, align_cos=None):
@@ -713,7 +779,7 @@ def make_release_polygon_2d(
         sw_polygon = sw_polygon.simplify(1.0, preserve_topology=True)
 
     def _clip_polygon(poly, min_area=None):
-        """Clip polygon to start zone AND stauchwall, return largest piece."""
+        """Clip polygon to start zone AND stauchwall; one piece (mp.POLYGON_PIECE)."""
         min_area = mp.MIN_POLYGON_AREA if min_area is None else min_area
         if poly is None or poly.is_empty:
             return None
@@ -732,7 +798,7 @@ def make_release_polygon_2d(
                 return None
             poly = unary_union(polys)
         if poly.geom_type == 'MultiPolygon':
-            poly = max(poly.geoms, key=lambda p: p.area)
+            poly = pick_release_piece(poly, cluster_map, transform, trigger_cluster_id)
         if poly.is_empty or poly.area < min_area:
             return None
         return poly
@@ -993,6 +1059,10 @@ def propagate_release(
     _, idxs  = nbrs.kneighbors(pxs)
     neighbours = {int(cids[i]): [int(cids[j]) for j in idxs[i][1:]]
                   for i in range(len(cids))}
+    if mp.BFS_ADJACENCY == 'pixel':
+        neighbours = pixel_adjacency(cluster_map)
+    elif mp.BFS_ADJACENCY != 'knn':
+        raise ValueError(f"unknown BFS_ADJACENCY {mp.BFS_ADJACENCY!r}")
 
     # Centroids in UTM
     # round, not truncate: matches the standalone (int() put a centroid up to
@@ -1400,6 +1470,10 @@ def propagate_release(
         severed, sc_stats = slab_crack_lines(
             failed, slab_cracks, trigger_cluster_id, neighbours, centroids,
             fall_xy, cluster_props, _slope_cached, cluster_map)
+        if mp.USE_SEVERED_SLIDE and severed:
+            slides = severed_slides(severed, neighbours, _slope_cached)
+            sc_stats['severed_slides'] = len(slides)
+            severed = severed - slides
         failed -= severed
         print(f"    slab-crack lines: {n_before} -> {len(failed)} clusters {sc_stats}")
 
@@ -1439,7 +1513,7 @@ def propagate_release(
                for s, v in shapes if v == 1]
     polygon = unary_union(polys)
     if polygon.geom_type == 'MultiPolygon':
-        polygon = max(polygon.geoms, key=lambda p: p.area)
+        polygon = pick_release_piece(polygon, cluster_map, transform, trigger_cluster_id)
     if polygon.is_empty or polygon.area < mp.MIN_POLYGON_AREA:
         return None, failed
 

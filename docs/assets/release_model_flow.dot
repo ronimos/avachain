@@ -1,5 +1,5 @@
-// Release-area model flow, avachain names (copy of ~/avalanche-release-areas docs/figures/release_model_flow.dot, 2026-11-10). Render:
-//   dot -Tpng -Gdpi=150 docs/assets/release_model_flow.dot -o docs/assets/release_model_flow.png
+// Release-area model flow (Ron, 2026-11-10; updated 2026-11-13). Render:
+//   dot -Tpng -Gdpi=150 docs/figures/release_model_flow.dot -o docs/figures/release_model_flow.png
 digraph release_model {
   graph [rankdir=TB, fontname="Helvetica", fontsize=11, nodesep=0.35, ranksep=0.35, newrank=true];
   node  [shape=box, style="rounded,filled", fillcolor="#ffffff", color="#555555", fontname="Helvetica", fontsize=10];
@@ -13,17 +13,17 @@ digraph release_model {
   }
 
   subgraph cluster_feat {
-    label="Per-cluster features (snowpack_analysis)"; style="rounded,filled"; fillcolor="#f4f4f4"; color="#bbbbbb";
-    feat [label="Basal WL / slab split\nslab ρ, h, σt (J&J 1990 x facet knockdown), K_Ic\nWL τp, r_c, Sk38"];
+    label="Per-cluster features (snowpack_features)"; style="rounded,filled"; fillcolor="#f4f4f4"; color="#bbbbbb";
+    feat [label="WL / slab split: basal FC/DH layer\n(threshold-sum WL: option, off)\nslab ρ, h, σt (J&J 1990 x facet knockdown,\nprimary grain class), K_Ic;  WL τp, r_c, Sk38"];
     mel  [label="Meloche features\nτg, Λ, θ (plane fit), Π₁, A_ca"];
     feat -> mel;
   }
   pro -> feat; dem -> mel;
 
   subgraph cluster_trig {
-    label="Trigger selection (analysis_pipeline.step_scenarios)"; style="rounded,filled"; fillcolor="#fff6e5"; color="#e0b660";
+    label="Trigger selection (generate_scenarios)"; style="rounded,filled"; fillcolor="#fff6e5"; color="#e0b660";
     t1 [label="1  τg ≥ 40 Pa, ψ ≥ Stauchwall + 2°, Sk38 < 1"];
-    t2 [label="2  0.5 m ≤ h ≤ 2.0 m"];
+    t2 [label="2  0.3 m ≤ h ≤ 2.0 m"];
     t2b[label="2b  S_t ≥ 1 with σt capped by toughness\nK_Ic / (1.122 √(π h/2))   [trigger only]"];
     t3 [label="3  elevation ≥ P50   (relative)"];
     t4 [label="4  Π₁ ≥ median   (relative)"];
@@ -33,7 +33,7 @@ digraph release_model {
   mel -> t1;
 
   subgraph cluster_bfs {
-    label="Crack propagation BFS, per trigger (release_geometry.propagate_release)"; style="rounded,filled"; fillcolor="#eaf6ec"; color="#7fbf8a";
+    label="Crack propagation BFS, per trigger (propagate_crack)\nlinks: 8 nearest cluster centroids"; style="rounded,filled"; fillcolor="#eaf6ec"; color="#7fbf8a";
     cand [label="candidate neighbour of an admitted cluster", fillcolor="#ffffff"];
     gates [shape=box, style="filled", fillcolor="#ffffff", label=<
       <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="1" CELLPADDING="1">
@@ -42,7 +42,7 @@ digraph release_model {
       <TR><TD ALIGN="LEFT">distance caps (if USE_DISTANCE_CAPS)</TD></TR>
       <TR><TD ALIGN="LEFT">Stauchwall: mean slope &lt; 29° (not upslope)</TD></TR>
       <TR><TD ALIGN="LEFT">τg &lt; TAU_G_ABS_FLOOR;  τg/τp &lt; TAU_RATIO_FLOOR</TD></TR>
-      <TR><TD ALIGN="LEFT">thin slab;  low Λ</TD></TR>
+      <TR><TD ALIGN="LEFT">thin slab (h &lt; 0.3 m);  low Λ</TD></TR>
       <TR><TD ALIGN="LEFT"><B>slab tensile failure  S_t &lt; 1</B></TD></TR>
       <TR><TD ALIGN="LEFT">Meloche Eq. 20 directional arrest (A_ca &lt; step)</TD></TR>
       </TABLE>>];
@@ -60,8 +60,8 @@ digraph release_model {
   subgraph cluster_post {
     label="After the BFS"; style="rounded,filled"; fillcolor="#f3ecf8"; color="#b39bcc";
     lines [label="slab-crack lines (USE_SLAB_CRACK_LINES)\none best-aligned neighbour per step,\nwhile the slab is loaded (θ > φ = 27°)"];
-    sever [label="remove the area the lines sever from the trigger;\nline clusters stay"];
-    poly  [label="polygon: largest part, holes filled,\nclipped to start zone, ≥ 200 m²"];
+    sever [label="remove the area the lines sever from the trigger,\nunless that piece slides: mean slope > atan μ = 31.8°\n(USE_SEVERED_SLIDE, μ = 0.62);  line clusters stay"];
+    poly  [label="polygon: largest part, holes filled,\nclipped to start zone and Stauchwall, ≥ 200 m²"];
     lines -> sever -> poly;
   }
   crk -> lines;
