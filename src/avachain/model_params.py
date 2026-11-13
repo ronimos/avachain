@@ -296,9 +296,27 @@ A_CA_FALLBACK_M = 50.0
 STAUCHWALL_DEG   = 29.0   # slope threshold for downslope arrest (degrees); Ron 2026-10-27, was 28.0
 GAUME_ASPECT_CAP = 2.5    # max width/A_ca ratio (prevents runaway cross-slope)
 MIN_POLYGON_AREA = 200.0  # m² — discard degenerate polygons smaller than this
+# Which piece to publish when the release (the BFS cluster set, or its clip to
+# start zone + Stauchwall) falls into several pixel pieces. The BFS joins
+# clusters through k-nearest-neighbour links that need not share a pixel edge.
+# 'largest' keeps the biggest piece (every polygon before 2026-11-13);
+# 'trigger' keeps the piece holding the trigger cluster's pixels, so the
+# release always contains its own trigger (falls back to the nearest piece).
+# Jan 18 threshold-sum WL, tau_ratio_floor 0.35: 'largest' dropped the
+# trigger piece (371-405 m2) for a 3897 m2 piece elsewhere. Cal .3 basal:
+# the trigger is in the largest piece for all 5 triggers. Experiment, avachain
+# only so far (not yet in the standalone).
+POLYGON_PIECE = 'largest'
 
 # ---- BFS graph and region-size cap -------------------------------------------
 BFS_K_NEIGHBOURS = 8      # cluster adjacency degree for the flood-fill
+# BFS links. 'knn': the BFS_K_NEIGHBOURS nearest centroids (every polygon
+# before 2026-11-13). 'pixel': clusters that share a pixel edge (4-connected),
+# so a crack cannot jump across a cluster it arrested in. Jan 18
+# threshold-sum WL at tau_ratio_floor 0.33: ten arrested neck clusters
+# (tau_g/tau_p 0.321-0.329) split the release, but k-NN links still carried the
+# BFS across them to a 3.9k m2 body. Experiment, avachain only so far.
+BFS_ADJACENCY = 'knn'
 # Safety cap on the BFS flood-fill.  When it binds, the polygon is labelled
 # [CAP-BOUND] so it is never mistaken for a physics-limited result.
 # Measured on Jan 18: 500 → 2000 moves median area ~20 % (5 366 → 6 405 m²)

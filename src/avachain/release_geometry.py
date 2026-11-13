@@ -39,6 +39,44 @@ import arrest_indices as _ai
 import model_params as mp
 
 
+
+def pick_release_piece(geom, cluster_map, transform, trigger_cluster_id, piece=None):
+    """One polygon from a possibly multi-part release (mp.POLYGON_PIECE).
+    'largest': biggest piece. 'trigger': the piece holding most of the trigger
+    cluster's pixel centres; if none holds any, the piece nearest to them."""
+    piece = mp.POLYGON_PIECE if piece is None else piece
+    if piece not in ('largest', 'trigger'):
+        raise ValueError(f"unknown POLYGON_PIECE {piece!r}")
+    if geom is None or geom.geom_type != 'MultiPolygon':
+        return geom
+    parts = list(geom.geoms)
+    if piece == 'trigger' and trigger_cluster_id is not None and cluster_map is not None:
+        from shapely.geometry import MultiPoint
+        rc = np.argwhere(cluster_map == trigger_cluster_id)
+        if len(rc):
+            pts = [transform * (c + 0.5, r + 0.5) for r, c in rc]
+            mpts = MultiPoint(pts)
+            hits = [sum(p.covers(pt) for pt in mpts.geoms) for p in parts]
+            if max(hits) > 0:
+                return parts[int(np.argmax(hits))]
+            return min(parts, key=lambda p: p.distance(mpts))
+    return max(parts, key=lambda p: p.area)
+
+
+def pixel_adjacency(cluster_map: np.ndarray) -> dict:
+    """{cid: [cid, ...]}: clusters sharing a pixel edge (4-connected), cid > 0.
+    Every cluster > 0 gets an entry, possibly empty."""
+    pairs = []
+    for a, b in ((cluster_map[:, :-1], cluster_map[:, 1:]),
+                 (cluster_map[:-1, :], cluster_map[1:, :])):
+        m = (a != b) & (a > 0) & (b > 0)
+        pairs.append(np.stack([a[m], b[m]], axis=1))
+    pr = np.unique(np.concatenate(pairs), axis=0)
+    adj = {int(c): set() for c in np.unique(cluster_map) if c > 0}
+    for x, y in pr:
+        adj[int(x)].add(int(y)); adj[int(y)].add(int(x))
+    return {c: sorted(v) for c, v in adj.items()}
+
 def cluster_tensile_support(cid, meloche_df, snap_features) -> float:
     """S_t of a TRIGGER cluster (NaN if an input is missing): r_c from the
     Meloche CSV, slab density / thickness / sigma_t from the snapshot features.
@@ -741,7 +779,7 @@ def make_release_polygon_2d(
         sw_polygon = sw_polygon.simplify(1.0, preserve_topology=True)
 
     def _clip_polygon(poly, min_area=None):
-        """Clip polygon to start zone AND stauchwall, return largest piece."""
+        """Clip polygon to start zone AND stauchwall; one piece (mp.POLYGON_PIECE)."""
         min_area = mp.MIN_POLYGON_AREA if min_area is None else min_area
         if poly is None or poly.is_empty:
             return None
@@ -760,7 +798,7 @@ def make_release_polygon_2d(
                 return None
             poly = unary_union(polys)
         if poly.geom_type == 'MultiPolygon':
-            poly = max(poly.geoms, key=lambda p: p.area)
+            poly = pick_release_piece(poly, cluster_map, transform, trigger_cluster_id)
         if poly.is_empty or poly.area < min_area:
             return None
         return poly
@@ -1021,6 +1059,10 @@ def propagate_release(
     _, idxs  = nbrs.kneighbors(pxs)
     neighbours = {int(cids[i]): [int(cids[j]) for j in idxs[i][1:]]
                   for i in range(len(cids))}
+    if mp.BFS_ADJACENCY == 'pixel':
+        neighbours = pixel_adjacency(cluster_map)
+    elif mp.BFS_ADJACENCY != 'knn':
+        raise ValueError(f"unknown BFS_ADJACENCY {mp.BFS_ADJACENCY!r}")
 
     # Centroids in UTM
     # round, not truncate: matches the standalone (int() put a centroid up to
@@ -1471,7 +1513,7 @@ def propagate_release(
                for s, v in shapes if v == 1]
     polygon = unary_union(polys)
     if polygon.geom_type == 'MultiPolygon':
-        polygon = max(polygon.geoms, key=lambda p: p.area)
+        polygon = pick_release_piece(polygon, cluster_map, transform, trigger_cluster_id)
     if polygon.is_empty or polygon.area < mp.MIN_POLYGON_AREA:
         return None, failed
 
