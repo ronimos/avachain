@@ -13,6 +13,7 @@ without [calibration] runs exactly as before.
     distance_caps = true                # BFS distance caps (USE_DISTANCE_CAPS)
     tau_g_floor = 350.0                 # Pa, BFS driving-stress floor (TAU_G_ABS_FLOOR)
     tau_ratio_floor = 0.0               # BFS tau_g/tau_p floor, 0 = off (TAU_RATIO_FLOOR)
+    slab_crack_mode = "shear"           # slab-crack line fracture mode (SLAB_CRACK_MODE)
     # provenance (free-form, not read by the model):
     events = ["2026-01-18"]; no_event_dates = [...]; objective = "..."; fitted = "..."; commit = "..."
 
@@ -36,12 +37,18 @@ Knobs, and why only these two:
               unaffected.
   tau_ratio_floor model_params.TAU_RATIO_FLOOR, the per-cluster tau_g /
               tau_p floor of the BFS (module default 0 = off). Scenarios only.
+  slab_crack_mode  model_params.SLAB_CRACK_MODE, 'opening' (module default
+              since 2026-11-16) or 'shear'. A structural switch, not a fitted
+              value: it pins the fracture mode a calibration was fitted under
+              (every version up to 2026-11-13.1 was fitted under 'shear').
+              Scenarios only. The CLI --slab-crack-mode overrides it.
 The Λ factors are not knobs: with USE_MELOCHE_ARREST they never run.
 """
 from __future__ import annotations
 import model_params as mp
 
-KNOBS = ("c_fit", "size_scale", "facet_a", "distance_caps", "tau_g_floor", "tau_ratio_floor")
+KNOBS = ("c_fit", "size_scale", "facet_a", "distance_caps", "tau_g_floor",
+         "tau_ratio_floor", "slab_crack_mode")
 PROVENANCE = ("version", "events", "no_event_dates", "objective", "fitted",
               "commit", "note", "sweep")
 
@@ -63,6 +70,9 @@ def _check(cal: dict) -> None:
         raise ValueError("[calibration] tau_ratio_floor must be >= 0")
     if "distance_caps" in cal and not isinstance(cal["distance_caps"], bool):
         raise ValueError("[calibration] distance_caps must be true or false")
+    if "slab_crack_mode" in cal and cal["slab_crack_mode"] not in mp.SLAB_CRACK_MODES:
+        raise ValueError(f"[calibration] slab_crack_mode must be one of "
+                         f"{mp.SLAB_CRACK_MODES}")
 
 
 def apply(cfg, quiet: bool = False) -> dict:
@@ -88,9 +98,12 @@ def apply(cfg, quiet: bool = False) -> dict:
     if "tau_ratio_floor" in cal:
         mp.TAU_RATIO_FLOOR = float(cal["tau_ratio_floor"])
         applied["tau_ratio_floor"] = mp.TAU_RATIO_FLOOR
+    if "slab_crack_mode" in cal:
+        mp.SLAB_CRACK_MODE = str(cal["slab_crack_mode"])
+        applied["slab_crack_mode"] = mp.SLAB_CRACK_MODE
     if applied and not quiet:
         print(f"  calibration {cal.get('version', '(no version)')}: "
-              + ", ".join(f"{k}={v:g}" if not isinstance(v, bool) else f"{k}={v}"
+              + ", ".join(f"{k}={v:g}" if not isinstance(v, (bool, str)) else f"{k}={v}"
                           for k, v in applied.items()), flush=True)
     return applied
 

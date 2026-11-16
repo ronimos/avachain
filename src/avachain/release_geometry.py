@@ -149,30 +149,66 @@ def slab_crack_orientation(xy_from, xy_to, fall_xy, align_cos=None):
     return None
 
 
+def cluster_fall_vector(rows, cols, slope_grid, aspect_grid):
+    """Unit downslope vector (east, north) of one cluster: the mean surface
+    gradient tan(slope) * (sin aspect, cos aspect) over its pixels, normalised
+    (a plane fit's fall line, so flat pixels with arbitrary aspect weigh ~0).
+    Aspect is degrees from north, clockwise (compute_slope_aspect): east = sin,
+    north = cos, the map frame, never array axes. None for a flat cluster."""
+    t = np.tan(np.radians(np.asarray(slope_grid[rows, cols], dtype=float)))
+    a = np.radians(np.asarray(aspect_grid[rows, cols], dtype=float))
+    gx, gy = np.nanmean(t * np.sin(a)), np.nanmean(t * np.cos(a))
+    n = float(np.hypot(gx, gy))
+    if not np.isfinite(n) or n < 1e-9:
+        return None
+    return float(gx / n), float(gy / n)
+
+
+def cluster_fall_vectors(pixel_index, slope_grid, aspect_grid, cids=None) -> dict:
+    """{cid: cluster_fall_vector} for `cids` (default all of pixel_index);
+    flat or unknown clusters are left out."""
+    out = {}
+    for cid in (pixel_index if cids is None else cids):
+        px = pixel_index.get(cid)
+        if px is None:
+            continue
+        v = cluster_fall_vector(px[0], px[1], slope_grid, aspect_grid)
+        if v is not None:
+            out[cid] = v
+    return out
+
+
 def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
                      fall_xy, props, slope_of, cluster_map, phi_deg=None,
-                     band_m=None, align_cos=None):
+                     band_m=None, align_cos=None, mode=None, fall_of=None):
     """Run slab cracks as lines through the admitted region; return
-    (clusters to remove, stats). See USE_SLAB_CRACK_LINES. Lines may cross;
-    each line stops on its own (outside the region, at the trigger, where the
-    slab is unloaded, or on a loop), so the union does not depend on which
-    crack is run first.
+    (clusters to remove, stats). See USE_SLAB_CRACK_LINES and
+    SLAB_CRACK_MODE (model_params). Lines may cross; each line stops on its own
+    (outside the region, at the trigger, where the slab is unloaded, or on a
+    loop), so the union does not depend on which crack is run first.
 
     reached   : admitted clusters (the trigger included)
     cracks    : {cid: 'crown' | 'flank'} where the tensile gate broke the slab
     neighbours: {cid: [cid, ...]} BFS graph (made symmetric here)
     centroids : {cid: (x, y)} map frame
-    fall_xy   : unit downslope vector (east, north)
+    fall_xy   : unit downslope vector (east, north) of the trigger
     props     : {cid: {'slab_density', 'slab_thickness'}} of admitted clusters
     slope_of  : cid -> mean slope (deg)
+    mode      : 'opening' | 'shear' (default mp.SLAB_CRACK_MODE)
+    fall_of   : {cid: unit downslope vector}, 'opening' only; a cluster
+                missing from it takes fall_xy. 'shear' ignores it.
     The result does not depend on the order of reached, cracks or neighbours.
     """
     from scipy import ndimage
     phi_deg = mp.PHI_DEG if phi_deg is None else phi_deg
     band = mp.SLAB_CRACK_BAND_M if band_m is None else band_m
     align_cos = mp.SLAB_CRACK_ALIGN_COS if align_cos is None else align_cos
+    mode = mp.SLAB_CRACK_MODE if mode is None else mode
+    if mode not in mp.SLAB_CRACK_MODES:
+        raise ValueError(f"slab crack mode {mode!r} not in {mp.SLAB_CRACK_MODES}")
+    opening = mode == 'opening'
+    fall_of = fall_of or {}
     reached = set(reached)
-    fx, fy = fall_xy
     tan_phi = np.tan(np.radians(phi_deg))
     adj = {}
     for c, nb in neighbours.items():
@@ -180,20 +216,27 @@ def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
             adj.setdefault(c, set()).add(u)
             adj.setdefault(u, set()).add(c)
 
-    def axes(xy0, xy1):
+    def fall(c):
+        return fall_of.get(c, fall_xy) if opening else fall_xy
+
+    def axes(xy0, xy1, f):
+        fx, fy = f
         dx, dy = xy1[0] - xy0[0], xy1[1] - xy0[1]
         return dx * fx + dy * fy, -dx * fy + dy * fx      # along (+down), cross
 
     def loaded(n, orient):
-        """Net downslope load on the slab at n from detached slab nearby."""
+        """Net downslope load on the slab at n from detached slab nearby; in
+        'opening' mode a flank also needs the two sides to pull apart."""
         h_n = props.get(n, {}).get('slab_thickness', np.nan)
         if not (np.isfinite(h_n) and h_n > 0
                 and np.isfinite(props.get(n, {}).get('slab_density', np.nan))):
             return False
         xy = centroids[n]
+        f_n = fall(n)
         below, col, row, slopes = [], [], [], []
+        side = {1: [], -1: []}
         for c in reached:
-            al, cr = axes(xy, centroids[c])
+            al, cr = axes(xy, centroids[c], f_n)
             inc = False
             if abs(cr) <= band:
                 col.append(al); inc = True
@@ -201,6 +244,8 @@ def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
                     below.append(al)
             if abs(al) <= band:
                 row.append(cr); inc = True
+                if cr != 0:
+                    side[1 if cr > 0 else -1].append(fall(c))
             if inc:
                 p = props.get(c, {})
                 if (np.isfinite(p.get('slab_density', np.nan))
@@ -213,14 +258,26 @@ def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
         if min(L, W) <= 0:
             return False
         th = np.radians(np.mean(slopes))
-        return np.sin(th) - tan_phi * np.cos(th) > 0
+        drive = np.sin(th) - tan_phi * np.cos(th)
+        if not (opening and orient == 'flank'):
+            return drive > 0
+        # Mode I flank: the two sides must pull apart across the line, i.e.
+        # the mean fall lines of the slab on either side diverge. No strength
+        # or toughness test, as for every running line (methods doc).
+        if drive <= 0 or not side[1] or not side[-1]:
+            return False
+        ex, ey = -f_n[1], f_n[0]                          # local cross axis
+        fp = np.mean(side[1], axis=0)
+        fm = np.mean(side[-1], axis=0)
+        return ((fp[0] - fm[0]) * ex + (fp[1] - fm[1]) * ey) > 0
 
     def next_on_line(c, orient, sgn):
         best = None
+        f_c = fall(c)
         for n in adj.get(c, ()):
             if n not in centroids:
                 continue
-            al, cr = axes(centroids[c], centroids[n])
+            al, cr = axes(centroids[c], centroids[n], f_c)
             d = float(np.hypot(al, cr))
             if d < 1e-9:
                 continue
@@ -1339,6 +1396,20 @@ def propagate_release(
     # (USE_SLAB_CRACK_LINES; run as lines after the BFS).
     slab_cracks    = {}
     fall_xy        = (np.sin(np.radians(t_aspect)), np.cos(np.radians(t_aspect)))
+    # Local fall lines for the slab cracks ('opening' mode; 'shear' uses the
+    # trigger's fall_xy everywhere, as every release before 2026-11-16 did).
+    crack_opening  = mp.SLAB_CRACK_MODE == 'opening'
+    fall_cache: dict = {}
+
+    def _crack_fall(cid):
+        if not crack_opening:
+            return fall_xy
+        if cid not in fall_cache:
+            rows, cols = np.nonzero(cluster_map == cid)
+            v = (cluster_fall_vector(rows, cols, slope_grid, aspect_grid)
+                 if len(rows) else None)
+            fall_cache[cid] = fall_xy if v is None else v
+        return fall_cache[cid]
 
     # Ring-by-ring BFS for wave_callback support
     current_ring = [trigger_cluster_id]
@@ -1398,7 +1469,8 @@ def propagate_release(
                     p_xy = centroids.get(parent_props.get('cid'))
                     c_xy = centroids.get(cid)
                     if p_xy is not None and c_xy is not None:
-                        orient = slab_crack_orientation(p_xy, c_xy, fall_xy)
+                        orient = slab_crack_orientation(p_xy, c_xy,
+                                                        _crack_fall(cid))
                         if orient is not None:
                             slab_cracks.setdefault(cid, orient)
 
@@ -1469,13 +1541,14 @@ def propagate_release(
         n_before = len(failed)
         severed, sc_stats = slab_crack_lines(
             failed, slab_cracks, trigger_cluster_id, neighbours, centroids,
-            fall_xy, cluster_props, _slope_cached, cluster_map)
+            fall_xy, cluster_props, _slope_cached, cluster_map,
+            fall_of=({c: _crack_fall(c) for c in failed} if crack_opening else None))
         if mp.USE_SEVERED_SLIDE and severed:
             slides = severed_slides(severed, neighbours, _slope_cached)
             sc_stats['severed_slides'] = len(slides)
             severed = severed - slides
         failed -= severed
-        print(f"    slab-crack lines: {n_before} -> {len(failed)} clusters {sc_stats}")
+        print(f"    slab-crack lines ({mp.SLAB_CRACK_MODE}): {n_before} -> {len(failed)} clusters {sc_stats}")
 
     # Debug direction breakdown
     dir_counts = {'upslope': 0, 'downslope': 0, 'lateral': 0, 'other': 0}

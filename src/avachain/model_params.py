@@ -445,6 +445,33 @@ USE_SLAB_CRACK_LINES = True
 SLAB_CRACK_BAND_M    = 5.0     # m; half-width of the strip that sets L and W
 SLAB_CRACK_ALIGN_COS = 0.707   # a line step must lie within 45 deg of the line
 
+# Fracture mode of the running slab cracks (Ron, 2026-11-16; both repos; CLI
+# --slab-crack-mode, which overrides a slope's [calibration] slab_crack_mode).
+# An open question; the switch exists so both readings can be run.
+#   'opening' (Mode I): the slab breaks in tension, so each line runs
+#     perpendicular to the local principal tension. Directions come from each
+#     cluster's own mean fall line (release_geometry.cluster_fall_vectors, map frame), not the
+#     trigger's: the BFS crown/flank label, the line steps and the load test.
+#     A crown runs across the local fall line under the net downslope pull of
+#     the detached slab below (the test is as in 'shear'). A flank also needs
+#     the two sides of the line to pull apart: with F+ / F- the mean fall
+#     directions of the reached clusters within SLAB_CRACK_BAND_M on either
+#     side and e the local cross axis, (F+ - F-).e > 0. No strength or
+#     toughness test, as for every running line: a slab crack a few metres
+#     long is unstable (K/K_c 10-75 on Jan 18). Diverging fall lines (convex rolls, ribs) open a flank; on a planar slope
+#     there is no cross-slope tension and no flank line, so the flank is where
+#     the weak-layer crack stopped. A brittle slab under shear kinks into
+#     tension (Erdogan & Sih: ~70 deg), and the supershear crack spreads in a
+#     cone whose oblique edges load the slab partly in opening (Trottet et al.
+#     2022): the argument for this as the default.
+#   'shear' (Mode II): every flank runs along the trigger's fall line wherever
+#     the slab beside it is loaded; one fall direction for the whole release.
+#     Holds where a long up/down strip has already lost contact with the weak
+#     layer and the crack sweeps across the slope with a straight front. Every
+#     release before 2026-11-16 used it.
+SLAB_CRACK_MODE  = 'opening'   # 'opening' | 'shear'
+SLAB_CRACK_MODES = ('opening', 'shear')
+
 # Severed slab slides (Ron, 2026-11-13; on, both repos). The
 # crack lines above drop every piece they cut off from the trigger. But the
 # weak layer under that piece has already fractured (the BFS reached it), so

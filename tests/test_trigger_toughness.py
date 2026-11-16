@@ -78,7 +78,8 @@ def test_calibration_sets_facet_a_and_caps(monkeypatch):
 
 
 @pytest.mark.parametrize("bad", [{"facet_a": 0.0}, {"facet_a": 1.5},
-                                 {"distance_caps": "no"}])
+                                 {"distance_caps": "no"},
+                                 {"slab_crack_mode": "tearing"}])
 def test_calibration_rejects_bad_values(bad):
     with pytest.raises(ValueError):
         calibration.apply(_Cfg(bad), quiet=True)
@@ -110,3 +111,24 @@ def test_tau_ratio_floor_default_off_and_calibratable(monkeypatch):
     assert got == {"tau_ratio_floor": 0.65} and mp.TAU_RATIO_FLOOR == 0.65
     with pytest.raises(ValueError):
         calibration.apply(_Cfg({"tau_ratio_floor": -0.1}), quiet=True)
+
+
+def test_calibration_pins_slab_crack_mode(monkeypatch):
+    """The module default became 'opening' on 2026-11-16; a slope fitted under
+    'shear' pins it in [calibration] (structural, like distance_caps)."""
+    monkeypatch.setattr(mp, "SLAB_CRACK_MODE", mp.SLAB_CRACK_MODE)
+    assert mp.SLAB_CRACK_MODE == "opening"
+    got = calibration.apply(_Cfg({"version": "t", "slab_crack_mode": "shear"}), quiet=False)
+    assert got == {"slab_crack_mode": "shear"} and mp.SLAB_CRACK_MODE == "shear"
+
+
+@pytest.mark.parametrize("slope", ["Professor_PTC", "little_prof"])
+def test_calibrated_slopes_pin_shear_until_recalibration(slope):
+    """2026-11-13.1 was fitted under shear lines (Ron 2026-11-16: pin until the
+    next recalibration). Removing the pin without a new version changes every
+    forecast under the old version's name."""
+    import tomllib
+    toml = Path(__file__).resolve().parents[1] / "slopes" / slope / "slope_config.toml"
+    cal = tomllib.loads(toml.read_text())["calibration"]
+    assert cal["version"] == "2026-11-13.1"
+    assert cal["slab_crack_mode"] == "shear"

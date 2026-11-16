@@ -879,9 +879,12 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
         mp.USE_DISTANCE_CAPS = args.distance_caps
     if getattr(args, 'slab_crack_lines', None) is not None:
         mp.USE_SLAB_CRACK_LINES = args.slab_crack_lines
+    if getattr(args, 'slab_crack_mode', None) is not None:
+        mp.SLAB_CRACK_MODE = args.slab_crack_mode
     print(f"  trigger toughness {'ON' if mp.USE_TRIGGER_TOUGHNESS else 'OFF'}  "
           f"distance caps {'ON' if mp.USE_DISTANCE_CAPS else 'OFF'}  "
-          f"slab-crack lines {'ON' if mp.USE_SLAB_CRACK_LINES else 'OFF'}")
+          f"slab-crack lines {'ON' if mp.USE_SLAB_CRACK_LINES else 'OFF'}"
+          f"{f' ({mp.SLAB_CRACK_MODE})' if mp.USE_SLAB_CRACK_LINES else ''}")
     if mp.USE_SLAB_TENSILE_GATE:
         print(f"  slab tensile-failure gate ON ({mp.SLAB_TENSILE_SIGMA_COL})")
     if mp.ARREST_MODE != 'legacy' or mp.MASK_MODE != 'gate':
@@ -1833,6 +1836,13 @@ def build_parser():
                         help='run slab cracks started by the tensile gate as crown/flank '
                              'lines and cut off the area they sever (default: '
                              'model_params.USE_SLAB_CRACK_LINES, on).')
+    parser.add_argument('--slab-crack-mode', choices=mp.SLAB_CRACK_MODES, default=None,
+                        help="fracture mode of the slab-crack lines: 'opening' (Mode I, "
+                             'local fall lines, a flank needs the sides to pull apart) or '
+                             "'shear' (Mode II, the trigger's fall line). Default: "
+                             '[calibration] slab_crack_mode, else '
+                             f'model_params.SLAB_CRACK_MODE ({mp.SLAB_CRACK_MODE}). '
+                             'Overrides the TOML.')
     parser.add_argument('--force-explosive-triggers', action=argparse.BooleanOptionalAction,
                         default=None,
                         help='scenarios: also publish a forced-shot set at '

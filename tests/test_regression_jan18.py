@@ -29,6 +29,13 @@ Re-pinned 2026-11-13 for USE_SEVERED_SLIDE on by default (Ron): 37 goes
 cut off lies above atan(0.62) and slides. SLIDE_OFF pins the 11-10 value. The
 fixture CSVs are precomputed, so the 11-13 facet-rule and slab-floor defaults
 do not reach this test.
+
+Re-pinned 2026-11-16 for SLAB_CRACK_MODE 'opening' by default (Ron): 37 goes
+3542 -> 3652 m2 (IoU 0.2707 -> 0.2671). Opening flank lines need diverging fall
+lines on both sides, so 37 runs 33 line clusters instead of 62 and severs 2
+instead of 19; the result is within 5 m2 of lines off (3657). The other three
+are unchanged. SHEAR pins the 11-13 value. These are module defaults; the
+calibrated slopes pin 'shear' in [calibration] until the next recalibration.
 """
 import pytest
 
@@ -42,6 +49,11 @@ REFERENCE = {
     1772: (612.0, 0.05067835270873417),
     1998: (1385.0, 0.029587436796836643),
     4300: (1676.0, 0.10518130657424013),
+    37: (3652.0, 0.2671416509692288),
+}
+
+# Same trigger with SLAB_CRACK_MODE 'shear' (the reference 2026-11-13 to 11-16).
+SHEAR = {
     37: (3542.0, 0.2707061518182006),
 }
 
@@ -109,10 +121,24 @@ def test_slab_crack_lines_on_and_cut(legacy, monkeypatch):
 
 
 def test_severed_slide_is_on_and_moves_37(legacy, monkeypatch):
+    """Measured under shear lines (11-13), where 37 severs 19 clusters."""
     assert mp.USE_SEVERED_SLIDE
+    monkeypatch.setattr(mp, 'SLAB_CRACK_MODE', 'shear')
+    with_slide = {t: fx.polygon_for(t) for t in SLIDE_OFF}
     monkeypatch.setattr(mp, 'USE_SEVERED_SLIDE', False)
     for trig, (area, iou) in SLIDE_OFF.items():
         poly = fx.polygon_for(trig)
         assert poly.area == pytest.approx(area, abs=1.0)
         assert fx.iou(poly) == pytest.approx(iou, abs=1e-3)
-        assert poly.area < legacy[trig].area
+        assert poly.area < with_slide[trig].area
+
+
+def test_crack_mode_is_opening_and_shear_restores_11_13(legacy, monkeypatch):
+    assert mp.SLAB_CRACK_MODE == 'opening'
+    monkeypatch.setattr(mp, 'SLAB_CRACK_MODE', 'shear')
+    for trig, (area, iou) in SHEAR.items():
+        poly = fx.polygon_for(trig)
+        assert poly.area == pytest.approx(area, abs=1.0)
+        assert fx.iou(poly) == pytest.approx(iou, abs=1e-3)
+    for trig in set(REFERENCE) - set(SHEAR):
+        assert fx.polygon_for(trig).equals(legacy[trig])
