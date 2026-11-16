@@ -881,10 +881,13 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
         mp.USE_SLAB_CRACK_LINES = args.slab_crack_lines
     if getattr(args, 'slab_crack_mode', None) is not None:
         mp.SLAB_CRACK_MODE = args.slab_crack_mode
+    if getattr(args, 'downslope_slide', None) is not None:
+        mp.USE_DOWNSLOPE_SLIDE = args.downslope_slide
     print(f"  trigger toughness {'ON' if mp.USE_TRIGGER_TOUGHNESS else 'OFF'}  "
           f"distance caps {'ON' if mp.USE_DISTANCE_CAPS else 'OFF'}  "
           f"slab-crack lines {'ON' if mp.USE_SLAB_CRACK_LINES else 'OFF'}"
-          f"{f' ({mp.SLAB_CRACK_MODE})' if mp.USE_SLAB_CRACK_LINES else ''}")
+          f"{f' ({mp.SLAB_CRACK_MODE})' if mp.USE_SLAB_CRACK_LINES else ''}  "
+          f"downslope slide {'ON' if mp.USE_DOWNSLOPE_SLIDE else 'OFF'}")
     if mp.USE_SLAB_TENSILE_GATE:
         print(f"  slab tensile-failure gate ON ({mp.SLAB_TENSILE_SIGMA_COL})")
     if mp.ARREST_MODE != 'legacy' or mp.MASK_MODE != 'gate':
@@ -1836,6 +1839,11 @@ def build_parser():
                         help='run slab cracks started by the tensile gate as crown/flank '
                              'lines and cut off the area they sever (default: '
                              'model_params.USE_SLAB_CRACK_LINES, on).')
+    parser.add_argument('--downslope-slide', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help='drop fractured clusters the slab does not slide over: gentle '
+                             'ground (< atan mu) that the push from above does not reach '
+                             '(default: model_params.USE_DOWNSLOPE_SLIDE, off).')
     parser.add_argument('--slab-crack-mode', choices=mp.SLAB_CRACK_MODES, default=None,
                         help="fracture mode of the slab-crack lines: 'opening' (Mode I, "
                              'local fall lines, a flank needs the sides to pull apart) or '

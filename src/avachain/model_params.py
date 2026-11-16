@@ -485,6 +485,30 @@ SLAB_CRACK_MODES = ('opening', 'shear')
 USE_SEVERED_SLIDE = True     # adopted 2026-11-13 (Ron), both repos
 SEVERED_SLIDE_MU  = 0.62
 
+# Downslope slide test (Ron, 2026-11-16; both repos; CLI --downslope-slide;
+# default off until the next recalibration). The BFS region is where the weak
+# layer fractured, and a weak-layer crack also runs onto low-angle ground
+# (whumpfs on the flat). The release is where the slab SLIDES. A fractured
+# element slides on its own only above atan(SEVERED_SLIDE_MU) = 31.8 deg (crack-face
+# friction, van Herwijnen & Heierli 2009); below it, only if the slab above
+# pushes it. After the crack lines and severed slides (release_geometry.downslope_held), each
+# cluster's net drive N = rho g h A / cos th (sin th - mu cos th) is routed
+# down its own fall line (cluster_fall_vector, map frame) to lower neighbours
+# in the region within DOWNSLOPE_ALIGN_COS of it, weighted by alignment,
+# highest cluster first; P = N + inflow, and a cluster passes on max(P, 0). A
+# cluster with P <= 0 is held: the push from above is used up by the friction
+# deficit of the gentle slab, and it is removed. Steep ground (th > 31.8) always
+# has P > 0, so the test acts only on gentle ground. The 29 deg Stauchwall stays
+# as the floor. No new free parameter: mu is the severed-slide friction.
+# Jan 18 (avachain, 2026-11-16 pre-check, cal 2026-11-13.1 knobs): gentle
+# clusters in the observed release pushed 97%, in the overshoot 51% (push
+# median 4 vs 0 kPa); removing held ones took median IoU 0.634 -> 0.659
+# (shear) and 0.598 -> 0.643 (opening). A compression cap (the slab crushing
+# under the push) is not modelled: the push is of the order of the tensile
+# strength, and no compressive-strength relation has been sourced.
+USE_DOWNSLOPE_SLIDE = False
+DOWNSLOPE_ALIGN_COS = 0.707    # a push goes to lower neighbours within 45 deg of the fall line
+
 # ---- Cross-slope θ sampling (estimate_cross_slope_width) ----------------------
 # The lateral sample has to sit near the true cross-slope axis (aspect ± 90°).
 # Selecting it by raster row/col instead — "same row ± 50 px, column offset
