@@ -188,12 +188,33 @@ def test_opening_flank_still_needs_net_load():
     assert sev == set() and st['line_clusters'] == 0
 
 
-def test_opening_flank_needs_slab_on_both_sides():
-    """A flank line on the region's edge has nothing to pull it open."""
+def _edge(side):
+    """Region = column 6 plus the columns on one side of it, the crack at
+    (6, 6): a flank line down column 6, on the region's edge. The other side
+    is attached slab (2026-11-16: it does not move, F = 0)."""
     _, cid, cent, _, _ = _grid()
+    cols = range(7) if side == 'west' else range(6, N)
     x = cid(6, 6)
-    west = {cid(r, c) for r in range(N) for c in range(7)} - {x}
-    sev, st = _run({x: 'flank'}, cid(6, 2), west, mode='opening', fall_of=_ridge(15.0))
+    return x, {cid(r, c) for r in range(N) for c in cols} - {x}, cid
+
+
+@pytest.mark.parametrize('side', ['west', 'east'])
+def test_opening_edge_flank_opens_where_the_detached_side_moves_away(side):
+    """Convex roll: the detached slab on either side falls away from the line,
+    and the attached side stays put, so the line runs (it severs nothing:
+    there is nothing beyond it)."""
+    x, region, cid = _edge(side)
+    trig = cid(6, 2) if side == 'west' else cid(6, 10)
+    sev, st = _run({x: 'flank'}, trig, region, mode='opening', fall_of=_ridge(15.0))
+    assert st['line_flank'] == N - 1 and sev == set()
+
+
+@pytest.mark.parametrize('tilt', [0.0, -15.0])
+def test_opening_edge_flank_does_not_open_on_a_plane_or_in_a_gully(tilt):
+    """Plane: the detached slab moves along the line. Gully: it moves toward
+    the attached slab. Neither opens the line."""
+    x, region, cid = _edge('west')
+    sev, st = _run({x: 'flank'}, cid(6, 2), region, mode='opening', fall_of=_ridge(tilt))
     assert st['line_clusters'] == 0
 
 

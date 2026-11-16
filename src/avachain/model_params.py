@@ -456,7 +456,9 @@ SLAB_CRACK_ALIGN_COS = 0.707   # a line step must lie within 45 deg of the line
 #     the detached slab below (the test is as in 'shear'). A flank also needs
 #     the two sides of the line to pull apart: with F+ / F- the mean fall
 #     directions of the reached clusters within SLAB_CRACK_BAND_M on either
-#     side and e the local cross axis, (F+ - F-).e > 0. No strength or
+#     side and e the local cross axis, (F+ - F-).e > 0. A side whose row holds
+#     no reached slab is the attached slab at the release's edge and does not
+#     move, F = 0 (2026-11-16, Ron: was "no line"). No strength or
 #     toughness test, as for every running line: a slab crack a few metres
 #     long is unstable (K/K_c 10-75 on Jan 18). Diverging fall lines (convex rolls, ribs) open a flank; on a planar slope
 #     there is no cross-slope tension and no flank line, so the flank is where

@@ -330,13 +330,16 @@ def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
         if not (opening and orient == 'flank'):
             return drive > 0
         # Mode I flank: the two sides must pull apart across the line, i.e.
-        # the mean fall lines of the slab on either side diverge. No strength
-        # or toughness test, as for every running line (methods doc).
-        if drive <= 0 or not side[1] or not side[-1]:
+        # the mean fall lines of the slab on either side diverge. A side with
+        # no reached slab in its row is the attached slab at the release's
+        # edge: it does not move (F = 0), so the line opens where the detached
+        # side moves away from it. No strength or toughness test, as for every
+        # running line (methods doc).
+        if drive <= 0 or not (side[1] or side[-1]):
             return False
         ex, ey = -f_n[1], f_n[0]                          # local cross axis
-        fp = np.mean(side[1], axis=0)
-        fm = np.mean(side[-1], axis=0)
+        fp = np.mean(side[1], axis=0) if side[1] else (0.0, 0.0)
+        fm = np.mean(side[-1], axis=0) if side[-1] else (0.0, 0.0)
         return ((fp[0] - fm[0]) * ex + (fp[1] - fm[1]) * ey) > 0
 
     def next_on_line(c, orient, sgn):
