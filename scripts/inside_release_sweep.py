@@ -234,7 +234,7 @@ def summarise(rows, edge_m):
     return out, freqs
 
 
-def plot(freqs, rows, path):
+def plot(freqs, rows, path, title_extra=""):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -256,7 +256,6 @@ def plot(freqs, rows, path):
             ax.set_axis_off(); continue
         im = ax.imshow(np.where(sz, f, np.nan)[r0:r1, c0:c1], extent=ext,
                        vmin=0, vmax=1, cmap="viridis", origin="upper")
-        ax.plot(*obs_b, color="w", lw=1.5)
         mode, tag = k
         for r in rows:
             if r["mode"] != mode or r["class"] not in ("interior", "edge", "ski"):
@@ -267,7 +266,11 @@ def plot(freqs, rows, path):
                    "trigger_gate": "#ff7f0e", "no_propagation": "#7f7f7f"}[r["outcome"]]
             ax.plot(x, y, "o" if r["class"] != "ski" else "^", ms=3, color=col,
                     mec="k", mew=0.3)
-        ax.set_title(f"{mode} — {'gate on' if tag == '_gated' else 'trigger gate off'}")
+        import matplotlib.patheffects as pe
+        ax.plot(*obs_b, color="w", lw=1.8, zorder=5,
+                path_effects=[pe.Stroke(linewidth=3.2, foreground="k"), pe.Normal()])
+        ax.set_title(f"{mode} — {'gate on' if tag == '_gated' else 'trigger gate off'}"
+                     f"{title_extra}")
         ax.set_xticks([]); ax.set_yticks([])
     fig.colorbar(im, ax=axes[0].tolist(), shrink=0.8,
                  label="fraction of inside-release triggers covering the pixel")
@@ -290,6 +293,9 @@ def main(argv=None):
     ap_.add_argument("--downslope-slide", action=argparse.BooleanOptionalAction, default=None,
                      help="override model_params.USE_DOWNSLOPE_SLIDE")
     ap_.add_argument("--edge-m", type=float, default=10.0)
+    ap_.add_argument("--subsample", type=int, default=1,
+                     help="use every n-th inside cluster (the release is nearly trigger-"
+                          "invariant, so a knob sweep can use fewer); ski and model all kept")
     ap_.add_argument("--jobs", type=int, default=8)
     ap_.add_argument("--out", type=Path, required=True)
     ap_.add_argument("--check-size", nargs="*", type=float, default=[],
@@ -313,6 +319,9 @@ def main(argv=None):
           f"{sum(r['class'] == 'edge' for r in inside)} edge < {a.edge_m:g} m); "
           f"ski clusters: {len(ski)}", flush=True)
     pd.DataFrame(inside).to_csv(a.out / "inside_clusters.csv", index=False)
+    if a.subsample > 1:
+        inside = inside[::a.subsample]
+        print(f"  subsample 1/{a.subsample}: {len(inside)} inside triggers", flush=True)
 
     if a.check_size:
         import contextlib, io
@@ -368,7 +377,8 @@ def main(argv=None):
             f"{f(s.get('consensus_iou_ungated'))} / {f(s.get('pairwise_iou_ungated'))} |")
     (a.out / "summary.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
-    plot(freqs, rows, a.out / "frequency_maps.png")
+    plot(freqs, rows, a.out / "frequency_maps.png",
+         title_extra=", slide on" if mp.USE_DOWNSLOPE_SLIDE else "")
     print(f"done in {time.time() - t0:.0f} s -> {a.out}")
 
 
