@@ -251,3 +251,17 @@ def test_csv_and_frame_conversion_agree(tmp_path):
     a = load_and_convert(str(p), station=st)
     b = convert_caic_frame(pd.read_csv(p, parse_dates=["time"], index_col="time"), station=st)
     pd.testing.assert_frame_equal(a, b)
+
+
+def test_cache_write_leaves_another_writers_temp_file_alone(cache_dir):
+    """Two slopes share a station cache (Widow and Professor_PTC: CAABT) under
+    separate cron locks. With one fixed temp name, a second writer truncated the
+    first's temp file and could rename it away half-written; each process now
+    writes its own temp file and removes it."""
+    other = cache_dir / "TOP.parquet.tmp"          # the old fixed name, held by another writer
+    other.write_bytes(b"another writer, mid-write")
+    df = pd.DataFrame({"timestamp": pd.to_datetime(["2026-11-07 01:00"], utc=True), "TA": [-3.0]})
+    aws_ingest._write_cache("TOP", df)
+    assert other.read_bytes() == b"another writer, mid-write"
+    assert pd.read_parquet(cache_dir / "TOP.parquet")["TA"].tolist() == [-3.0]
+    assert sorted(p.name for p in cache_dir.iterdir()) == ["TOP.parquet", "TOP.parquet.tmp"]

@@ -138,12 +138,19 @@ def seed_cache_from_csv(station_id: str, csv_path: Path, cfg,
 
 def _write_cache(station_id: str, df: pd.DataFrame) -> None:
     # Write through a temp file and rename, so a crash never leaves a
-    # half-written cache for smet_append to read
+    # half-written cache for smet_append to read. The temp name is per
+    # process: two slopes share a station cache (Widow and Professor_PTC both
+    # use CAABT, 2026-11-17) under separate cron locks, and one fixed name let
+    # a second writer truncate the first's temp file before its rename.
+    import os
     WEATHER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     dst = cache_path(station_id)
-    tmp = dst.with_suffix(".parquet.tmp")
-    df.to_parquet(tmp, index=False)
-    tmp.replace(dst)
+    tmp = dst.with_suffix(f".parquet.{os.getpid()}.tmp")
+    try:
+        df.to_parquet(tmp, index=False)
+        tmp.replace(dst)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def fetch_and_cache(cfg, since: pd.Timestamp | None = None,
