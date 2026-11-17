@@ -516,17 +516,14 @@ def load_boundaries(project_dir: Path,
     # --- Start zone KML ---
     kml_path = bnd_dir / 'Litte_prof_start_zone.kml'
     if kml_path.exists():
-        tree = ET.parse(str(kml_path))
-        ns   = '{http://www.opengis.net/kml/2.2}'
-        ct   = (tree.find('.//coordinates') or
-                tree.find(f'.//{ns}coordinates'))
-        if ct is not None:
-            raw = [tuple(map(float, p.split(',')[:2]))
-                   for p in ct.text.strip().split() if ',' in p]
-            utm = to_utm(raw)
-            boundaries['start_zone'] = (
-                [x for x, y in utm],
-                [y for x, y in utm])
+        from kml_io import kml_rings
+        rings = [to_utm(outer) for outer, _ in kml_rings(kml_path)]
+        boundaries['start_zone'] = (
+            [x for x, y in rings[0]],
+            [y for x, y in rings[0]])
+        if len(rings) > 1:
+            boundaries['start_zone_multi'] = [
+                ([x for x, y in r], [y for x, y in r]) for r in rings]
 
     # --- Release area GeoJSON ---
     # Try candidate filenames in priority order; first match wins.
@@ -577,6 +574,8 @@ def kml_to_mask(kml_path: Path,
                 target_epsg: int = RASTER_EPSG) -> np.ndarray:
     """
     Rasterize a KML polygon to a boolean mask matching a raster grid.
+    Every polygon in the file counts (kml_io; holes honoured): a start zone
+    of several disjoint polygons, as at the Seven Sisters, is their union.
 
     Parameters
     ----------
@@ -590,26 +589,12 @@ def kml_to_mask(kml_path: Path,
     Boolean np.ndarray of `shape`, True inside the polygon.
     """
     import rasterio.features
-    from shapely.geometry import Polygon
-    from xml.etree import ElementTree as ET
+    from kml_io import kml_polygons
 
-    t = Transformer.from_crs('EPSG:4326', f'EPSG:{target_epsg}',
-                              always_xy=True)
-
-    tree = ET.parse(str(kml_path))
-    ns   = '{http://www.opengis.net/kml/2.2}'
-    ct   = (tree.find('.//coordinates') or
-            tree.find(f'.//{ns}coordinates'))
-    if ct is None:
-        raise ValueError(f"No <coordinates> found in {kml_path}")
-
-    pts_lonlat = [tuple(map(float, p.split(',')[:2]))
-                  for p in ct.text.strip().split() if ',' in p]
-    pts_utm    = [t.transform(x, y) for x, y in pts_lonlat]
-    poly       = Polygon(pts_utm)
+    polys = kml_polygons(kml_path, target_epsg)
 
     mask = rasterio.features.geometry_mask(
-        [poly.__geo_interface__],
+        [p.__geo_interface__ for p in polys],
         out_shape=shape,
         transform=transform,
         invert=True)   # True = inside polygon

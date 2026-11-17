@@ -32,6 +32,7 @@ temp/
 
 # Source input data — large files excluded, small boundary/config files tracked
 data/dem/
+data/incoming/
 data/surveys/
 data/weather/*.csv
 # data/boundaries/ and data/weather/refill.* ARE tracked (version-controlled inputs)

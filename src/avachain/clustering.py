@@ -34,8 +34,13 @@ import warnings
 def parse_kml_polygon(kml_path: str) -> list:
     """
     Parse a KML file and return polygon coordinates as [(lon, lat), ...].
-    Handles the first <coordinates> block found.
+    Handles the first <coordinates> block found, so it refuses a file with
+    more than one polygon: use kml_io.kml_polygons / kml_geometry for those.
     """
+    from kml_io import kml_rings
+    if len(kml_rings(kml_path)) > 1:
+        raise ValueError(f"{kml_path} holds several polygons; parse_kml_polygon "
+                         "reads only one (use kml_io.kml_polygons)")
     with open(kml_path) as f:
         kml = f.read()
 
@@ -86,24 +91,32 @@ def build_domain_mask(dem: np.ndarray, transform, crs,
 
     # KML boundary filter
     if kml_path and Path(kml_path).exists():
-        coords_lonlat = parse_kml_polygon(kml_path)
-        print(f"  KML boundary: {len(coords_lonlat)} vertices from {Path(kml_path).name}")
+        # Every polygon in the file (kml_io): a boundary of several
+        # disjoint paths, as at the Seven Sisters, is their union.
+        from kml_io import kml_rings
+        rings = kml_rings(kml_path)
+        print(f"  KML boundary: {len(rings)} polygon(s), "
+              f"{sum(len(o) for o, _ in rings)} vertices from {Path(kml_path).name}")
 
         # Convert to grid CRS (UTM)
         try:
             from pyproj import Transformer
             transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
-            utm_coords = [transformer.transform(lon, lat) for lon, lat in coords_lonlat]
         except ImportError:
             raise ImportError("pyproj is required for KML boundary reprojection")
+        to_grid = lambda pts: [transformer.transform(lon, lat) for lon, lat in pts]
 
-        # Rasterize polygon
-        poly_path = MplPath(utm_coords)
+        # Rasterize polygons
         rows, cols = np.mgrid[0:dem.shape[0], 0:dem.shape[1]]
         eastings = transform[2] + cols * transform[0]
         northings = transform[5] + rows * transform[4]
         points = np.column_stack([eastings.ravel(), northings.ravel()])
-        in_poly = poly_path.contains_points(points).reshape(dem.shape)
+        in_poly = np.zeros(dem.shape, dtype=bool)
+        for outer, holes in rings:
+            inside = MplPath(to_grid(outer)).contains_points(points).reshape(dem.shape)
+            for h in holes:
+                inside &= ~MplPath(to_grid(h)).contains_points(points).reshape(dem.shape)
+            in_poly |= inside
 
         n_before = mask.sum()
         mask = mask & in_poly

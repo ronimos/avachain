@@ -254,25 +254,13 @@ def load_slope_mask(kml_path, dem_shape: tuple, transform) -> np.ndarray:
         from shapely.geometry import Polygon, mapping
         from pyproj import Transformer
 
-        tree = ET.parse(str(kml_path))
-        coords_text = None
-        for tag in ['.//coordinates',
-                    './/{http://www.opengis.net/kml/2.2}coordinates']:
-            coords_text = tree.find(tag)
-            if coords_text is not None:
-                break
-        if coords_text is None:
-            print("  KML mask: no coordinates element found, using full domain")
-            return np.ones(dem_shape, dtype=bool)
-
-        pts_lonlat = []
-        for part in coords_text.text.strip().split():
-            xyz = part.split(',')
-            if len(xyz) >= 2:
-                pts_lonlat.append((float(xyz[0]), float(xyz[1])))
-
-        if len(pts_lonlat) < 3:
-            print("  KML mask: fewer than 3 points, using full domain")
+        # Every polygon in the file (kml_io; a multi-path boundary or start
+        # zone is their union).
+        from kml_io import kml_rings
+        try:
+            rings = kml_rings(kml_path)
+        except ValueError:
+            print("  KML mask: no polygon coordinates found, using full domain")
             return np.ones(dem_shape, dtype=bool)
 
         # KML is always WGS84 lon/lat.
@@ -286,17 +274,16 @@ def load_slope_mask(kml_path, dem_shape: tuple, transform) -> np.ndarray:
             # Projected — reproject lon/lat to the raster CRS (UTM 13N, A-Basin)
             transformer = Transformer.from_crs(
                 'EPSG:4326', f'EPSG:{RASTER_EPSG}', always_xy=True)
-            pts = [transformer.transform(lon, lat)
-                   for lon, lat in pts_lonlat]
+            to_grid = lambda p: [transformer.transform(lon, lat) for lon, lat in p]
         else:
-            pts = pts_lonlat
+            to_grid = lambda p: p
 
-        poly = Polygon(pts)
+        polys = [Polygon(to_grid(o), [to_grid(h) for h in hs]) for o, hs in rings]
         aff  = transform if hasattr(transform, 'c') else                rt.Affine(transform[0], transform[1], transform[2],
                          transform[3], transform[4], transform[5])
 
         mask = rasterio.features.geometry_mask(
-            [mapping(poly)], out_shape=dem_shape, transform=aff, invert=True)
+            [mapping(p) for p in polys], out_shape=dem_shape, transform=aff, invert=True)
 
         n_inside = int(mask.sum())
         print(f"  KML mask: {n_inside} / {mask.size} cells inside boundary")

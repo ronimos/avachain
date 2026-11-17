@@ -138,10 +138,9 @@ def filter_to_boundary(observations: list, kml_path: str, buffer_m: float = 200)
         print("WARNING: pyproj/shapely not installed, skipping spatial filter")
         return observations
 
-    coords_lonlat = parse_kml_polygon(kml_path)
-
-    # Create polygon in lon/lat
-    poly_lonlat = Polygon(coords_lonlat)
+    # Every polygon in the boundary KML (kml_io), in lon/lat
+    from kml_io import kml_geometry
+    poly_lonlat = kml_geometry(kml_path)
 
     # Buffer in meters requires projection to UTM
     proj_to_utm = Transformer.from_crs("EPSG:4326", f"EPSG:{RASTER_EPSG}", always_xy=True)
