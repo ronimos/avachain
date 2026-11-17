@@ -1,0 +1,40 @@
+# Seven Sisters, operational deployment (/home/avachain). Added 2026-11-17 (Ron).
+# Five active paths (#1, 2, 3, 4, 6) above US-6; one release set covers all five.
+
+slug: Sisters
+display:
+  project_name: Seven Sisters
+  subtitle: Loveland Pass, US-6
+  highway: US-6
+  caveats:
+    - "τ₀ = 125 Pa is inherited from Little Professor, where it was fitted to a single avalanche (2026-01-18). It has not been tested at the Seven Sisters."
+    - "The release model's calibration (2026-11-17.1) was transferred from Little Professor, not fitted here."
+    - "Under the forest the ground surface is USGS 3DEP lidar (2020), lifted into the drone survey's frame; the drone surface (2026-09-22) is used everywhere else. The forest layer is drone canopy taller than 2 m."
+    - "Entrainment depth comes from the release side's scour_depth.tif, which covers only the five paths. Outside them the flow entrains nothing."
+  event_caveats: {}
+
+terrain:
+  dem: /home/avachain/data/static/Sisters/terrain/260922_Sisters_Ground-DEM_1m_6342-ellipsoid.tif
+  dem_feather_cells: 5
+  dem_vertical_correction_m: 0.0
+
+canopy:
+  forest: /home/avachain/data/static/Sisters/canopy/forest.shp
+
+infrastructure:
+  # Centreline of Ron's Highway_6.kml road polygon (median width 20 m).
+  road: /home/avachain/data/static/Sisters/infrastructure/road_US6_Sisters.shp
+  reference_points: null
+
+release:
+  start_zone: null
+
+entrainment:
+  polygon: null
+
+road:
+  buffer_m: 1.0
+  chainage_origin: far_from_release
+
+reference_points:
+  radius_m: 10.0

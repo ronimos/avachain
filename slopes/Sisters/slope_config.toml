@@ -1,0 +1,177 @@
+# slope_config.toml — Seven Sisters, operational deployment in /home/avachain
+#
+# Added for 2026-27 (Ron, 2026-11-17). One slope for the five active paths,
+# Sisters #1, #2, #3, #4 and #6 (there is no #5 on the ground; #7 rarely
+# reaches US-6, 2 times in 10 years, and is left out). The slope name is the
+# survey producer's path token: survey files YYMMDD_Sisters_snowHeight.tif in
+# data/surveys/snow_height/Sisters/, the full Sisters flight, one marker each.
+# Layout as Professor_PTC (docs/deployment.md): data/ arrivals, work/ private,
+# handoff/ exchange, outputs/ products, logs/. Every path is absolute.
+#
+# Runs the season-locked model (ops-2026-27, CLAUDE.md "Season lock").
+
+[slope]
+name             = "Sisters"
+display_name     = "Seven Sisters"
+# Over the five start zones, merged ground DEM: mean aspect 6 deg (N), median
+# slope 39.6 deg, median elevation 3 511 m NAVD88 (3 499 m ellipsoidal).
+aspect_deg       = 6.0
+slope_angle_deg  = 39.6
+elevation_m      = 3511
+latitude         = 39.6766
+longitude        = -105.8901
+notes            = "N-facing paths above US-6 west of the Eisenhower tunnel approach; five active paths (#1, 2, 3, 4, 6), start zone to road"
+
+[paths]
+project_dir           = "/home/avachain/code/avachain"   # stamped by install.py
+# --- arrivals (data/) ---
+survey_dir            = "/home/avachain/data/surveys/snow_height/Sisters"
+weather_csv           = "/home/avachain/data/weather/weather_data_Sisters.csv"
+# Bare ground, built 2026-11-17 (Ron, option b; static/Sisters/source/build_ground_dem.py):
+# the 2026-09-22 drone surface (GCP-controlled, 0.05 m; DEM - GCP median -0.01 m,
+# std 0.10, n = 34) where it sees ground, USGS 3DEP 1 m (DRCOG 2020 lidar) lifted
+# into the drone frame where it sees canopy > 2 m (32 % of the box). NAD83(2011) /
+# UTM 13N, ELLIPSOIDAL heights, like the Professor series (docs/deployment.md 2.1).
+# Open ground is the drone surface to 0.2 mm, so surveys differenced against the
+# drone surface agree with it there. The runout's terrain.dem is its 1 m average.
+dem                   = "/home/avachain/data/static/Sisters/terrain/260922_Sisters_Ground-DEM_5cm_6342-ellipsoid.tif"
+# The five paths, start zone to US-6 (Ron's Sister_<n>_SZ.kml, one polygon each).
+boundary_kml          = "/home/avachain/data/static/Sisters/Seven_Sisters_paths.kml"
+# Each path clipped to Ron's large start-zone polygon (Ron 2026-11-17): below it is
+# the track, packed by earlier avalanches, which new avalanches run over.
+start_zone_kml        = "/home/avachain/data/static/Sisters/Seven_Sisters_start_zones.kml"
+release_geojson       = "/home/avachain/data/static/Sisters/avalanche_release_area.geojson"
+validation_dir        = "/home/avachain/data/static/Sisters/validation"
+# --- snowpack part (work/) ---
+slope_dir             = "/home/avachain/work/snowpack/Sisters"
+grids_dir             = "/home/avachain/work/snowpack/Sisters/hourly_grids"
+resampled_dir         = "/home/avachain/work/snowpack/Sisters/resampled_1m"
+models_dir            = "/home/avachain/work/snowpack/Sisters/models"
+weather_cache_dir     = "/home/avachain/work/weather"
+avalanche_events      = "/home/avachain/work/snowpack/Sisters/avalanche_events.json"
+# --- release part (work/) ---
+analysis_dir          = "/home/avachain/work/release/Sisters/analysis"
+event_masks_dir       = "/home/avachain/work/release/Sisters/event_masks"
+# --- release -> runout (handoff/) ---
+scenarios_dir         = "/home/avachain/handoff/Sisters/release"
+# --- products and logs ---
+output_dir            = "/home/avachain/outputs/Sisters"
+plots_dir             = "/home/avachain/outputs/Sisters/plots"
+logs_dir              = "/home/avachain/logs/Sisters"
+metrics_dir           = "/home/avachain/work/metrics/Sisters"
+issued_dir            = "/home/avachain/archive/Sisters/issued"
+
+[surveys]
+markers = true
+
+[snowpack]
+binary     = "/home/caic/caic/rtsys/snowpack/exe/snowpack"
+lib_dir    = "/home/caic/caic/rtsys/snowpack/src/snowpack/lib"
+# Same season as Professor_PTC (bare-ground start 2026-11-07).
+season_start      = "2026-11-07"
+season_end        = "2027-05-15"
+start_from_bare_ground = true
+max_parallel_jobs = 30
+
+[weather]
+source = "cache"
+
+# Ron 2026-11-17: Loveland Pass stations. CALVP has no shortwave sensor and
+# LBAC2 no air humidity or wind, so shortwave comes from CAABT (A-Basin summit,
+# ~6 km SE, 174 m higher), the station Professor_PTC uses. The fetch takes every
+# [[stations]] entry; 'summit' gives the cache name and the ILWR site, 'base'
+# metadata only. Coordinates and elevations from the CAIC stnList table.
+[[stations]]
+role        = "summit"
+sql_id      = "CALVP"
+name        = "Loveland Pass"
+lat         = 39.6747
+lon         = -105.894
+elev_m      = 3624.1      # 11 890 ft
+sql_columns = ["temp", "dewp", "rh", "wspd", "wdir", "gust", "mxtemp24h", "mntemp24h"]
+
+[[stations]]
+role        = "base"
+sql_id      = "LBAC2"
+name        = "Loveland Basin SNOTEL"
+lat         = 39.6743
+lon         = -105.901
+elev_m      = 3474.7      # 11 400 ft
+sql_columns = ["depth", "snowwater", "pcp1"]
+
+[[stations]]
+role        = "radiation"
+sql_id      = "CAABT"
+name        = "A-Basin SA-Summit (shortwave only)"
+lat         = 39.6245
+lon         = -105.876
+elev_m      = 3798.4      # 12 462 ft
+sql_columns = ["swin"]
+
+[scenarios]
+n_triggers        = 5
+size_factors      = [0.70, 0.85, 1.00, 1.15, 1.30]
+depth_percentiles = [10, 50, 90]
+stauchwall_deg    = 29.0          # as Professor_PTC and model_params (season lock)
+snapshot_hour_utc = 18
+forecast_days     = 3
+# Mitigation trigger points, [lat, lon] (Ron's 'Seven Sisters.kml', 2026-11-17);
+# the easternmost point (Sister #7) is left out. All seven lie in a start zone.
+explosive_trigger_points = [
+    [39.6771173, -105.8907948],   # Sister 2
+    [39.6770571, -105.8904382],   # Sister 3
+    [39.6772330, -105.8895667],   # Sister 4
+    [39.6764668, -105.8910547],   # Sister 2
+    [39.6763869, -105.8919829],   # Sister 1
+    [39.6760859, -105.8877842],   # Sister 6
+    [39.6756262, -105.8871985],   # Sister 6
+]
+force_explosive_triggers = true
+
+[nwp]
+lead_hours = 60
+
+[wrf]
+fcst_base_dir = "/ssd/snowpack/fcst"
+season        = ""
+# Filled in by install.py — do not edit manually:
+wrf_smet_dir  = ""
+wrf_zone      = ""
+wrf_grid_id   = ""
+wrf_smet_file = ""
+wrf_dist_km   = 0.0
+
+[cron]
+timezone       = "America/Denver"
+hour_utc       = 3
+poll_minutes   = 10
+daily_hour     = 0
+report_check   = "03:15"
+user           = "ron"
+crond_dir      = "/home/avachain/cron"
+
+[runout]
+path_profile = "Sisters"                             # runout/config/paths/<name>.yaml
+work_dir     = "/home/avachain/work/runout/Sisters"
+publish_root = "/home/www/html/ron/runout_forecast"  # -> forecasts/Sisters/<date>/, latest/
+lock_file    = "/home/avachain/work/runout/.runout.lock"   # one for every slope: 4 sims at most
+
+[alerts]
+email = []
+
+[calibration]
+# TRANSFERRED from Professor_PTC 2026-11-17.1, NOT fitted here (Ron 2026-11-17:
+# terrain clusters + Professor's calibration for the first season). No Seven
+# Sisters event has been scored. Same locked physics (ops-2026-27).
+version        = "2026-11-17.1-transferred"
+facet_a        = 0.75
+distance_caps  = false
+tau_ratio_floor = 0.65
+slab_crack_mode = "shear"
+downslope_slide = true
+unified_slide   = true
+events         = []
+no_event_dates = []
+objective      = "none at this slope: values transferred from Professor_PTC 2026-11-17.1 (fitted to Little Professor 2026-01-18)"
+note           = "Transferred, not fitted. Candidate data for a first Sisters fit: static/Sisters/source/SevenSistersAvys2021toPresent.xls (CAIC highway avalanches) and shot outcomes."
+commit         = "Professor_PTC 2026-11-17.1: d11bbf3"
