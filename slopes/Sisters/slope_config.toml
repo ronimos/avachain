@@ -135,11 +135,11 @@ lead_hours = 60
 fcst_base_dir = "/ssd/snowpack/fcst"
 season        = ""
 # Filled in by install.py — do not edit manually:
-wrf_smet_dir  = ""
-wrf_zone      = ""
-wrf_grid_id   = ""
-wrf_smet_file = ""
-wrf_dist_km   = 0.0
+wrf_smet_dir  = "/ssd/snowpack/fcst/2026/zone041/079078"
+wrf_zone      = "zone041"
+wrf_grid_id   = "079078"
+wrf_smet_file = "/ssd/snowpack/fcst/2026/zone041/079078/0790781_res.smet"
+wrf_dist_km   = 0.777
 
 [cron]
 timezone       = "America/Denver"

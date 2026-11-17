@@ -1,0 +1,154 @@
+# slope_config.toml — Widow, operational deployment in /home/avachain
+#
+# Added for 2026-27 (Ron, 2026-11-17). S-facing path west of Little Professor,
+# start zone to US-6. Same flight and ground survey as Little Professor
+# (2026-10-18, "ProfWidow"). The slope name is the survey producer's path
+# token: survey files YYMMDD_Widow_snowHeight.tif in
+# data/surveys/snow_height/Widow/ (the full ProfWidow flight; Professor_PTC gets
+# its own copy under its own name), one marker each. Layout as Professor_PTC.
+#
+# Runs the season-locked model (ops-2026-27, CLAUDE.md "Season lock").
+
+[slope]
+name             = "Widow"
+display_name     = "Widow"
+# Over the start zone, merged ground DEM: mean aspect 185 deg (S), median slope
+# 30.8 deg, median elevation 3 652 m NAVD88 (3 640 m ellipsoidal).
+aspect_deg       = 185.0
+slope_angle_deg  = 30.8
+elevation_m      = 3652
+latitude         = 39.6478
+longitude        = -105.8818
+notes            = "S-facing path west of Little Professor, Loveland Pass, start zone to US-6"
+
+[paths]
+project_dir           = "/home/avachain/code/avachain"   # stamped by install.py
+# --- arrivals (data/) ---
+survey_dir            = "/home/avachain/data/surveys/snow_height/Widow"
+weather_csv           = "/home/avachain/data/weather/weather_data_Widow.csv"
+# Bare ground, built 2026-11-17 (Ron; static/Widow/source/build_ground_dem.py): the
+# 2026-10-18 drone surface (Widow export of the ProfWidow flight; DEM - GCP PW-09..21
+# median -0.08 m, std 0.07, n = 12) where it sees ground, USGS 3DEP 1 m (CO Central
+# Western 2016; DRCOG 2020 ends mid-path) lifted into the drone frame, sampled 0.5 m
+# north (ground MAD 0.214 -> 0.179 m), where it sees canopy > 2 m (36 % of the box).
+# NAD83(2011) / UTM 13N, ELLIPSOIDAL heights. Surveys are differenced against the
+# drone surface, equal to this one on open ground. The runout's terrain.dem is its 1 m average.
+dem                   = "/home/avachain/data/static/Widow/terrain/261018_Widow_Ground-DEM_5cm_6342-ellipsoid.tif"
+# The path, start zone to US-6 (Ron's Wodow_whole_path.kml), 13.9 ha.
+boundary_kml          = "/home/avachain/data/static/Widow/Widow_path.kml"
+# Ron's Widow_SZ.kml, 5.4 ha.
+start_zone_kml        = "/home/avachain/data/static/Widow/Widow_start_zone.kml"
+release_geojson       = "/home/avachain/data/static/Widow/avalanche_release_area.geojson"
+validation_dir        = "/home/avachain/data/static/Widow/validation"
+# --- snowpack part (work/) ---
+slope_dir             = "/home/avachain/work/snowpack/Widow"
+grids_dir             = "/home/avachain/work/snowpack/Widow/hourly_grids"
+resampled_dir         = "/home/avachain/work/snowpack/Widow/resampled_1m"
+models_dir            = "/home/avachain/work/snowpack/Widow/models"
+weather_cache_dir     = "/home/avachain/work/weather"
+avalanche_events      = "/home/avachain/work/snowpack/Widow/avalanche_events.json"
+# --- release part (work/) ---
+analysis_dir          = "/home/avachain/work/release/Widow/analysis"
+event_masks_dir       = "/home/avachain/work/release/Widow/event_masks"
+# --- release -> runout (handoff/) ---
+scenarios_dir         = "/home/avachain/handoff/Widow/release"
+# --- products and logs ---
+output_dir            = "/home/avachain/outputs/Widow"
+plots_dir             = "/home/avachain/outputs/Widow/plots"
+logs_dir              = "/home/avachain/logs/Widow"
+metrics_dir           = "/home/avachain/work/metrics/Widow"
+issued_dir            = "/home/avachain/archive/Widow/issued"
+
+[surveys]
+markers = true
+
+[snowpack]
+binary     = "/home/caic/caic/rtsys/snowpack/exe/snowpack"
+lib_dir    = "/home/caic/caic/rtsys/snowpack/src/snowpack/lib"
+# Same season as Professor_PTC (bare-ground start 2026-11-07).
+season_start      = "2026-11-07"
+season_end        = "2027-05-15"
+start_from_bare_ground = true
+max_parallel_jobs = 30
+
+[weather]
+source = "cache"
+
+# Ron 2026-11-17: the same stations as Little Professor (Professor_PTC).
+[[stations]]
+role        = "summit"
+sql_id      = "CAABT"
+name        = "A-Basin SA-Summit"
+lat         = 39.6424
+lon         = -105.8718
+elev_m      = 3798.3
+sql_columns = ["swin", "temp", "dewp", "rh", "wspd", "wdir", "gust", "mxtemp24h", "mntemp24h"]
+
+[[stations]]
+role        = "base"
+sql_id      = "CAABM"
+name        = "A-Basin SA-Base"
+lat         = 39.6424
+lon         = -105.8718
+elev_m      = 3554.0
+sql_columns = ["pcpac", "depth", "snow24h"]
+
+[scenarios]
+n_triggers        = 5
+size_factors      = [0.70, 0.85, 1.00, 1.15, 1.30]
+depth_percentiles = [10, 50, 90]
+stauchwall_deg    = 29.0          # as Professor_PTC and model_params (season lock)
+snapshot_hour_utc = 18
+forecast_days     = 3
+# No mitigation trigger points yet (Ron 2026-11-17: leave them for now), so no
+# forced shot set. On a no-candidate day the model set is empty.
+explosive_trigger_points = []
+force_explosive_triggers = false
+
+[nwp]
+lead_hours = 60
+
+[wrf]
+fcst_base_dir = "/ssd/snowpack/fcst"
+season        = ""
+# Filled in by install.py — do not edit manually:
+wrf_smet_dir  = ""
+wrf_zone      = ""
+wrf_grid_id   = ""
+wrf_smet_file = ""
+wrf_dist_km   = 0.0
+
+[cron]
+timezone       = "America/Denver"
+hour_utc       = 3
+poll_minutes   = 10
+daily_hour     = 0
+report_check   = "03:15"
+user           = "ron"
+crond_dir      = "/home/avachain/cron"
+
+[runout]
+path_profile = "Widow"                               # runout/config/paths/<name>.yaml
+work_dir     = "/home/avachain/work/runout/Widow"
+publish_root = "/home/www/html/ron/runout_forecast"  # -> forecasts/Widow/<date>/, latest/
+lock_file    = "/home/avachain/work/runout/.runout.lock"   # one for every slope: 4 sims at most
+
+[alerts]
+email = []
+
+[calibration]
+# TRANSFERRED from Professor_PTC 2026-11-17.1, NOT fitted here (Ron 2026-11-17:
+# terrain clusters + Professor's calibration for the first season). No Seven
+# Widow event has been scored. Same locked physics (ops-2026-27).
+version        = "2026-11-17.1-transferred"
+facet_a        = 0.75
+distance_caps  = false
+tau_ratio_floor = 0.65
+slab_crack_mode = "shear"
+downslope_slide = true
+unified_slide   = true
+events         = []
+no_event_dates = []
+objective      = "none at this slope: values transferred from Professor_PTC 2026-11-17.1 (fitted to Little Professor 2026-01-18)"
+note           = "Transferred, not fitted."
+commit         = "Professor_PTC 2026-11-17.1: d11bbf3"
