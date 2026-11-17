@@ -885,6 +885,8 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
         mp.USE_OPENING_TOUGHNESS = args.opening_toughness
     if getattr(args, 'downslope_slide', None) is not None:
         mp.USE_DOWNSLOPE_SLIDE = args.downslope_slide
+    if getattr(args, 'unified_slide', None) is not None:
+        mp.UNIFIED_SLIDE = args.unified_slide
     print(f"  trigger toughness {'ON' if mp.USE_TRIGGER_TOUGHNESS else 'OFF'}  "
           f"distance caps {'ON' if mp.USE_DISTANCE_CAPS else 'OFF'}  "
           f"slab-crack lines {'ON' if mp.USE_SLAB_CRACK_LINES else 'OFF'}"
@@ -1846,6 +1848,11 @@ def build_parser():
                         help='drop fractured clusters the slab does not slide over: gentle '
                              'ground (< atan mu) that the push from above does not reach '
                              '(default: model_params.USE_DOWNSLOPE_SLIDE, off).')
+    parser.add_argument('--unified-slide', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help='with --downslope-slide: decide severed pieces and line clusters '
+                             'by the push routing (no push across a crack) instead of the '
+                             'mean-slope rule (default: model_params.UNIFIED_SLIDE, off).')
     parser.add_argument('--opening-toughness', action=argparse.BooleanOptionalAction,
                         default=None,
                         help="'opening' flanks: drop cells where the opening load cannot "

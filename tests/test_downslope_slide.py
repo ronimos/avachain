@@ -68,10 +68,12 @@ def _rows(held, cid, ncol=3):
 def test_defaults_and_cli():
     assert mp.USE_DOWNSLOPE_SLIDE is False
     assert mp.DOWNSLOPE_ALIGN_COS == 0.707
+    assert mp.UNIFIED_SLIDE is False
     import analysis_pipeline as ap
     import inspect
     src = inspect.getsource(ap)
     assert "--downslope-slide" in src
+    assert "--unified-slide" in src
     assert "mp.USE_DOWNSLOPE_SLIDE = args.downslope_slide" in src
 
 
@@ -156,3 +158,16 @@ def test_mu_reads_config_at_call_time(monkeypatch):
     monkeypatch.setattr(mp, 'SEVERED_SLIDE_MU', 0.5)     # atan 0.5 = 26.6 deg
     held, _, _ = _held(slopes)
     assert held == set()
+
+
+def test_a_crack_passes_no_push_on():
+    """UNIFIED_SLIDE drops the line clusters from fall_of, so they take push
+    and slide on their own drive but pass nothing on. A crack along row 1
+    (the second of two steep rows above a bench): row 1 slides, and the
+    bench below it gets no push and is held."""
+    def crack(fall_of, cid):
+        for c in range(3):
+            del fall_of[cid(1, c)]
+    held, _, cid = _held([38.0, 38.0] + [30.0] * 12, fall_fn=crack)
+    assert _rows(held, cid) == list(range(2, 14))      # whole bench held
+    assert not {cid(1, c) for c in range(3)} & held     # the steep crack row slides

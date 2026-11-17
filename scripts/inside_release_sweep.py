@@ -292,6 +292,8 @@ def main(argv=None):
                      help="the day's model triggers, scored alongside for reference")
     ap_.add_argument("--downslope-slide", action=argparse.BooleanOptionalAction, default=None,
                      help="override model_params.USE_DOWNSLOPE_SLIDE")
+    ap_.add_argument("--unified-slide", action=argparse.BooleanOptionalAction, default=None,
+                     help="override model_params.UNIFIED_SLIDE")
     ap_.add_argument("--edge-m", type=float, default=10.0)
     ap_.add_argument("--subsample", type=int, default=1,
                      help="use every n-th inside cluster (the release is nearly trigger-"
@@ -307,6 +309,8 @@ def main(argv=None):
     load_inputs(a.toml, a.date, a.features_dir, a.ski)
     if a.downslope_slide is not None:
         mp.USE_DOWNSLOPE_SLIDE = a.downslope_slide
+    if a.unified_slide is not None:
+        mp.UNIFIED_SLIDE = a.unified_slide
     print(f"calibration {G['cfg'].calibration.get('version') if G['cfg'].calibration else None}: "
           f"{G['calibration']}; observed {G['observed'].area:.0f} m2", flush=True)
 
@@ -357,7 +361,7 @@ def main(argv=None):
             "calibration": G["calibration"],
             "calibration_version": (G["cfg"].calibration or {}).get("version"),
             "observed_m2": G["observed"].area, "edge_m": a.edge_m,
-            "downslope_slide": mp.USE_DOWNSLOPE_SLIDE,
+            "downslope_slide": mp.USE_DOWNSLOPE_SLIDE, "unified_slide": mp.UNIFIED_SLIDE,
             "seconds": round(time.time() - t0)}
     (a.out / "summary.json").write_text(json.dumps({"meta": meta, "summary": summary}, indent=1))
 

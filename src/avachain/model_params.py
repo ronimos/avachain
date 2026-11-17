@@ -525,6 +525,18 @@ SEVERED_SLIDE_MU  = 0.62
 USE_DOWNSLOPE_SLIDE = False
 DOWNSLOPE_ALIGN_COS = 0.707    # a push goes to lower neighbours within 45 deg of the fall line
 
+# Unified slide (Ron 2026-11-16, "look at the cut-off rules"; both repos; CLI
+# --[no-]unified-slide; off). Acts only with USE_DOWNSLOPE_SLIDE. Two cut-off
+# rules decide polygons on details of where a line falls: every line cluster
+# stays, and a severed piece slides back whole when its MEAN slope > atan mu.
+# With this on, severed pieces are not removed by the lines; every cluster is
+# decided by the downslope push routing instead, with the line clusters as push
+# sinks (a slab crack passes no push on). A steep cluster slides; a gentle one
+# stays unless the slab above on its own side of the crack pushes it; the
+# trigger's side is not privileged. knn links can still jump a line
+# (BFS_ADJACENCY).
+UNIFIED_SLIDE = False
+
 # ---- Cross-slope θ sampling (estimate_cross_slope_width) ----------------------
 # The lateral sample has to sit near the true cross-slope axis (aspect ± 90°).
 # Selecting it by raster row/col instead — "same row ± 50 px, column offset

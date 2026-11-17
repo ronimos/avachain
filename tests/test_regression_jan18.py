@@ -162,3 +162,26 @@ def test_opening_toughness_is_on_and_only_removes(legacy, monkeypatch):
         assert poly.area == pytest.approx(area, abs=1.0)
         assert fx.iou(poly) == pytest.approx(iou, abs=1e-3)
         assert poly.area >= legacy[trig].area
+
+
+# USE_DOWNSLOPE_SLIDE on (off by default), opening: UNIFIED_SLIDE off / on.
+# 37 is the only trigger whose lines sever anything; with UNIFIED_SLIDE the
+# severed pieces are decided by the push routing (line clusters as sinks)
+# instead of the mean-slope rule.
+DOWNSLOPE_37 = {False: (3442.0, 0.2721), True: (3317.0, 0.2764)}
+
+
+@pytest.mark.parametrize('unified', [False, True])
+def test_downslope_and_unified_slide_on_37(monkeypatch, unified):
+    monkeypatch.setattr(mp, 'USE_DOWNSLOPE_SLIDE', True)
+    monkeypatch.setattr(mp, 'UNIFIED_SLIDE', unified)
+    poly = fx.polygon_for(37)
+    area, iou = DOWNSLOPE_37[unified]
+    assert poly.area == pytest.approx(area, abs=1.0)
+    assert fx.iou(poly) == pytest.approx(iou, abs=1e-3)
+
+
+def test_unified_slide_needs_the_downslope_test(legacy, monkeypatch):
+    """UNIFIED_SLIDE alone (slide test off) changes nothing."""
+    monkeypatch.setattr(mp, 'UNIFIED_SLIDE', True)
+    assert fx.polygon_for(37).equals(legacy[37])

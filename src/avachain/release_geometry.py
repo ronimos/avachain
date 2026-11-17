@@ -249,7 +249,7 @@ def cluster_fall_vectors(pixel_index, slope_grid, aspect_grid, cids=None) -> dic
 def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
                      fall_xy, props, slope_of, cluster_map, phi_deg=None,
                      band_m=None, align_cos=None, mode=None, fall_of=None,
-                     intact_out=None):
+                     intact_out=None, cut_out=None):
     """Run slab cracks as lines through the admitted region; return
     (clusters to remove, stats). See USE_SLAB_CRACK_LINES and
     SLAB_CRACK_MODE (model_params). Lines may cross; each line stops on its own
@@ -271,6 +271,8 @@ def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
                 length so far, K_Ic = props[TOUGHNESS_K_COL]) are added: the slab
                 there cannot break, so the caller removes them. The lines
                 themselves, and the severed set, are unchanged.
+    cut_out   : a set; the line clusters are added (UNIFIED_SLIDE uses them as
+                push sinks).
     The result does not depend on the order of reached, cracks or neighbours.
     """
     from scipy import ndimage
@@ -416,6 +418,8 @@ def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
         after = trigger_component(reached - cut)
         severed = before - after - cut
     stats['line_clusters'] = len(cut)
+    if cut_out is not None:
+        cut_out.update(cut)
     if intact_out is not None:
         stats['intact'] = len(intact_out)
     stats['severed'] = len(severed)
@@ -1628,6 +1632,8 @@ def propagate_release(
 
     # Running slab cracks: lines from the tensile-gate failures; the area they
     # sever from the trigger is removed (USE_SLAB_CRACK_LINES).
+    line_cells = set()
+    unified = mp.USE_DOWNSLOPE_SLIDE and mp.UNIFIED_SLIDE
     if mp.USE_SLAB_CRACK_LINES and slab_cracks:
         slope_cache = {}
         def _slope_cached(c):
@@ -1640,7 +1646,12 @@ def propagate_release(
             failed, slab_cracks, trigger_cluster_id, neighbours, centroids,
             fall_xy, cluster_props, _slope_cached, cluster_map,
             fall_of=({c: _crack_fall(c) for c in failed} if crack_opening else None),
-            intact_out=intact)
+            intact_out=intact, cut_out=line_cells)
+        if unified:
+            # UNIFIED_SLIDE: keep the severed pieces; the push routing below
+            # decides them, with no push across a slab crack.
+            sc_stats['severed_kept_for_push'] = len(severed)
+            severed = set()
         if mp.USE_SEVERED_SLIDE and severed:
             slides = severed_slides(severed, neighbours, _slope_cached)
             sc_stats['severed_slides'] = len(slides)
@@ -1670,6 +1681,9 @@ def propagate_release(
             v = cluster_fall_vector(px[0], px[1], slope_grid, aspect_grid)
             if v is not None:
                 fall_of[c] = v
+        if unified:
+            for c in line_cells:          # a slab crack passes no push on
+                fall_of.pop(c, None)
         held, dh_stats = downslope_held(failed, neighbours, centroids, cluster_props,
                                         lambda c: slope_dh.get(c, 0.0), elev_of,
                                         area_of, fall_of)
