@@ -6,6 +6,7 @@ A crack started by the tensile gate runs as a crown (cross-slope) or flank
 (fall line) line through the admitted region while the slab is loaded, and the
 area it severs from the trigger is removed; the line clusters stay. Pinned on a
 synthetic grid: Jan 18 cannot show order independence or the loaded test."""
+import inspect
 import random
 import sys
 from pathlib import Path
@@ -276,3 +277,58 @@ def test_cluster_fall_vector_in_map_frame(bearing):
     assert v == pytest.approx(_fall(bearing), abs=1e-6)
     assert rg.cluster_fall_vector(np.array([5]), np.array([5]),
                                   np.zeros((n, n)), np.zeros((n, n))) is None
+
+
+# --- Toughness gate on opening flanks (USE_OPENING_TOUGHNESS, 2026-11-16) ----
+
+def _tough(kic, mode='opening', **kw):
+    """Convex roll (+-15 deg), flank crack at (6, 6), every cell's K_Ic = kic.
+    Returns (severed, stats, intact, cid)."""
+    cmap, cid, cent, nb, props = _grid()
+    for p in props.values():
+        if kic is not None:
+            p[mp.TOUGHNESS_K_COL] = kic
+    x = cid(6, 6)
+    intact = set()
+    sev, st = rg.slab_crack_lines(set(cent) - {x}, {x: 'flank'}, cid(6, 2), nb, cent, FALL,
+                                  props, lambda c: 38.0, cmap, mode=mode,
+                                  fall_of=_ridge(15.0), intact_out=intact, **kw)
+    return sev, st, intact, cid
+
+
+def _k_at(a):
+    """K at a step of that line: L = 33 m (column extent), 38 deg, spread
+    2 sin 15, rho 300, h 1."""
+    th = np.radians(38.0)
+    drive = np.sin(th) - np.tan(np.radians(mp.PHI_DEG)) * np.cos(th)
+    sig = 300.0 * 9.81 * 33.0 * drive * (2 * np.sin(np.radians(15.0))) / 2.0
+    return mp.TOUGHNESS_EDGE_F * sig * np.sqrt(np.pi * a)
+
+
+def test_opening_toughness_default_and_cli():
+    assert mp.USE_OPENING_TOUGHNESS is True
+    assert "--opening-toughness" in inspect.getsource(__import__("analysis_pipeline"))
+
+
+def test_opening_toughness_marks_short_line_cells_and_changes_no_line():
+    """K grows with the line's length a. K_Ic between K(3 m) and K(6 m): only
+    the first cell each way (a = 3 m) cannot break. Lines and severed set are
+    those without the gate."""
+    base_sev, base_st, _, cid = _tough(None)
+    sev, st, intact, _ = _tough((_k_at(3.0) + _k_at(6.0)) / 2)
+    assert intact == {cid(5, 6), cid(7, 6)}
+    assert sev == base_sev and st['line_flank'] == base_st['line_flank'] == N - 1
+    assert st['intact'] == 2
+
+
+def test_opening_toughness_extremes_and_missing_column():
+    _, st, intact, cid = _tough(1e12)
+    assert intact == {cid(r, 6) for r in range(N)} - {cid(6, 6)}
+    assert _tough(1.0)[2] == set()
+    assert _tough(None)[2] == set()           # no K_Ic column: no gate
+
+
+def test_opening_toughness_off_and_shear_unaffected(monkeypatch):
+    assert _tough(1e12, mode='shear')[2] == set()
+    monkeypatch.setattr(mp, 'USE_OPENING_TOUGHNESS', False)
+    assert _tough(1e12)[2] == set()

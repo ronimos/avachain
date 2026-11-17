@@ -248,7 +248,8 @@ def cluster_fall_vectors(pixel_index, slope_grid, aspect_grid, cids=None) -> dic
 
 def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
                      fall_xy, props, slope_of, cluster_map, phi_deg=None,
-                     band_m=None, align_cos=None, mode=None, fall_of=None):
+                     band_m=None, align_cos=None, mode=None, fall_of=None,
+                     intact_out=None):
     """Run slab cracks as lines through the admitted region; return
     (clusters to remove, stats). See USE_SLAB_CRACK_LINES and
     SLAB_CRACK_MODE (model_params). Lines may cross; each line stops on its own
@@ -265,6 +266,11 @@ def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
     mode      : 'opening' | 'shear' (default mp.SLAB_CRACK_MODE)
     fall_of   : {cid: unit downslope vector}, 'opening' only; a cluster
                 missing from it takes fall_xy. 'shear' ignores it.
+    intact_out: a set; with USE_OPENING_TOUGHNESS, 'opening' flank cells where
+                K = TOUGHNESS_EDGE_F sigma_open sqrt(pi a) < K_Ic (a = the line's
+                length so far, K_Ic = props[TOUGHNESS_K_COL]) are added: the slab
+                there cannot break, so the caller removes them. The lines
+                themselves, and the severed set, are unchanged.
     The result does not depend on the order of reached, cracks or neighbours.
     """
     from scipy import ndimage
@@ -292,7 +298,7 @@ def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
         dx, dy = xy1[0] - xy0[0], xy1[1] - xy0[1]
         return dx * fx + dy * fy, -dx * fy + dy * fx      # along (+down), cross
 
-    def loaded(n, orient):
+    def loaded(n, orient, alen=0.0):
         """Net downslope load on the slab at n from detached slab nearby; in
         'opening' mode a flank also needs the two sides to pull apart."""
         h_n = props.get(n, {}).get('slab_thickness', np.nan)
@@ -340,7 +346,19 @@ def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
         ex, ey = -f_n[1], f_n[0]                          # local cross axis
         fp = np.mean(side[1], axis=0) if side[1] else (0.0, 0.0)
         fm = np.mean(side[-1], axis=0) if side[-1] else (0.0, 0.0)
-        return ((fp[0] - fm[0]) * ex + (fp[1] - fm[1]) * ey) > 0
+        spread = (fp[0] - fm[0]) * ex + (fp[1] - fm[1]) * ey
+        if spread <= 0:
+            return False
+        if mp.USE_OPENING_TOUGHNESS and intact_out is not None:
+            # Opening load (F+ - F-).e / 2 of the detached-slab drive; a line of
+            # length a breaks the slab only where K >= K_Ic. A gate on top of
+            # the line: the line runs on, the cell is marked intact.
+            kic = props.get(n, {}).get(mp.TOUGHNESS_K_COL, np.nan)
+            sig = props[n]['slab_density'] * _ai.G_ACC * L * drive * spread / 2.0
+            K = mp.TOUGHNESS_EDGE_F * sig * np.sqrt(np.pi * max(alen, 0.0))
+            if np.isfinite(kic) and K < kic:
+                intact_out.add(n)
+        return True
 
     def next_on_line(c, orient, sgn):
         best = None
@@ -368,12 +386,16 @@ def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
             continue
         stats['cracks_' + orient] += 1
         for sgn in (1, -1):
-            c, seen = c0, {c0}
+            c, seen, alen = c0, {c0}, 0.0
             while True:
                 n = next_on_line(c, orient, sgn)
+                step = (float(np.hypot(centroids[n][0] - centroids[c][0],
+                                       centroids[n][1] - centroids[c][1]))
+                        if n is not None and n in centroids else 0.0)
                 if (n is None or n in seen or n not in reached
-                        or n == trigger_cluster_id or not loaded(n, orient)):
+                        or n == trigger_cluster_id or not loaded(n, orient, alen + step)):
                     break
+                alen += step
                 seen.add(n)
                 if n not in cut:
                     cut.add(n); stats['line_' + orient] += 1
@@ -394,6 +416,8 @@ def slab_crack_lines(reached, cracks, trigger_cluster_id, neighbours, centroids,
         after = trigger_component(reached - cut)
         severed = before - after - cut
     stats['line_clusters'] = len(cut)
+    if intact_out is not None:
+        stats['intact'] = len(intact_out)
     stats['severed'] = len(severed)
     return severed, stats
 
@@ -1272,7 +1296,8 @@ def propagate_release(
                     props[col] = float(v)
         if snap_features is not None and cid in snap_features.index:
             for col in ['slab_thickness', 'slab_density',
-                        'wl_shear_strength', 'sigma_t', mp.SLAB_TENSILE_SIGMA_COL]:
+                        'wl_shear_strength', 'sigma_t', mp.SLAB_TENSILE_SIGMA_COL,
+                        mp.TOUGHNESS_K_COL]:
                 if col in snap_features.columns:
                     v = snap_features.loc[cid, col]
                     if isinstance(v, pd.Series): v = v.iloc[0]
@@ -1610,15 +1635,18 @@ def propagate_release(
                 slope_cache[c] = _mean_slope(c)
             return slope_cache[c]
         n_before = len(failed)
+        intact = set()
         severed, sc_stats = slab_crack_lines(
             failed, slab_cracks, trigger_cluster_id, neighbours, centroids,
             fall_xy, cluster_props, _slope_cached, cluster_map,
-            fall_of=({c: _crack_fall(c) for c in failed} if crack_opening else None))
+            fall_of=({c: _crack_fall(c) for c in failed} if crack_opening else None),
+            intact_out=intact)
         if mp.USE_SEVERED_SLIDE and severed:
             slides = severed_slides(severed, neighbours, _slope_cached)
             sc_stats['severed_slides'] = len(slides)
             severed = severed - slides
         failed -= severed
+        failed -= intact          # USE_OPENING_TOUGHNESS: an extra gate, never adds
         print(f"    slab-crack lines ({mp.SLAB_CRACK_MODE}): {n_before} -> {len(failed)} clusters {sc_stats}")
 
     # Downslope slide test: drop the fractured clusters the slab does not

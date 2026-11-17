@@ -474,6 +474,20 @@ SLAB_CRACK_ALIGN_COS = 0.707   # a line step must lie within 45 deg of the line
 SLAB_CRACK_MODE  = 'opening'   # 'opening' | 'shear'
 SLAB_CRACK_MODES = ('opening', 'shear')
 
+# Toughness gate on 'opening' flanks (Ron, 2026-11-16; both repos; CLI
+# --[no-]opening-toughness). The no-toughness argument for running lines (K/K_c
+# 10-75) holds for crown and shear-flank loads, but an opening flank carries
+# only the opening part of the detached-slab drive, (F+ - F-).e / 2, which is
+# small where the fall lines barely diverge (Jan 18 median ~3 deg; 14% of
+# opening flank steps had K < K_Ic, none of the crown or shear steps). At each
+# opening flank step K = TOUGHNESS_EDGE_F sigma_open sqrt(pi a), a = the line's
+# length so far, against TOUGHNESS_K_COL of the cell. Where K < K_Ic the slab
+# cannot break: the cell stays with the attached slab and is removed after the
+# cut. It is an extra gate on top of the lines (Ron: "not instead of anything
+# else"): the lines and the severed set are unchanged, so it never adds area.
+# A missing K_Ic leaves the cell alone. 'shear' is unaffected.
+USE_OPENING_TOUGHNESS = True
+
 # Severed slab slides (Ron, 2026-11-13; on, both repos). The
 # crack lines above drop every piece they cut off from the trigger. But the
 # weak layer under that piece has already fractured (the BFS reached it), so

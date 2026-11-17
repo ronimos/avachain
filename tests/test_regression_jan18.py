@@ -36,6 +36,11 @@ lines on both sides, so 37 runs 33 line clusters instead of 62 and severs 2
 instead of 19; the result is within 5 m2 of lines off (3657). The other three
 are unchanged. SHEAR pins the 11-13 value. These are module defaults; the
 calibrated slopes pin 'shear' in [calibration] until the next recalibration.
+
+Re-pinned 2026-11-16 again for USE_OPENING_TOUGHNESS on by default (Ron): 37
+goes 3652 -> 3637 m2 (IoU 0.2671 -> 0.2676): 5 opening flank cells cannot be
+broken by the opening load (K < K_Ic) and are removed; it is an extra gate, so
+the area can only fall. OPENING_NO_TOUGHNESS pins the value before.
 """
 import pytest
 
@@ -49,6 +54,11 @@ REFERENCE = {
     1772: (612.0, 0.05067835270873417),
     1998: (1385.0, 0.029587436796836643),
     4300: (1676.0, 0.10518130657424013),
+    37: (3637.0, 0.26762218182322545),
+}
+
+# Same trigger with USE_OPENING_TOUGHNESS off (the reference earlier on 11-16).
+OPENING_NO_TOUGHNESS = {
     37: (3652.0, 0.2671416509692288),
 }
 
@@ -142,3 +152,13 @@ def test_crack_mode_is_opening_and_shear_restores_11_13(legacy, monkeypatch):
         assert fx.iou(poly) == pytest.approx(iou, abs=1e-3)
     for trig in set(REFERENCE) - set(SHEAR):
         assert fx.polygon_for(trig).equals(legacy[trig])
+
+
+def test_opening_toughness_is_on_and_only_removes(legacy, monkeypatch):
+    assert mp.USE_OPENING_TOUGHNESS
+    monkeypatch.setattr(mp, 'USE_OPENING_TOUGHNESS', False)
+    for trig, (area, iou) in OPENING_NO_TOUGHNESS.items():
+        poly = fx.polygon_for(trig)
+        assert poly.area == pytest.approx(area, abs=1.0)
+        assert fx.iou(poly) == pytest.approx(iou, abs=1e-3)
+        assert poly.area >= legacy[trig].area
