@@ -6,10 +6,15 @@ Three ways a moved parameter silently stops reaching the physics, each pinned:
     made [calibration] c_fit a no-op until 2026-11-08);
   * `from model_params import X` (frozen at import).
 And the values must match the standalone's central config (CLAUDE.md:
-behavioural differences from ~/avalanche-release-areas are porting defects).
+behavioural differences from ~/avalanche-release-areas are porting defects),
+**as of the season tag** STANDALONE_PARITY_REF, not its working copy: the
+operational model is locked for the 2026-27 season (Ron, 2026-11-17) while
+the standalone's master keeps moving. Move the ref when the new physics is
+brought across, between seasons.
 """
 import ast
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,7 +25,20 @@ sys.path.insert(0, str(SRC))
 import model_params as mp   # noqa: E402
 
 MP_NAMES = {n for n in vars(mp) if re.fullmatch(r"[A-Z][A-Z0-9_]*", n)}
-STANDALONE_CONFIG = Path.home() / "avalanche-release-areas" / "src" / "release_areas" / "config.py"
+STANDALONE_REPO = Path.home() / "avalanche-release-areas"
+STANDALONE_CONFIG_PATH = "src/release_areas/config.py"
+STANDALONE_PARITY_REF = "ops-2026-27"   # standalone eef8071, paired with avachain d11bbf3
+
+
+def _standalone_config_at_ref():
+    """The standalone config.py at STANDALONE_PARITY_REF, or None when the
+    repo is not checked out or lacks the tag (git fetch --tags)."""
+    if not (STANDALONE_REPO / ".git").exists():
+        return None
+    r = subprocess.run(["git", "-C", str(STANDALONE_REPO), "show",
+                        f"{STANDALONE_PARITY_REF}:{STANDALONE_CONFIG_PATH}"],
+                       capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else None
 
 
 def _modules():
@@ -59,10 +77,12 @@ def test_no_model_parameter_is_frozen_at_import(path):
     assert not bad, f"{path.name}: " + "; ".join(bad)
 
 
-@pytest.mark.skipif(not STANDALONE_CONFIG.exists(), reason="standalone repo not checked out")
 def test_values_match_the_standalone_config():
+    text = _standalone_config_at_ref()
+    if text is None:
+        pytest.skip(f"standalone repo or its tag {STANDALONE_PARITY_REF} not available")
     ns = {}
-    tree = ast.parse(STANDALONE_CONFIG.read_text())
+    tree = ast.parse(text)
     for node in tree.body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1 \
                 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in MP_NAMES:
@@ -72,4 +92,4 @@ def test_values_match_the_standalone_config():
                 pass   # derived (e.g. THETA_FIT_RADIUS_M = L_SS); covered by its source
     assert len(ns) > 40, "parsed too few standalone parameters"
     diff = {k: (getattr(mp, k), v) for k, v in ns.items() if getattr(mp, k) != v}
-    assert not diff, f"avachain vs standalone: {diff}"
+    assert not diff, f"avachain vs standalone {STANDALONE_PARITY_REF}: {diff}"

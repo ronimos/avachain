@@ -163,7 +163,9 @@ J&J 1990 one. If they disagree again, trust the flags in this file.
 
 That repo is the **standalone reference implementation**; avachain embeds the
 same model in the operational pipeline. Any behavioural difference in the
-physics is a porting defect, not a local choice. Module mapping:
+physics is a porting defect, not a local choice, **measured against the
+standalone at the season tag** (see *Season lock* below), not its `master`.
+Module mapping:
 
 | avachain | standalone |
 |---|---|
@@ -190,6 +192,34 @@ When comparing constants, **grep case-insensitively and compare by value**. A
 case-sensitive search for `tau_g.*50` silently misses
 `TAU_G_FEATURE_FLOOR = 50.0`, which has already caused one false "the repos
 agree" conclusion.
+
+---
+
+## Season lock — 2026-27 (Ron, 2026-11-17)
+
+The operational model is **locked for the 2026-27 season**: tag `ops-2026-27`
+on both repos, avachain `d11bbf3` paired with standalone `eef8071`,
+calibration 2026-11-17.1, deployed at `/home/avachain/code/avachain`.
+Release-model development continues in `~/avalanche-release-areas` only; its
+`master` moves on, avachain does not follow it until the season ends.
+
+- **Parity is checked against the tag.** `tests/test_model_params.py` reads the
+  standalone's `config.py` from `git show ops-2026-27:…`
+  (`STANDALONE_PARITY_REF`), not the working copy, so standalone work cannot
+  break avachain's suite. Move the ref only when new physics is brought across
+  between seasons. A port mid-season is a lock change and needs Ron's sign-off.
+- **What may still reach `main` and the deployed tree:** operational fixes
+  (I/O, scheduling, alerts, runout plumbing, reports) that leave release output
+  **byte-identical** on Jan 18 (the analyze CSVs and the scenario set, apart
+  from metadata `generated_at` / `git_hash`). Show that before merging. Any
+  change to release physics, `model_params` values or a slope's
+  `[calibration]` is a lock change: Ron decides, case by case.
+- **Mid-season recalibration is not ruled out** (Ron: it depends on the overall
+  workload). If one happens it goes through the *Calibration* rules below
+  (TOML only, new version, propose then approve), and the physics stays at the
+  tag.
+- Do not port standalone commits into avachain "to keep parity" during the
+  season. That rule is suspended until the lock is lifted.
 
 ---
 
@@ -585,6 +615,8 @@ Regenerate before trusting any release polygon.
 
 - `dev` is the active branch; `main` is stable operational.
 - When something is deployment-ready, merge **and push both** `dev` and `main`.
+  During the 2026-27 season lock, "deployment-ready" means an operational fix
+  shown byte-identical on Jan 18 (see *Season lock*); release physics waits.
 - The old `science` branch (the ISSW 2026 version, last touched 2026-09-02) was
   deleted in the 2026-11-12 cleanup; tag `v1.0-issw2026` holds its tip. Parked
   work lives in `archive/*` tags (`archive/thin-slab-options`), not branches.
