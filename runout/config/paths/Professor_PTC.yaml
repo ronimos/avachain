@@ -17,6 +17,7 @@ display:
   # and must not reach a live 2026-27 report).
   caveats:
     - "τ₀ = 125 Pa was fitted to a single avalanche (2026-01-18), on last season's DEM pair. It has not been tested on any other event, or on this season's ground DEM (2026-10-18, surveyed ground control), which sits a median 0.2 m above last season's runout DEM with slopes within 0.3°."
+    - "Under the forest the runout ground is USGS 3DEP lidar (2016), lifted into the drone survey's frame (since 2026-11-17; before that the flow ran over the tree canopy, about 10 m higher). The drone surface is used everywhere else."
     - "Entrainment depth comes from the release side's scour_depth.tif, which covers only the snowpack model's domain. Below that domain the flow entrains nothing."
   # Keyed by cycle date (YYYY-MM-DD); shown before the general caveats.
   event_caveats:
@@ -30,7 +31,12 @@ terrain:
   # alignment (one surface for both parts since 2026-11-07; was 260605).
   # Heights are NAD83(2011) ellipsoidal, not NAVD88 (3DEP check, 2026-11-07);
   # com1DFA uses relief only, so the frame does not change a runout.
-  dem: /home/avachain/data/static/Professor_PTC/terrain/261018_Professor_Ground-DSM_1m_6342-ellipsoid.tif
+  # 2026-11-17 (Ron): canopy removed. The 1 m drone average carried the forest
+  # (86 % of forest.shp cells > 2 m above lidar ground; median 9.9 m lowered there).
+  # Under canopy > 2 m: USGS 3DEP 1 m (CO Central Western 2016) lifted into the drone
+  # frame; elsewhere the previous file unchanged. Same grid. Previous file kept:
+  # 261018_Professor_Ground-DSM_1m_6342-ellipsoid.tif.
+  dem: /home/avachain/data/static/Professor_PTC/terrain/261018_Professor_Ground-DEM_1m_6342-ellipsoid_bare.tif
   dem_feather_cells: 5
   dem_vertical_correction_m: 0.0
 
