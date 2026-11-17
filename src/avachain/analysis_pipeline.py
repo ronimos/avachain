@@ -891,7 +891,8 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
           f"distance caps {'ON' if mp.USE_DISTANCE_CAPS else 'OFF'}  "
           f"slab-crack lines {'ON' if mp.USE_SLAB_CRACK_LINES else 'OFF'}"
           f"{f' ({mp.SLAB_CRACK_MODE})' if mp.USE_SLAB_CRACK_LINES else ''}  "
-          f"downslope slide {'ON' if mp.USE_DOWNSLOPE_SLIDE else 'OFF'}")
+          f"downslope slide {'ON' if mp.USE_DOWNSLOPE_SLIDE else 'OFF'}"
+          f"{(' (unified ' + ('ON' if mp.UNIFIED_SLIDE else 'OFF') + ')') if mp.USE_DOWNSLOPE_SLIDE else ''}")
     if mp.USE_SLAB_TENSILE_GATE:
         print(f"  slab tensile-failure gate ON ({mp.SLAB_TENSILE_SIGMA_COL})")
     if mp.ARREST_MODE != 'legacy' or mp.MASK_MODE != 'gate':

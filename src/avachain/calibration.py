@@ -14,6 +14,8 @@ without [calibration] runs exactly as before.
     tau_g_floor = 350.0                 # Pa, BFS driving-stress floor (TAU_G_ABS_FLOOR)
     tau_ratio_floor = 0.0               # BFS tau_g/tau_p floor, 0 = off (TAU_RATIO_FLOOR)
     slab_crack_mode = "shear"           # slab-crack line fracture mode (SLAB_CRACK_MODE)
+    downslope_slide = true              # downslope push test (USE_DOWNSLOPE_SLIDE)
+    unified_slide = true                # push decides severed pieces too (UNIFIED_SLIDE)
     # provenance (free-form, not read by the model):
     events = ["2026-01-18"]; no_event_dates = [...]; objective = "..."; fitted = "..."; commit = "..."
 
@@ -42,13 +44,19 @@ Knobs, and why only these two:
               value: it pins the fracture mode a calibration was fitted under
               (every version up to 2026-11-13.1 was fitted under 'shear').
               Scenarios only. The CLI --slab-crack-mode overrides it.
+  downslope_slide, unified_slide  model_params.USE_DOWNSLOPE_SLIDE and
+              UNIFIED_SLIDE (module defaults off). Structural switches, not
+              fitted values: 2026-11-17.1 turned both on, knobs not refitted
+              (the facet_a / tau_ratio_floor plateau did not move under them).
+              Scenarios only. The CLI --[no-]downslope-slide and
+              --[no-]unified-slide override them.
 The Λ factors are not knobs: with USE_MELOCHE_ARREST they never run.
 """
 from __future__ import annotations
 import model_params as mp
 
 KNOBS = ("c_fit", "size_scale", "facet_a", "distance_caps", "tau_g_floor",
-         "tau_ratio_floor", "slab_crack_mode")
+         "tau_ratio_floor", "slab_crack_mode", "downslope_slide", "unified_slide")
 PROVENANCE = ("version", "events", "no_event_dates", "objective", "fitted",
               "commit", "note", "sweep")
 
@@ -70,6 +78,9 @@ def _check(cal: dict) -> None:
         raise ValueError("[calibration] tau_ratio_floor must be >= 0")
     if "distance_caps" in cal and not isinstance(cal["distance_caps"], bool):
         raise ValueError("[calibration] distance_caps must be true or false")
+    for k in ("downslope_slide", "unified_slide"):
+        if k in cal and not isinstance(cal[k], bool):
+            raise ValueError(f"[calibration] {k} must be true or false")
     if "slab_crack_mode" in cal and cal["slab_crack_mode"] not in mp.SLAB_CRACK_MODES:
         raise ValueError(f"[calibration] slab_crack_mode must be one of "
                          f"{mp.SLAB_CRACK_MODES}")
@@ -101,6 +112,12 @@ def apply(cfg, quiet: bool = False) -> dict:
     if "slab_crack_mode" in cal:
         mp.SLAB_CRACK_MODE = str(cal["slab_crack_mode"])
         applied["slab_crack_mode"] = mp.SLAB_CRACK_MODE
+    if "downslope_slide" in cal:
+        mp.USE_DOWNSLOPE_SLIDE = bool(cal["downslope_slide"])
+        applied["downslope_slide"] = mp.USE_DOWNSLOPE_SLIDE
+    if "unified_slide" in cal:
+        mp.UNIFIED_SLIDE = bool(cal["unified_slide"])
+        applied["unified_slide"] = mp.UNIFIED_SLIDE
     if applied and not quiet:
         print(f"  calibration {cal.get('version', '(no version)')}: "
               + ", ".join(f"{k}={v:g}" if not isinstance(v, (bool, str)) else f"{k}={v}"

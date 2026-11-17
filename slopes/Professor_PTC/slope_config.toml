@@ -201,18 +201,22 @@ email = []
 # 2026-11-13.1 (Ron): physics defaults changed, knobs NOT refitted: severed slab
 # slides (USE_SEVERED_SLIDE), primary-class facet rule (FACET_SOURCE), 0.3 m slab
 # floors. Jan 18: E[IoU] 0.626, E[area] 7098 m2, AUC 0.838, ski 0/46 (was .3: 0.610).
-version        = "2026-11-13.1"
+# 2026-11-17.1 (Ron): structural flags only, knobs NOT refitted: downslope slide and
+# unified slide on, crack lines kept in shear. The 11-16 knob sweep under the new model
+# (facet_a 0.5-1.0, tau_ratio_floor 0-0.9, both modes) left the plateau where it was.
+version        = "2026-11-17.1"
 facet_a        = 0.75     # the one fitted knob: J&J 1990 facet knockdown (module default 0.5)
 distance_caps  = false    # structural: BFS up/down/cross caps open
 tau_ratio_floor = 0.65    # second (last) fitted knob: BFS stops where tau_g/tau_p < 0.65 (module default 0 = off)
-slab_crack_mode = "shear"  # structural pin (Ron 2026-11-16): .1-.3 and 2026-11-13.1 were fitted under
-                           # shear (Mode II) slab-crack lines; the module default became 'opening'
-                           # (Mode I) on 11-16. Unpin at the next recalibration, with BFS_ADJACENCY and
-                           # POLYGON_PIECE. The pin reproduces 2026-11-13.1 exactly, so the version stands.
+slab_crack_mode = "shear"  # structural (Ron 2026-11-17): module default is 'opening' (Mode I) since 11-16;
+                           # shear scores the same five-trigger E[IoU] (0.662) and better inside the
+                           # release (median 0.675 vs 0.654), and every earlier version ran shear.
+downslope_slide = true     # structural (2026-11-17.1): USE_DOWNSLOPE_SLIDE, module default off
+unified_slide   = true     # structural (2026-11-17.1): UNIFIED_SLIDE, module default off
 events         = ["2026-01-18"]
 no_event_dates = ["2026-01-29", "2026-02-05", "2026-02-12", "2026-02-19", "2026-02-26",
                   "2026-03-05", "2026-03-07", "2026-03-12", "2026-03-19", "2026-03-26"]
 objective      = "Jan 18 E[IoU] vs the 5810 m2 survey polygon; ski-track non-triggers must not release (forced shots, no rectangle). No-event area reported, not scored."
-fitted         = "Jan 18 E[IoU] 0.610 (0.601 at .2, 0.589 at .1, 0.200 before), E[area] 6831 m2 (1.18x), AUC 0.848; ski 0/46 releasing (was 13/46); facet 0.75 and sigma_t x0.5 behave alike; ratio plateau 0.60-0.70 (IoU 0.59-0.60), cuts real release above 0.75. A fit, not validation."
-commit         = "68a170f (.1), 9c7eb7a (.2), 43ae1dc (.3)"
-sweep          = "11-09 J&J/facet sweeps + trigger-toughness/caps-off combined run; acceptance 11-10 identical on all 11 dates; 11-10 tau_ratio_floor sweep 0-0.9 (11 dates, 46 ski shots) and TAU_G_ABS_FLOOR sweep 200-2500 Pa (ratio chosen: wider plateau, strength-relative); 11-10 slab-crack lines: wrapper runs (detached and Stauchwall-supported loads, line kept/removed), real-code acceptance on 11 dates"
+fitted         = "2026-11-17.1 (TOML only, no CLI flags): Jan 18 E[IoU] 0.662, E[area] 6233 m2, AUC 0.850, Brier skill 0.368; inside-release median IoU 0.675 (109/134 release); ski 0/46. Earlier: Jan 18 E[IoU] 0.610 (0.601 at .2, 0.589 at .1, 0.200 before), E[area] 6831 m2 (1.18x), AUC 0.848; ski 0/46 releasing (was 13/46); facet 0.75 and sigma_t x0.5 behave alike; ratio plateau 0.60-0.70 (IoU 0.59-0.60), cuts real release above 0.75. A fit, not validation."
+commit         = "68a170f (.1), 9c7eb7a (.2), 43ae1dc (.3); 2026-11-17.1 physics a1ba21c (downslope slide), e6e1fe6 (unified slide)"
+sweep          = "11-09 J&J/facet sweeps + trigger-toughness/caps-off combined run; acceptance 11-10 identical on all 11 dates; 11-10 tau_ratio_floor sweep 0-0.9 (11 dates, 46 ski shots) and TAU_G_ABS_FLOOR sweep 200-2500 Pa (ratio chosen: wider plateau, strength-relative); 11-10 slab-crack lines: wrapper runs (detached and Stauchwall-supported loads, line kept/removed), real-code acceptance on 11 dates; 11-16 knob sweep under the new model (facet_a 0.5-1.0 x tau_ratio_floor 0-0.9, opening+shear, slide+unified on): plateau unchanged at 0.75 / 0.65, outputs/little_prof/calibration/20261116_inside_release/knob_sweep"

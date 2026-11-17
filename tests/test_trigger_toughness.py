@@ -79,7 +79,8 @@ def test_calibration_sets_facet_a_and_caps(monkeypatch):
 
 @pytest.mark.parametrize("bad", [{"facet_a": 0.0}, {"facet_a": 1.5},
                                  {"distance_caps": "no"},
-                                 {"slab_crack_mode": "tearing"}])
+                                 {"slab_crack_mode": "tearing"},
+                                 {"downslope_slide": "yes"}, {"unified_slide": 1}])
 def test_calibration_rejects_bad_values(bad):
     with pytest.raises(ValueError):
         calibration.apply(_Cfg(bad), quiet=True)
@@ -122,13 +123,27 @@ def test_calibration_pins_slab_crack_mode(monkeypatch):
     assert got == {"slab_crack_mode": "shear"} and mp.SLAB_CRACK_MODE == "shear"
 
 
+def test_calibration_sets_slide_flags(monkeypatch):
+    """2026-11-17.1 turns the downslope slide and unified slide on per slope;
+    the module defaults stay off (parity with the standalone)."""
+    monkeypatch.setattr(mp, "USE_DOWNSLOPE_SLIDE", mp.USE_DOWNSLOPE_SLIDE)
+    monkeypatch.setattr(mp, "UNIFIED_SLIDE", mp.UNIFIED_SLIDE)
+    assert mp.USE_DOWNSLOPE_SLIDE is False and mp.UNIFIED_SLIDE is False
+    got = calibration.apply(_Cfg({"version": "t", "downslope_slide": True,
+                                  "unified_slide": True}), quiet=True)
+    assert got == {"downslope_slide": True, "unified_slide": True}
+    assert mp.USE_DOWNSLOPE_SLIDE is True and mp.UNIFIED_SLIDE is True
+
+
 @pytest.mark.parametrize("slope", ["Professor_PTC", "little_prof"])
-def test_calibrated_slopes_pin_shear_until_recalibration(slope):
-    """2026-11-13.1 was fitted under shear lines (Ron 2026-11-16: pin until the
-    next recalibration). Removing the pin without a new version changes every
+def test_calibrated_slopes_carry_2026_11_17_1(slope):
+    """2026-11-17.1 (Ron): shear lines + downslope slide + unified slide, knobs
+    unchanged. Changing any of these without a new version changes every
     forecast under the old version's name."""
     import tomllib
     toml = Path(__file__).resolve().parents[1] / "slopes" / slope / "slope_config.toml"
     cal = tomllib.loads(toml.read_text())["calibration"]
-    assert cal["version"] == "2026-11-13.1"
+    assert cal["version"] == "2026-11-17.1"
     assert cal["slab_crack_mode"] == "shear"
+    assert cal["downslope_slide"] is True and cal["unified_slide"] is True
+    assert cal["facet_a"] == 0.75 and cal["tau_ratio_floor"] == 0.65
