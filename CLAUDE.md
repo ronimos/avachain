@@ -199,7 +199,10 @@ agree" conclusion.
 
 The operational model is **locked for the 2026-27 season**: tag `ops-2026-27`
 on both repos, avachain `d11bbf3` paired with standalone `eef8071`,
-calibration 2026-11-17.1, deployed at `/home/avachain/code/avachain`.
+calibration 2026-11-17.1, deployed at `/home/avachain/code/avachain`, on
+the GCP DEM `261018_Professor_Ground-DSM_{5cm,1m}_6342-ellipsoid.tif` (live
+since 2026-11-07; the season DEM, Ron 2026-11-17; a different surface would
+change every cluster and polygon, so it is a lock change).
 Release-model development continues in `~/avalanche-release-areas` only; its
 `master` moves on, avachain does not follow it until the season ends.
 
