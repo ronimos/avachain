@@ -1001,6 +1001,13 @@ if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
     # 2026-11-18). A --snapshot rerun runs every day itself.
     RUNOUT_DAYS="{runout_days}"
     [[ -n "${{SNAPSHOT_DATE:-}}" ]] && RUNOUT_DAYS="all"
+    # Until the cron file with the later-days line is in /etc/cron.d, nothing
+    # else runs T_1/T_2: do every day here, as before (Ron installs the cron
+    # files when the season starts; 2026-11-18).
+    if [[ "$RUNOUT_DAYS" == "T_0" ]] && ! grep -qs -- "--horizons later" "${{AVACHAIN_CROND_FILE:-/etc/cron.d/{crond_name}}}"; then
+        echo "    no later-days runout in ${{AVACHAIN_CROND_FILE:-/etc/cron.d/{crond_name}}}: running every day here"
+        RUNOUT_DAYS="all"
+    fi
     if python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG --horizons $RUNOUT_DAYS; then
         RUNOUT_STATUS="ok"
     else
@@ -1617,6 +1624,7 @@ def _render_run_daily(cfg: dict) -> str:
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,
         runout_days   = "T_0" if _runout_later(cfg) else "all",
+        crond_name    = _crond_name(slope_name),
     )
 
 

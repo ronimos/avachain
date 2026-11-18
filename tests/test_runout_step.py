@@ -224,6 +224,23 @@ class TestRunScripts:
         skip = self._run(block, 0, no_runout=1)
         assert "STATUS=skipped" in skip.stdout and "called" not in skip.stdout
 
+    def test_today_only_once_the_later_days_cron_is_installed(self, install, tmp_path):
+        """Ron installs the new cron files when the season starts (2026-11-18).
+        Until then the old cron has no later-days line, so the nightly chain
+        must keep running every day itself."""
+        import tomllib
+        cfg = tomllib.loads((REPO / "slopes" / "Professor_PTC" / "slope_config.toml").read_text())
+        block = self._block(install._render_run_daily(cfg), 6)
+        crond = tmp_path / "avachain-Professor_PTC"
+        env_block = f"AVACHAIN_CROND_FILE={crond}\n" + block
+        old = self._run(env_block, 0)                         # no file: old cron
+        assert "--horizons all" in old.stdout and "running every day here" in old.stdout
+        crond.write_text("10 22 * * * ron run_daily_Professor_PTC.sh\n")
+        assert "--horizons all" in self._run(env_block, 0).stdout
+        crond.write_text("45 23 * * * ron runout_step.py --toml t --horizons later\n")
+        new = self._run(env_block, 0)
+        assert "--horizons T_0" in new.stdout and "running every day here" not in new.stdout
+
 
 def _forecast_sets(tmp_path, labels):
     """Publish one set per label under release/2026-12-05/<label>/."""
