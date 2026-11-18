@@ -465,6 +465,19 @@ class TestCronD:
         assert _cfg("Widow")["cron"]["report_check"] == "05:15"
 
     @pytest.mark.parametrize("slope", ("Sisters", "Professor_PTC", "Widow"))
+    def test_admin_doc_states_the_schedule(self, install, slope, tmp_path):
+        """The admin doc took daily_hour for an int; "22:10" crashed the
+        deploy's install.py --force (2026-11-18)."""
+        assert install._hhmm("22:10") == "22:10" and install._hhmm(0) == "00:00"
+        cfg = _cfg(slope)
+        x = tmp_path / "x"
+        doc = install._render_admin_doc(cfg, Path(cfg["paths"]["project_dir"]), x, x, x,
+                                        x, x, None, [])
+        start = {"Sisters": "22:00", "Professor_PTC": "22:10", "Widow": "22:20"}[slope]
+        assert f"the daily run fires at **{start} America/Denver**" in doc
+        assert "the later days run at **23:45 America/Denver**" in doc
+
+    @pytest.mark.parametrize("slope", ("Sisters", "Professor_PTC", "Widow"))
     def test_the_forecast_reaches_t2_from_a_22h_start(self, install, slope):
         """WRF rows are 6-hourly: at 22:00 MST (05 UTC) T_stable is 00 UTC,
         and T_2 is read at 18 UTC two days after the cycle date: 66 h."""

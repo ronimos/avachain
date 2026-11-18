@@ -1316,6 +1316,12 @@ def _runout_later_line(cfg: dict, project_dir: Path, toml_path: Path) -> str | N
             f"--toml {toml_path} --horizons later >> {log_path} 2>&1")
 
 
+def _hhmm(t) -> str:
+    """"22:10" from an hour (int) or "HH:MM"."""
+    mm, hh = _cron_when(t).split()
+    return f"{int(hh):02d}:{int(mm):02d}"
+
+
 def _cron_when(t) -> str:
     """cron's minute and hour fields from an hour (int) or "HH:MM"."""
     if isinstance(t, int) or str(t).isdigit():
@@ -1840,8 +1846,14 @@ def _render_admin_doc(
         daily = cron_cfg.get("daily_hour", cron_cfg.get("daily_hour_utc", 13))
         lines.append(f"\nThe survey script polls for READY surveys every "
                      f"**{cron_cfg.get('poll_minutes', 10)} min**; the daily run fires at "
-                     f"**{int(daily):02d}:00 {tz}** (the cron.d file's CRON_TZ). "
+                     f"**{_hhmm(daily)} {tz}** (the cron.d file's CRON_TZ). "
                      "Both share one lock, so they never overlap.\n")
+        later = _runout_later(cfg)
+        if later:
+            lines.append(f"The daily run does the runout for today (T_0) only; the later "
+                         f"days run at **{_hhmm(later)} {tz}** (`runout_step.py --horizons "
+                         f"later`), queued behind every slope's T_0 (`[runout] priority` "
+                         f"{cfg['runout'].get('priority', 9)}).\n")
     else:
         lines.append(f"\nDaily run fires at **{hour_utc:02d}:00 UTC**.\n")
     crond = _crond_path(cfg, project_dir)
