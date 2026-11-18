@@ -13,6 +13,7 @@ No CLI. Import from pipeline.py, analysis_pipeline.py, and diagnostic scripts.
 from __future__ import annotations
 
 import json
+import re
 import time
 import tempfile
 import os
@@ -136,6 +137,35 @@ def unique_location_index(ds: xr.Dataset,
         print(f"  store holds {len(names)} locations for {len(set(ids))} "
               f"clusters ({n_dup} duplicate entries dropped)")
     return np.array(idx, dtype=int)
+
+
+def station_pro_files(pro_dir: Path) -> dict[str, Path]:
+    """Each location's own .pro, `<loc>_<loc>.pro`, keyed by location.
+
+    SNOWPACK names a .pro `<station id>_<experiment>.pro`, and run_snowpack.sh
+    sets the experiment to the cluster id. The master configs run
+    NUMBER_SLOPES = 5. Then, for station S, SNOWPACK also runs a virtual slope
+    n (1-4) whenever a snow file `S<n>.sno` exists, and writes it as
+    `S<n>_S.pro`. Below 10 000 clusters no such snow file exists, because ids
+    are 4 digits. From 10 000 on, `cluster_1000`'s run picks up the real
+    clusters 10001-10004 (Widow, 2026-11-17: 1 072 files). Those files are not
+    the clusters they are named after, so they are left out here.
+    """
+    files, other = {}, []
+    for f in sorted(pro_dir.glob("cluster_*_cluster_*.pro")):
+        m = _OWN_PRO.match(f.name)
+        if m:
+            files[m.group(1)] = f
+        else:
+            other.append(f.name)
+    if other:
+        print(f"  ignoring {len(other)} .pro file(s) not named "
+              f"<station>_<station>.pro (SNOWPACK virtual slopes), "
+              f"e.g. {other[0]}")
+    return files
+
+
+_OWN_PRO = re.compile(r"^(cluster_\d+)_\1\.pro$")
 
 
 def _resume_state(zarr_out: Path, rebuild: bool) -> tuple[set, bool]:
@@ -304,8 +334,7 @@ def update_zarr_since(pro_dir: Path,
         raise ValueError(f"{zarr_out} has no timestep <= {since}; rebuild it "
                          f"with build_zarr_cache instead")
 
-    pro_by_loc = {f.stem.split('_cluster_')[0]: f
-                  for f in pro_dir.glob("cluster_*_cluster_*.pro")}
+    pro_by_loc = station_pro_files(pro_dir)
     new_times = set()
     with tempfile.TemporaryDirectory() as tmp:
         for loc in locs:
@@ -382,13 +411,35 @@ def build_zarr_cache(pro_dir: Path,
                  rebuild=True with it, since resuming a windowed store makes
                  no sense.
     """
-    pro_files = sorted(pro_dir.glob("cluster_*_cluster_*.pro"))
+    pro_files = list(station_pro_files(pro_dir).values())
     n_total   = len(pro_files)
     n_batches = int(np.ceil(n_total / batch_size))
     print(f"Files: {n_total}  batch_size: {batch_size}  "
           f"batches: {n_batches}  workers: {n_cpus}")
 
     written_locs, append = _resume_state(zarr_out, rebuild)
+
+    # `location` is a fixed-width string, and an append must match the
+    # store's width exactly. Taking it from the first batch fixed Widow's
+    # store at <U12 ("cluster_9999"), and every batch with a 5-digit id then
+    # failed. Size it from every location of the build instead; for ids under
+    # 10 000 that is <U12, as before.
+    wanted = [f.stem.split('_cluster_')[0] for f in pro_files]
+    loc_width = max((len(l) for l in wanted), default=1)
+    if append:
+        with xr.open_zarr(str(zarr_out)) as existing:
+            store_width = existing['location'].dtype.itemsize // 4
+        too_wide = [l for l in wanted
+                    if l not in written_locs and len(l) > store_width]
+        if too_wide:
+            raise RuntimeError(
+                f"{zarr_out} stores location as <U{store_width}, too narrow "
+                f"for {len(too_wide)} location(s) still to write (e.g. "
+                f"{too_wide[0]}). Nothing was written; rebuild the store "
+                f"(--rebuild).")
+        loc_width = store_width
+    loc_dtype = f"<U{loc_width}"
+    failed = []
 
     t_total = time.time()
 
@@ -429,6 +480,7 @@ def build_zarr_cache(pro_dir: Path,
             ds = _read_pro_batch(batch_files, n_cpus, max_layers, since)
         except Exception as exc:
             print(f"    ERROR reading batch: {exc}")
+            failed.append((keep_locs, f"read: {exc}"))
             continue
         if ds is None:
             print(f"    no profiles after {since}; nothing to write")
@@ -440,6 +492,7 @@ def build_zarr_cache(pro_dir: Path,
         # `zarr_out.exists()` is not that, and using it is what let an
         # unreadable store be appended to.
         written_now = [str(v) for v in ds.coords['location'].values]
+        ds = ds.assign_coords(location=ds['location'].astype(loc_dtype))
         try:
             if append:
                 ds.to_zarr(str(zarr_out), mode='a', append_dim='location')
@@ -457,6 +510,7 @@ def build_zarr_cache(pro_dir: Path,
                            encoding=_chunk_encoding(ds, max_layers))
         except Exception as exc:
             print(f"    ERROR writing Zarr: {exc}")
+            failed.append((keep_locs, f"write: {exc}"))
             continue
         finally:
             del ds
@@ -474,6 +528,20 @@ def build_zarr_cache(pro_dir: Path,
               f"ETA={eta_min:.0f}min")
 
     print(f"\nDone in {(time.time()-t_total)/60:.1f}min → {zarr_out}")
+
+    # A batch error used to be logged and the build still returned normally,
+    # so season_start reported a store missing 3 128 of Widow's locations as
+    # a success. Every batch is still tried, then the build fails. With
+    # `since`, a location with no profile after it is legitimately absent.
+    missing = [l for l in wanted if l not in written_locs]
+    if failed or (missing and since is None):
+        lines = [f"  {locs[0]} … {locs[-1]} ({len(locs)}): {why}"
+                 for locs, why in failed]
+        raise RuntimeError(
+            f"Zarr build incomplete: {len(failed)} failed batch(es), "
+            f"{len(missing)} of {len(wanted)} locations not in {zarr_out}"
+            + (f" (e.g. {missing[0]})" if missing else "") + "\n"
+            + "\n".join(lines))
 
 
 # -----------------------------------------------------------------------

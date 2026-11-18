@@ -298,7 +298,8 @@ if [[ "${SKIP_ZARR:-0}" != 1 ]]; then
     echo ""
     echo "=== Aggregating results to Zarr ==="
     $REPO_DIR/.venv/bin/python3 $REPO_DIR/src/avachain/build_zarr_chunked.py \
-        --pro-dir "$OUTPUT_DIR" --zarr-out "$OUTPUT_DIR/slope_snowpack.zarr"
+        --pro-dir "$OUTPUT_DIR" --zarr-out "$OUTPUT_DIR/slope_snowpack.zarr" \
+        || { echo "    ERROR: Zarr build failed or incomplete" >&2; exit 3; }
     echo "=== Zarr Build Complete ==="
 fi
 
