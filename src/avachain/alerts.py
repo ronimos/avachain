@@ -17,7 +17,11 @@ public on GitHub.
 
 `check-report` (cron, after the report deadline): during the season, alert
 when today's runout report has not been published. The report is published
-after each forecast day finishes, T+0 first, so its presence means T+0 is out. With no recipients configured an alert is printed and nothing is
+after each forecast day finishes, T+0 first, so its presence means T+0 is out.
+`check-report --all-days` (cron, after the later days' deadline, 08:15) also
+alerts while the report still marks any day pending (runout's
+PENDING_MARKER), so a T+1 or T+2 that never finished is not missed.
+With no recipients configured an alert is printed and nothing is
 sent. An alert never fails its caller: every path exits 0, because the run that
 asks for it has already failed or finished and must keep its own exit status.
 """
@@ -131,9 +135,14 @@ def _in_season(s, today) -> bool:
     return True
 
 
-def check_report(toml_path: Path, now=None) -> str | None:
+# runout/scripts/cycle_products.PENDING_MARKER (avachain cannot import runout)
+PENDING_MARKER = "<!-- avachain:pending -->"
+
+
+def check_report(toml_path: Path, now=None, all_days: bool = False) -> str | None:
     """Why today's runout report is missing, or None (also outside the season
-    or when runout publishes nowhere)."""
+    or when runout publishes nowhere). all_days: also when a day of it is
+    still pending."""
     s = settings(toml_path)
     now = now or dt.datetime.now()
     if not _in_season(s, now.date()):
@@ -144,6 +153,9 @@ def check_report(toml_path: Path, now=None) -> str | None:
     rep_path = Path(s["publish_root"]) / "forecasts" / s["path_profile"] / day / "report.html"
     if not rep_path.exists():
         return f"no report for {day} at {now:%H:%M}: {rep_path} does not exist"
+    if all_days and PENDING_MARKER in rep_path.read_text(errors="replace"):
+        return (f"the {day} report still shows a forecast day as running at "
+                f"{now:%H:%M}: {rep_path}")
     return None
 
 
@@ -157,19 +169,23 @@ def main(argv=None) -> int:
     s.add_argument("--log", default=None)
     c = sub.add_parser("check-daily")
     c.add_argument("--max-age-h", type=float, default=26.0)
-    sub.add_parser("check-report")
+    cr = sub.add_parser("check-report")
+    cr.add_argument("--all-days", action="store_true",
+                    help="also alert while any day of the report is pending")
     args = ap.parse_args(argv)
     if args.cmd == "send":
         send(args.toml, args.subject, args.body, args.log)
         return 0
     if args.cmd == "check-report":
         try:
-            why = check_report(args.toml)
+            why = check_report(args.toml, all_days=args.all_days)
         except Exception as e:
             why = f"check-report could not run: {e}"
         if why:
-            send(args.toml, "runout report not published", why + "\n\nThe daily run "
-                 "(00:00 local) publishes T+0 first. Check the daily log and cron.")
+            what = "runout report incomplete" if args.all_days else "runout report not published"
+            send(args.toml, what, why + "\n\nThe nightly run publishes T+0 first; the "
+                 "later days follow from cron (runout_step --horizons later). Check the "
+                 "daily log, the cron log and cron.")
         else:
             print("report published (or outside the season)")
         return 0

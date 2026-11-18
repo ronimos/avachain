@@ -138,7 +138,8 @@ def test_scripts_take_the_window_from_nwp_ingest():
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     cfg = tomllib.loads((repo / "slopes" / "Professor_PTC" / "slope_config.toml").read_text())
+    lead = cfg["nwp"]["lead_hours"]            # 66 since 2026-11-18 (22:00 start)
     for sh in (m._render_run_operational(cfg), m._render_run_daily(cfg)):
-        assert "$NWP --lead-hours 60 ||" in sh
-        assert "$NWP --lead-hours 60 --print-window" in sh
+        assert f"$NWP --lead-hours {lead} ||" in sh
+        assert f"$NWP --lead-hours {lead} --print-window" in sh
         assert "+ pd.Timedelta(hours=48)" not in sh        # no second, hard-coded window

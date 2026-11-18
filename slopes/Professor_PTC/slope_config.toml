@@ -139,7 +139,7 @@ force_explosive_triggers = true
 # outlook's last timestamp. 60 h (Ron, 2026-11-04): the daily run at 00:00
 # local has T_stable ~06 UTC, and T+2's 18 UTC snapshot is 60 h later.
 [nwp]
-lead_hours = 60
+lead_hours = 66   # T_stable (6-hourly WRF rows; 00 UTC at a 22:00 MST start) + 66 h = T_2 at 18 UTC (Ron, 2026-11-18)
 
 [wrf]
 fcst_base_dir = "/ssd/snowpack/fcst"
@@ -153,15 +153,22 @@ wrf_dist_km   = 0.714
 
 [cron]
 # Times are in `timezone` (written as CRON_TZ into the cron.d file; DST
-# follows). Ron, 2026-11-04: the runout report is due at 03:00 local, so the
-# daily run starts at 00:00 local (~2 h 15 m with three forecast days of
-# runout) and alerts.py check-report runs at 03:15. With [surveys] markers on,
-# hour_utc is unused: run_Professor_PTC.sh is polled every poll_minutes.
+# follows). Ron, 2026-11-04: the runout report is due at 03:00 local. Since
+# 2026-11-18 (Ron) three slopes share the host: the nightly chains start the
+# evening before (Sisters 22:00, Professor 22:10, Widow 22:20; the cycle date
+# is the next UTC day, and WRF is the same morning cycle as at 00:00) and run
+# the runout for T_0 only. The later days run from cron at runout_later, one
+# at a time in the host's runout queue ([runout] priority), behind every
+# slope's T_0. T_0 is due 03:00 (Widow 05:00), every day 08:00. With [surveys]
+# markers on, hour_utc is unused: run_Professor_PTC.sh is polled every
+# poll_minutes.
 timezone       = "America/Denver"
 hour_utc       = 3
 poll_minutes   = 10
-daily_hour     = 0
-report_check   = "03:15"
+daily_hour     = "22:10"   # the evening before: the cycle date is the next UTC day
+report_check   = "03:15"   # T_0 published
+runout_later   = "23:45"   # runout_step --horizons later: T_1, T_2 behind every slope's T_0
+report_check_all = "08:15" # every day published (check-report --all-days)
 # The jobs (survey poll, daily run, hourly WRF archive) go to one /etc/cron.d
 # file, not a personal crontab (Ron, 2026-11-04). install.py writes it to
 # crond_dir/avachain-<slope>; install it with the sudo command it prints.
@@ -180,6 +187,7 @@ path_profile = "Professor_PTC"                       # runout/config/paths/<name
 work_dir     = "/home/avachain/work/runout/Professor_PTC"
 publish_root = "/home/www/html/ron/runout_forecast"  # -> forecasts/Professor_PTC/<date>/, latest/
 lock_file    = "/home/avachain/work/runout/.runout.lock"   # one for every slope: 4 sims at most
+priority     = 2      # runout queue: every T_0 first, then by this (Sisters 1, Professor 2, Widow 3)
 
 # ---------------------------------------------------------------------------
 # [alerts] — who is told when the chain needs attention (alerts.py): a survey

@@ -106,7 +106,7 @@ explosive_trigger_points = []
 force_explosive_triggers = false
 
 [nwp]
-lead_hours = 60
+lead_hours = 66   # T_stable (6-hourly WRF rows; 00 UTC at a 22:00 MST start) + 66 h = T_2 at 18 UTC (Ron, 2026-11-18)
 
 [wrf]
 fcst_base_dir = "/ssd/snowpack/fcst"
@@ -122,8 +122,10 @@ wrf_dist_km   = 0.759
 timezone       = "America/Denver"
 hour_utc       = 3
 poll_minutes   = 10
-daily_hour     = 0
-report_check   = "03:15"
+daily_hour     = "22:20"   # the evening before: the cycle date is the next UTC day
+report_check   = "05:15"   # T_0 published
+runout_later   = "23:45"   # runout_step --horizons later: T_1, T_2 behind every slope's T_0
+report_check_all = "08:15" # every day published (check-report --all-days)
 user           = "ron"
 crond_dir      = "/home/avachain/cron"
 
@@ -132,6 +134,7 @@ path_profile = "Widow"                               # runout/config/paths/<name
 work_dir     = "/home/avachain/work/runout/Widow"
 publish_root = "/home/www/html/ron/runout_forecast"  # -> forecasts/Widow/<date>/, latest/
 lock_file    = "/home/avachain/work/runout/.runout.lock"   # one for every slope: 4 sims at most
+priority     = 3      # runout queue: every T_0 first, then by this (Sisters 1, Professor 2, Widow 3)
 
 [alerts]
 email = []

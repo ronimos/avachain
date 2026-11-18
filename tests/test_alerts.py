@@ -174,6 +174,33 @@ class TestCheckReport:
         (d / "report.html").write_text("x")
         assert alerts.check_report(t, now=self.NOW) is None
 
+    def _report(self, tmp_path, text):
+        d = tmp_path / "www" / "forecasts" / "P" / "20261202"
+        d.mkdir(parents=True)
+        (d / "report.html").write_text(text)
+
+    def test_all_days_alerts_while_a_day_is_pending(self, tmp_path):
+        """08:15 (Ron, 2026-11-18): T_0 out by 03:00 is not enough; every
+        day must be. The runout marks a report with a pending day."""
+        t = self._t(tmp_path)
+        self._report(tmp_path, f"<html>{alerts.PENDING_MARKER}<div>T+2 still running</div>")
+        at8 = dt.datetime(2026, 12, 2, 8, 15)
+        assert alerts.check_report(t, now=at8) is None                  # T_0 is out
+        why = alerts.check_report(t, now=at8, all_days=True)
+        assert "still shows a forecast day as running at 08:15" in why
+
+    def test_all_days_quiet_when_every_day_is_done(self, tmp_path):
+        t = self._t(tmp_path)
+        self._report(tmp_path, "<html>done</html>")
+        assert alerts.check_report(t, now=self.NOW, all_days=True) is None
+
+    def test_the_marker_is_the_runouts(self):
+        """alerts.py cannot import runout (separate venv): pin the copy."""
+        src = (Path(__file__).resolve().parents[1] / "runout" / "scripts"
+               / "cycle_products.py").read_text()
+        assert f'PENDING_MARKER = "{alerts.PENDING_MARKER}"' in src
+        assert "{% if pending %}" + alerts.PENDING_MARKER in src
+
     def test_quiet_outside_the_season_or_without_runout(self, tmp_path):
         assert alerts.check_report(self._t(tmp_path), now=dt.datetime(2026, 11, 1, 3, 15)) is None
         assert alerts.check_report(_toml(tmp_path), now=self.NOW) is None

@@ -78,6 +78,9 @@ def no_release_reasons(manifest):
 
 
 PENDING_NOTE = "Still running; this page is updated when it finishes."
+# In the report while any day is pending; avachain's alerts.py
+# check-report --all-days looks for it (it cannot import this package).
+PENDING_MARKER = "<!-- avachain:pending -->"
 
 
 def pending_days(manifest):
@@ -582,7 +585,8 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 </table></div>
 
 {% if failed %}<div class="warn">Horizons not run: {{ failed }}</div>{% endif %}
-{% if pending %}<div class="warn"><b>{{ pending }} still running.</b> This page is updated as each day finishes.</div>{% endif %}
+{% if pending %}<!-- avachain:pending -->
+<div class="warn"><b>{{ pending }} still running.</b> This page is updated as each day finishes.</div>{% endif %}
 {% for name, valid, reason in no_release %}<div class="warn"><b>No forecast for {{ name }}{% if valid %} ({{ valid }}){% endif %}.</b> {{ reason }}</div>
 {% endfor %}
 

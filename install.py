@@ -996,7 +996,12 @@ if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
     # A runout failure does not fail the run: snowpack and release succeeded
     # and are published, and a FAILED survey would redo SNOWPACK to retry
     # runout (Ron, 2026-11-04). A kill still ends FAILED (signal traps).
-    if python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG; then
+    # Nightly: today (T_0) only, due 03:00; cron runs the later days
+    # (runout_step --horizons later) queued behind every slope's T_0 (Ron,
+    # 2026-11-18). A --snapshot rerun runs every day itself.
+    RUNOUT_DAYS="{runout_days}"
+    [[ -n "${{SNAPSHOT_DATE:-}}" ]] && RUNOUT_DAYS="all"
+    if python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG --horizons $RUNOUT_DAYS; then
         RUNOUT_STATUS="ok"
     else
         RUNOUT_STATUS="FAILED (exit $?)"
@@ -1279,13 +1284,45 @@ def _cron_lines(cfg: dict, project_dir: Path) -> list[str]:
     if not cfg.get("surveys", {}).get("markers", False):
         return [_cron_line(cron_cfg.get("hour_utc", 20), survey, log_path)]
     poll  = int(cron_cfg.get("poll_minutes", 10))
-    # In [cron] timezone (the cron.d file's CRON_TZ, default UTC).
-    daily = cron_cfg.get("daily_hour", cron_cfg.get("daily_hour_utc", 13))
+    # In [cron] timezone (the cron.d file's CRON_TZ, default UTC): an hour,
+    # or "HH:MM" (Ron, 2026-11-18: the slopes start 22:00, 22:10, 22:20).
+    daily = _cron_when(cron_cfg.get("daily_hour", cron_cfg.get("daily_hour_utc", 13)))
     lock  = log_path.parent / f".cron_{name}.lock"
     return [
         f"*/{poll} * * * * umask 002; flock -n {lock} {survey} >> {log_path} 2>&1",
-        f"0 {daily} * * * umask 002; flock {lock} {project_dir / f'run_daily_{name}.sh'} >> {log_path} 2>&1",
+        f"{daily} * * * umask 002; flock {lock} {project_dir / f'run_daily_{name}.sh'} >> {log_path} 2>&1",
     ]
+
+
+def _runout_later_line(cfg: dict, project_dir: Path, toml_path: Path) -> str | None:
+    """The days after T_0, one at a time in the host's runout queue, behind
+    every slope's T_0 (Ron, 2026-11-18). Under the slope's own lock, so it
+    never overlaps its daily or survey run (it waits for the nightly chain)."""
+    later = _runout_later(cfg)
+    if not later:
+        return None
+    log_path = _cron_log_path(cfg)
+    lock = log_path.parent / f".cron_{cfg['slope']['name']}.lock"
+    return (f"{_cron_when(later)} * * * umask 002; flock {lock} "
+            f"{project_dir / '.venv' / 'bin' / 'python'} "
+            f"{project_dir / 'src' / 'avachain' / 'runout_step.py'} "
+            f"--toml {toml_path} --horizons later >> {log_path} 2>&1")
+
+
+def _cron_when(t) -> str:
+    """cron's minute and hour fields from an hour (int) or "HH:MM"."""
+    if isinstance(t, int) or str(t).isdigit():
+        return f"0 {int(t)}"
+    hh, mm = str(t).split(":")
+    return f"{int(mm)} {int(hh)}"
+
+
+def _runout_later(cfg: dict) -> str | None:
+    """[cron] runout_later ("HH:MM"): when the days after T_0 get their own
+    runout. Unset, the nightly chain runs every day itself, as before."""
+    if "runout" not in cfg or not cfg.get("surveys", {}).get("markers", False):
+        return None
+    return cfg.get("cron", {}).get("runout_later") or None
 
 
 def _wrf_archive_line(cfg: dict, project_dir: Path, toml_path: Path) -> str | None:
@@ -1303,6 +1340,23 @@ def _wrf_archive_line(cfg: dict, project_dir: Path, toml_path: Path) -> str | No
     return (f"20 * * * * umask 002; {project_dir / '.venv' / 'bin' / 'python'} "
             f"{project_dir / 'src' / 'avachain' / 'wrf_archive.py'} --toml {toml_path} "
             f"--archive-dir {weather / 'wrf_archive'} >> {log} 2>&1")
+
+
+def _alerts_check_lines(cfg: dict, project_dir: Path, toml_path: Path) -> list[str]:
+    """_alerts_check_line, plus with [cron] report_check_all ("HH:MM", Ron
+    2026-11-18: 08:15) a second check that no day of the report is still
+    pending (check-report --all-days)."""
+    first = _alerts_check_line(cfg, project_dir, toml_path)
+    if not first:
+        return []
+    out = [first]
+    when = cfg.get("cron", {}).get("report_check_all")
+    if when and "runout" in cfg:
+        log = _cron_log_path(cfg).parent / "alerts.log"
+        out.append(f"{_cron_when(when)} * * * umask 002; {project_dir / '.venv' / 'bin' / 'python'} "
+                   f"{project_dir / 'src' / 'avachain' / 'alerts.py'} --toml {toml_path} "
+                   f"check-report --all-days >> {log} 2>&1")
+    return out
 
 
 def _alerts_check_line(cfg: dict, project_dir: Path, toml_path: Path) -> str | None:
@@ -1329,8 +1383,9 @@ def _alerts_check_line(cfg: dict, project_dir: Path, toml_path: Path) -> str | N
 def _all_cron_lines(cfg: dict, project_dir: Path, toml_path: Path) -> list[str]:
     """The slope's runs (_cron_lines) plus its WRF archive and daily-run check."""
     lines = _cron_lines(cfg, project_dir)
-    for extra in (_wrf_archive_line(cfg, project_dir, toml_path),
-                  _alerts_check_line(cfg, project_dir, toml_path)):
+    for extra in (_runout_later_line(cfg, project_dir, toml_path),
+                  _wrf_archive_line(cfg, project_dir, toml_path),
+                  *_alerts_check_lines(cfg, project_dir, toml_path)):
         if extra:
             lines.append(extra)
     return lines
@@ -1561,6 +1616,7 @@ def _render_run_daily(cfg: dict) -> str:
         nwp_lead_hours = int(cfg.get("nwp", {}).get("lead_hours", 48)),
         display_name  = slope.get("display_name", slope_name),
         slope_name    = slope_name,
+        runout_days   = "T_0" if _runout_later(cfg) else "all",
     )
 
 

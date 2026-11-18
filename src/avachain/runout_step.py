@@ -77,6 +77,7 @@ def runout_settings(toml_path: Path) -> dict | None:
     out["lock_file"] = Path(rc.get("lock_file") or out["work_dir"].parent / ".runout.lock")
     out["profile"] = rc.get("profile", "forecast")
     out["publish_root"] = rc.get("publish_root") or None
+    out["priority"] = int(rc.get("priority", 9))
     return out
 
 
@@ -268,16 +269,106 @@ def _write_shot_path_profile(path_profile: str, paths_dir: Path) -> None:
         + yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 
 
-def runout_command(rc: dict, cfg_dir: Path, cycle_date: str, slope: str) -> list[str]:
+def runout_command(rc: dict, cfg_dir: Path, cycle_date: str, slope: str,
+                   horizons=None) -> list[str]:
     # --snow-height set: each day entrains its own set's scour_depth.tif
-    # (T_0..T_n come from different snowpack states).
+    # (T_0..T_n come from different snowpack states). With horizons, runout
+    # runs only those and keeps the cycle's other days in its report.
     return [str(RUNOUT / ".venv" / "bin" / "python"), "-m", "scripts", "run",
             "--profile", rc["profile"], "--path", rc["path_profile"],
             "--date", cycle_date.replace("-", ""),
             "--config-dir", str(cfg_dir),
             "--snow-height", "set",
             "--run-name", f"{slope}_{'shots_' if rc.get('shots') else ''}"
-                          f"{cycle_date.replace('-', '')}"]
+                          f"{cycle_date.replace('-', '')}"] \
+        + [a for h in (horizons or []) for a in ("--horizon", h)]
+
+
+# The host's runout queue (Ron, 2026-11-18). Every runout takes the one
+# [runout] lock_file; flock alone hands it to whichever waiter the kernel
+# picks. Waiters now also hold a ticket in <lock dir>/.runout_queue, and only
+# the first ticket by (phase, [runout] priority, arrival) may take the lock:
+# phase 0 is a run that includes today (T_0), phase 1 the later days. So
+# every slope's T_0 goes before any T_1/T_2, Sisters (1) before Professor (2)
+# before Widow (3). A ticket whose process is gone is dropped. A runout
+# without a ticket (an older checkout, a hand run) still serialises through
+# the flock; it just has no place in the order.
+QUEUE_DIR = ".runout_queue"
+QUEUE_POLL_S = 10.0
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _queue_head(qdir: Path) -> str | None:
+    """Name of the first live ticket; dead ones are removed."""
+    live = []
+    for t in qdir.iterdir():
+        try:
+            phase, prio, ns, pid = t.name.split("_")
+            key = (int(phase), int(prio), int(ns))
+            pid = int(pid)
+        except ValueError:
+            continue
+        if _alive(pid):
+            live.append((key, t.name))
+        else:
+            t.unlink(missing_ok=True)
+    return min(live)[1] if live else None
+
+
+def take_runout_lock(lock_file: Path, phase: int, priority: int,
+                     poll_s: float | None = None):
+    """Block until this run is first in the queue and holds the flock.
+    Returns the open lock file; closing it releases the lock."""
+    poll_s = QUEUE_POLL_S if poll_s is None else poll_s
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    qdir = lock_file.parent / QUEUE_DIR
+    qdir.mkdir(exist_ok=True)
+    ticket = qdir / f"{phase}_{priority:03d}_{time.time_ns():020d}_{os.getpid()}"
+    ticket.write_text("")
+    lock = open(lock_file, "a")
+    t0 = time.monotonic()
+    waited = False
+    try:
+        while True:
+            if _queue_head(qdir) == ticket.name:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    pass
+            if not waited:
+                print(f"  waiting for {lock_file} (another runout is running or "
+                      f"ahead in the queue; phase {phase}, priority {priority})", flush=True)
+                waited = True
+            time.sleep(poll_s)
+    except BaseException:
+        lock.close()
+        raise
+    finally:
+        ticket.unlink(missing_ok=True)
+    if waited:
+        print(f"  lock taken after {time.monotonic() - t0:.0f} s", flush=True)
+    return lock
+
+
+def select_horizons(sets: dict, which: str) -> dict:
+    """`all`, `T_0` (today: the phase-1 run) or `later` (every day after T_0)."""
+    if which == "all":
+        return dict(sets)
+    if which == "T_0":
+        return {k: v for k, v in sets.items() if k == "T_0"}
+    if which == "later":
+        return {k: v for k, v in sets.items() if k != "T_0"}
+    raise ValueError(f"--horizons must be all, T_0 or later, not {which!r}")
 
 
 def main(argv=None) -> int:
@@ -285,6 +376,10 @@ def main(argv=None) -> int:
     ap.add_argument("--toml", required=True, type=Path)
     ap.add_argument("--snapshot-date", default=None,
                     help="release set date YYYY-MM-DD (default: today, or the replay clock)")
+    ap.add_argument("--horizons", default="all", choices=("all", "T_0", "later"),
+                    help="all days (default); T_0, today only (the nightly chain, "
+                         "due 03:00); later, the days after T_0, one at a time (cron, "
+                         "queued behind every slope's T_0)")
     ap.add_argument("--dry-run", action="store_true",
                     help="check the set and prepare the tree; print the command, run nothing")
     args = ap.parse_args(argv)
@@ -311,39 +406,59 @@ def main(argv=None) -> int:
               f"(or: cd {RUNOUT} && uv sync --frozen)", file=sys.stderr)
         return 2
 
-    runs = []           # (name, settings, command)
+    # Batches of days, each taken under the lock on its own: all days at
+    # once; today alone; or each later day alone, so a slope's T_0 that
+    # queues while T_1 runs waits for one day's runout, not two.
+    wanted = select_horizons({**shot_sets, **sets}, args.horizons)
+    if not wanted:
+        print(f"No {args.horizons} days in the {args.snapshot_date} release sets — nothing to run")
+        return 0 if args.horizons == "later" else 2
+    if args.horizons == "all":
+        batches = [None]
+    elif args.horizons == "T_0":
+        batches = [["T_0"]]
+    else:
+        batches = [[label] for label in sorted(wanted, key=lambda k: int(k[2:]))]
+    phase = 0 if "T_0" in wanted else 1
+
+    trees = []          # (name, settings, sets, config dir)
     for name, r, run_sets in (("model", rc, sets), ("shots", shot_settings(rc), shot_sets)):
         if not run_sets:
             continue
-        cfg_dir = prepare_tree(r, run_sets, args.snapshot_date)
-        cmd = runout_command(r, cfg_dir, args.snapshot_date, cfg.slope_name)
-        print(f"Runout ({name}) on {', '.join(f'{k}={v}' for k, v in run_sets.items())}")
-        print("  " + " ".join(cmd))
-        runs.append((name, cmd))
+        trees.append((name, r, run_sets, prepare_tree(r, run_sets, args.snapshot_date)))
+    plan = []           # [(batch, [(name, command)])]
+    for batch in batches:
+        runs = []
+        for name, r, run_sets, cfg_dir in trees:
+            if batch is not None and not set(batch) & set(run_sets):
+                continue
+            days = None if batch is None else [h for h in batch if h in run_sets]
+            cmd = runout_command(r, cfg_dir, args.snapshot_date, cfg.slope_name, days)
+            print(f"Runout ({name}) on " + ", ".join(
+                f"{k}={v}" for k, v in run_sets.items() if days is None or k in days))
+            print("  " + " ".join(cmd))
+            runs.append((name, cmd))
+        plan.append((batch, runs))
     if args.dry_run:
         return 0 if sets else 2
 
-    rc["lock_file"].parent.mkdir(parents=True, exist_ok=True)
     codes = []
-    with open(rc["lock_file"], "a") as lock:
-        t0 = time.monotonic()
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print(f"  waiting for {rc['lock_file']} (another runout is running)", flush=True)
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            print(f"  lock taken after {time.monotonic() - t0:.0f} s", flush=True)
-        # A rerun republishes the date's reports: keep the ones forecasters
-        # already had (season record, Ron 2026-11-08). Never fails the run.
-        import metrics
-        metrics.keep_published_reports(cfg, args.snapshot_date)
-        env = dict(os.environ)
-        env.pop("VIRTUAL_ENV", None)          # the run scripts activate avachain's venv
-        # Model first: its report is the one due at 03:00.
-        for name, cmd in runs:
-            r = subprocess.run(cmd, cwd=RUNOUT, env=env)
-            print(f"Runout ({name}) exit {r.returncode}")
-            codes.append(r.returncode)
+    env = dict(os.environ)
+    env.pop("VIRTUAL_ENV", None)          # the run scripts activate avachain's venv
+    for n, (batch, runs) in enumerate(plan):
+        with take_runout_lock(rc["lock_file"], phase, rc["priority"]):
+            if n == 0:
+                # A rerun republishes the date's reports: keep the ones
+                # forecasters already had (season record, Ron 2026-11-08).
+                # Before the later days that is the T_0 page of 03:00.
+                import metrics
+                metrics.keep_published_reports(cfg, args.snapshot_date)
+            # Model first: its report is the one due at 03:00.
+            for name, cmd in runs:
+                r = subprocess.run(cmd, cwd=RUNOUT, env=env)
+                print(f"Runout ({name}{'' if batch is None else ' ' + ','.join(batch)}) "
+                      f"exit {r.returncode}")
+                codes.append(r.returncode)
     if not sets:
         print("ERROR: no readable model release set; only the shot sets ran",
               file=sys.stderr)

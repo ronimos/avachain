@@ -564,6 +564,23 @@ scoured clusters.
 - **cron reads `/etc/cron.d` in the host's local time** (America/Denver), not
   UTC. The generated file declares `CRON_TZ=` from `[cron] timezone` (default
   UTC). A "13 UTC" job written without it fired at 13:00 MST.
+- **The night is two phases** (Ron, 2026-11-18, three slopes on one host).
+  The nightly chains start the evening before (Sisters 22:00, Professor 22:10,
+  Widow 22:20, `[cron] daily_hour = "HH:MM"`); the cycle date is the UTC
+  date, so already the next day, and the WRF file is the same morning cycle
+  as at 00:00. The chain runs the runout for T_0 only (`runout_step
+  --horizons T_0`, model then shots). Cron runs the later days at `[cron]
+  runout_later` (23:45, `--horizons later`, one day per lock turn, under the
+  slope's own flock). Every runout waits in `<lock dir>/.runout_queue`:
+  each T_0 before any later day, then `[runout] priority` (Sisters 1,
+  Professor 2, Widow 3), then arrival; flock alone hands the lock out in no
+  order. A runout of some days keeps the cycle's other days in the report
+  (carried over when an earlier run finished them, else pending). Checks:
+  `report_check` (T_0 out; 03:15, Widow 05:15) and `report_check_all`
+  (08:15, `check-report --all-days`: no day still marked
+  `<!-- avachain:pending -->`). The 22:00 start puts T_stable at 00 UTC
+  (6-hourly WRF rows), so `[nwp] lead_hours` is 66 to reach T_2 at 18 UTC;
+  at 60 T_2 is clamped to 12 UTC.
 - **One snapshot time per run.** `[scenarios] snapshot_hour_utc` (or
   `--snapshot-ts`) sets the time features, release depth and scour are all
   read at. Without it the historical per-read hours stay (features 00:00,

@@ -18,6 +18,7 @@ Description:
 # --------- Load Libraries --------
 import argparse
 import datetime
+import json
 import logging
 import subprocess
 import sys
@@ -335,6 +336,7 @@ def run_forecast(args, profile, sections, physics, local, config_dir):
             logging.error(f"[{slug}] no horizons with scenarios under {discover_root}")
             overall.append(False)
             continue
+        all_horizons = list(horizons)
         try:
             horizons = discover.select_horizons(horizons, requested_h)
         except ValueError as e:
@@ -351,6 +353,16 @@ def run_forecast(args, profile, sections, physics, local, config_dir):
             run_name=run_name, repo_dir=REPO_DIR,
         )
         manifest_path = cycle_out / 'manifest.json'
+        prev_manifest = read_manifest(manifest_path)     # before this run's replaces it
+        mf.write(manifest, manifest_path)
+
+        # A run of some days only (avachain runout_step --horizons, Ron
+        # 2026-11-18: T_0 by 03:00, the later days by 08:00) keeps the
+        # cycle's other days in the report: a day an earlier run of this
+        # cycle finished is carried over from its manifest, any other one is
+        # pending (its own run comes later).
+        keep_other_horizons(manifest, prev_manifest, all_horizons, horizons,
+                            cycle_date, cycle_out, local_date_dir)
         mf.write(manifest, manifest_path)
 
         results = {}
@@ -480,6 +492,51 @@ def run_forecast(args, profile, sections, physics, local, config_dir):
         overall.append(status in ('ok', 'dry-run'))
 
     return 0 if overall and all(overall) else 1
+
+
+def read_manifest(path):
+    # An earlier run's manifest.json, or {} when there is none
+    # @param path: Path
+    # @returns: dict
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def keep_other_horizons(manifest, prev, all_horizons, horizons,
+                        cycle_date, cycle_out, local_date_dir):
+    # Put the cycle's days this run leaves out into its manifest
+    # @param manifest: dict being built (modified in place)
+    # @param prev: dict, the cycle's manifest from an earlier run (read
+    #              before this run writes its own), or {}
+    # @param all_horizons: [(src_dir, label)] every day of the cycle
+    # @param horizons: [(src_dir, label)] the days this run does
+    # @returns: None
+    run_now = {label for _, label in horizons}
+    others = [(d, label) for d, label in all_horizons if label not in run_now]
+    if not others:
+        return
+    prev = prev or {}
+    for src_dir, label in others:
+        old = (prev.get('horizons') or {}).get(label)
+        if old and old.get('status') not in (None, 'pending', 'running'):
+            entry = dict(old)
+            entry['carried_from'] = {
+                'issued': prev.get('issued'),
+                'git_commit': prev.get('git_commit'),
+                'physics_hash': (prev.get('physics') or {}).get('hash'),
+            }
+            if entry['carried_from']['physics_hash'] != manifest['physics']['hash']:
+                logging.warning(f"[{label}] carried over from a run with other physics "
+                                f"({entry['carried_from']['physics_hash']})")
+            manifest['horizons'][label] = entry
+            logging.info(f"[{label}] done by the run issued {prev.get('issued')}; kept")
+        else:
+            mf.add_horizon(manifest, label, src_dir, 0, mf.valid_date_for(cycle_date, label),
+                           cycle_out / label, local_date_dir / label, 'pending',
+                           release=discover.release_info(src_dir))
+            logging.info(f"[{label}] not in this run; pending")
 
 
 def _publish_progress(cycle_out, local, slug, cycle_date, profile, args):

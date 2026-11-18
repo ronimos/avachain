@@ -151,6 +151,7 @@ def test_one_runout_at_a_time_on_the_host(tmp_path, monkeypatch):
                   f"echo end $(date +%s.%N) >> {log}\n")
     py.chmod(0o755)
     monkeypatch.setattr(rs, "RUNOUT", fake)
+    monkeypatch.setattr(rs, "QUEUE_POLL_S", 0.05)
     # two slopes: their own work dirs, one lock file for the host
     lock = tmp_path / "work" / "runout" / ".runout.lock"
     tomls = []
@@ -487,3 +488,138 @@ class TestMergeIdentical:
         other = _published_set(tmp_path / "b")                # no duplicates
         rs.prepare_tree(rc, {"T_0": other}, "2026-12-05")
         assert (day / "T_0").is_symlink()
+
+
+# --- the host's runout queue and the T_0 / later split (Ron, 2026-11-18) -------
+
+class TestQueue:
+    def test_head_is_today_first_then_priority_then_arrival(self, tmp_path):
+        q = tmp_path / rs.QUEUE_DIR
+        q.mkdir()
+        me = os.getpid()
+        for name in (f"1_001_{1:020d}_{me}",      # Sisters, a later day
+                     f"0_003_{2:020d}_{me}",      # Widow T_0
+                     f"0_002_{3:020d}_{me}",      # Professor T_0
+                     f"0_002_{4:020d}_{me}"):     # Professor again, later
+            (q / name).write_text("")
+        assert rs._queue_head(q) == f"0_002_{3:020d}_{me}"
+
+    def test_a_dead_ticket_is_dropped(self, tmp_path):
+        q = tmp_path / rs.QUEUE_DIR
+        q.mkdir()
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        (q / f"0_001_{1:020d}_{dead.pid}").write_text("")
+        (q / f"0_002_{2:020d}_{os.getpid()}").write_text("")
+        assert rs._queue_head(q) == f"0_002_{2:020d}_{os.getpid()}"
+        assert len(list(q.iterdir())) == 1
+
+    def test_waiters_get_the_lock_in_queue_order(self, tmp_path):
+        """Held lock; a later-day run arrives first, then two T_0 runs, the
+        lower priority first. Released: T_0 by priority, then the later day."""
+        lock = tmp_path / ".runout.lock"
+        holder = rs.take_runout_lock(lock, 0, 1, poll_s=0.01)
+        order = []
+
+        def wait(tag, phase, prio):
+            with rs.take_runout_lock(lock, phase, prio, poll_s=0.01):
+                order.append(tag)
+                time.sleep(0.05)
+
+        threads = []
+        for tag, phase, prio in (("sisters_T1", 1, 1), ("widow_T0", 0, 3), ("prof_T0", 0, 2)):
+            th = threading.Thread(target=wait, args=(tag, phase, prio))
+            th.start()
+            threads.append(th)
+            time.sleep(0.1)                  # arrival order is the list order
+        holder.close()
+        for th in threads:
+            th.join()
+        assert order == ["prof_T0", "widow_T0", "sisters_T1"]
+        assert list((tmp_path / rs.QUEUE_DIR).iterdir()) == []
+
+    def test_a_flock_holder_without_a_ticket_is_still_waited_for(self, tmp_path):
+        import fcntl
+        lock = tmp_path / ".runout.lock"
+        lock.touch()
+        old = open(lock, "a")                        # an older checkout's runout
+        fcntl.flock(old, fcntl.LOCK_EX)
+        got = []
+        th = threading.Thread(target=lambda: got.append(
+            rs.take_runout_lock(lock, 0, 1, poll_s=0.01)))
+        th.start()
+        time.sleep(0.2)
+        assert got == []
+        old.close()
+        th.join(5)
+        assert len(got) == 1
+        got[0].close()
+
+
+class TestHorizons:
+    def _setup(self, tmp_path, monkeypatch, shot_labels=("T_0", "T_1", "T_2")):
+        sets = _forecast_sets(tmp_path, ["T_0", "T_1", "T_2"])
+        for lab in shot_labels:                          # shots/T_n beside them
+            stage = tmp_path / f".stage_shots_{lab}"
+            stage.mkdir()
+            (stage / "scour_depth.tif").write_text(lab)
+            final = tmp_path / "release" / "2026-12-05" / "shots" / lab
+            final.parent.mkdir(parents=True, exist_ok=True)
+            handoff.publish(stage, final, "release", horizon=lab)
+        fake = tmp_path / "fake_runout"
+        (fake / ".venv" / "bin").mkdir(parents=True)
+        for name in ("paths", "physics"):
+            (fake / "config" / name).mkdir(parents=True)
+        (fake / "config" / "paths" / "P_profile.yaml").write_text("display: {}\n")
+        (fake / "config" / "profiles.yaml").write_text("")
+        log = tmp_path / "ran.log"
+        py = fake / ".venv" / "bin" / "python"
+        py.write_text(f"#!/bin/bash\necho \"$*\" >> {log}\n")
+        py.chmod(0o755)
+        monkeypatch.setattr(rs, "RUNOUT", fake)
+        monkeypatch.setattr(rs, "QUEUE_POLL_S", 0.01)
+        return log
+
+    def _ran(self, log):
+        out = []
+        for line in log.read_text().splitlines():
+            a = line.split()
+            days = [a[i + 1] for i, x in enumerate(a) if x == "--horizon"]
+            out.append(("shots" if "P_shots_" in line else "model", days))
+        return out
+
+    def test_select(self):
+        sets = {"T_0": 0, "T_1": 1, "T_2": 2}
+        assert rs.select_horizons(sets, "all") == sets
+        assert rs.select_horizons(sets, "T_0") == {"T_0": 0}
+        assert rs.select_horizons(sets, "later") == {"T_1": 1, "T_2": 2}
+        with pytest.raises(ValueError):
+            rs.select_horizons(sets, "T_1")
+
+    def test_all_days_is_one_run_each_as_before(self, tmp_path, monkeypatch):
+        log = self._setup(tmp_path, monkeypatch)
+        assert rs.main(["--toml", str(_toml(tmp_path)), "--snapshot-date", "2026-12-05"]) == 0
+        assert self._ran(log) == [("model", []), ("shots", [])]
+
+    def test_today_runs_model_then_shots_for_t0(self, tmp_path, monkeypatch):
+        log = self._setup(tmp_path, monkeypatch)
+        assert rs.main(["--toml", str(_toml(tmp_path)), "--snapshot-date", "2026-12-05",
+                        "--horizons", "T_0"]) == 0
+        assert self._ran(log) == [("model", ["T_0"]), ("shots", ["T_0"])]
+
+    def test_later_days_run_one_at_a_time(self, tmp_path, monkeypatch, capsys):
+        log = self._setup(tmp_path, monkeypatch, shot_labels=("T_0", "T_1"))
+        assert rs.main(["--toml", str(_toml(tmp_path)), "--snapshot-date", "2026-12-05",
+                        "--horizons", "later"]) == 0
+        assert self._ran(log) == [("model", ["T_1"]), ("shots", ["T_1"]), ("model", ["T_2"])]
+        # every day of the cycle is linked, so runout can show T_0 in the report
+        day = tmp_path / "work" / "runout" / "P" / "scen" / "P_profile" / "20261205"
+        assert sorted(p.name for p in day.iterdir()) == ["T_0", "T_1", "T_2"]
+
+    def test_no_later_day_is_not_a_failure(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch, shot_labels=())
+        for lab in ("T_1", "T_2"):
+            import shutil
+            shutil.rmtree(tmp_path / "release" / "2026-12-05" / lab)
+        assert rs.main(["--toml", str(_toml(tmp_path)), "--snapshot-date", "2026-12-05",
+                        "--horizons", "later"]) == 0

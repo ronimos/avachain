@@ -389,9 +389,15 @@ class TestCronD:
         return [l for l in text.splitlines()
                 if l and not l.startswith("#") and "=" not in l.split(" ", 1)[0]]
 
+    def _job(self, jobs, needle):
+        hit = [j for j in jobs if needle in j]
+        assert len(hit) == 1, (needle, jobs)
+        return hit[0]
+
     def test_every_job_runs_as_the_cron_user(self, install):
         jobs = self._jobs(self._render(install))
-        assert len(jobs) == 4                                # poll, daily, WRF archive, daily check
+        # poll, daily, later days, WRF archive, T_0 report check, all-days check
+        assert len(jobs) == 6
         for j in jobs:
             f = j.split()
             assert f[5] == "ron", j                          # user after five schedule fields
@@ -405,7 +411,7 @@ class TestCronD:
         assert got == want
 
     def test_wrf_archive_job(self, install):
-        arch = self._jobs(self._render(install))[2]
+        arch = self._job(self._jobs(self._render(install)), "wrf_archive.py")
         assert arch.startswith("20 * * * * ron umask 002; /home/avachain/code/avachain/.venv/bin/python ")
         assert "/home/avachain/code/avachain/src/avachain/wrf_archive.py" in arch
         assert f"--toml {self.TOML}" in arch
@@ -415,22 +421,54 @@ class TestCronD:
     def test_no_wrf_cell_no_archive_job(self, install):
         cfg = _cfg("Professor_PTC")
         cfg["wrf"] = {k: v for k, v in cfg["wrf"].items() if k != "wrf_zone"}
-        assert len(self._jobs(self._render(install, cfg))) == 3
+        assert not any("wrf_archive.py" in j for j in self._jobs(self._render(install, cfg)))
 
     def test_report_check_job(self, install):
         # [alerts] + [runout]: at 03:15 local, alert if today's report is missing
-        chk = self._jobs(self._render(install))[3]
-        assert chk.startswith("15 3 * * * ron umask 002; ")
-        assert "alerts.py --toml " in chk and chk.split("--toml ")[1].split()[1] == "check-report"
+        jobs = self._jobs(self._render(install))
+        chk = [j for j in jobs if j.endswith("check-report >> /home/avachain/logs/Professor_PTC/alerts.log 2>&1")]
+        assert len(chk) == 1 and chk[0].startswith("15 3 * * * ron umask 002; ")
+        # 08:15: every day of the report published (Ron, 2026-11-18)
+        allc = self._job(jobs, "check-report --all-days")
+        assert allc.startswith("15 8 * * * ron umask 002; ")
 
-    def test_daily_run_at_local_midnight_with_the_zone_declared(self, install):
+    def test_daily_run_the_evening_before_with_the_zone_declared(self, install):
         """Ron, 2026-11-04: report due 03:00 local. cron reads /etc/cron.d in
         the host's local time; the file names its zone, so the hours mean
-        what the TOML says (a '13 UTC' job had been running at 13:00 MST)."""
+        what the TOML says (a '13 UTC' job had been running at 13:00 MST).
+        2026-11-18: three slopes, chains from 22:00; Professor at 22:10."""
         text = self._render(install)
         assert "CRON_TZ=America/Denver" in text.splitlines()
         daily = self._jobs(text)[1]
-        assert daily.startswith("0 0 * * * ron ") and "run_daily_Professor_PTC.sh" in daily
+        assert daily.startswith("10 22 * * * ron ") and "run_daily_Professor_PTC.sh" in daily
+
+    def test_later_days_run_from_cron_under_the_slope_lock(self, install):
+        later = self._job(self._jobs(self._render(install)), "--horizons later")
+        assert later.startswith("45 23 * * * ron umask 002; flock "
+                                "/home/avachain/logs/Professor_PTC/.cron_Professor_PTC.lock ")
+        assert "runout_step.py --toml " in later
+        # and the nightly chain runs T_0 only
+        sh = install._render_run_daily(_cfg("Professor_PTC"))
+        assert 'RUNOUT_DAYS="T_0"' in sh and "--horizons $RUNOUT_DAYS" in sh
+
+    def test_without_runout_later_the_chain_runs_every_day(self, install):
+        cfg = _cfg("Professor_PTC")
+        cfg["cron"] = {k: v for k, v in cfg["cron"].items() if k != "runout_later"}
+        assert not any("--horizons later" in j for j in self._jobs(self._render(install, cfg)))
+        assert 'RUNOUT_DAYS="all"' in install._render_run_daily(cfg)
+
+    def test_the_three_slopes_start_in_priority_order(self, install):
+        starts = {s: install._cron_when(_cfg(s)["cron"]["daily_hour"])
+                  for s in ("Sisters", "Professor_PTC", "Widow")}
+        assert starts == {"Sisters": "0 22", "Professor_PTC": "10 22", "Widow": "20 22"}
+        assert [_cfg(s)["runout"]["priority"] for s in ("Sisters", "Professor_PTC", "Widow")] == [1, 2, 3]
+        assert _cfg("Widow")["cron"]["report_check"] == "05:15"
+
+    @pytest.mark.parametrize("slope", ("Sisters", "Professor_PTC", "Widow"))
+    def test_the_forecast_reaches_t2_from_a_22h_start(self, install, slope):
+        """WRF rows are 6-hourly: at 22:00 MST (05 UTC) T_stable is 00 UTC,
+        and T_2 is read at 18 UTC two days after the cycle date: 66 h."""
+        assert _cfg(slope)["nwp"]["lead_hours"] >= 66
 
     def test_no_timezone_means_utc(self, install):
         cfg = _cfg("Professor_PTC")
@@ -444,8 +482,10 @@ class TestCronD:
     def test_without_runout_the_check_is_check_daily(self, install):
         cfg = _cfg("Professor_PTC")
         cfg.pop("runout")
-        chk = self._jobs(self._render(install, cfg))[3]
-        assert chk.startswith("0 17 * * * ron ") and "check-daily" in chk
+        jobs = self._jobs(self._render(install, cfg))
+        chk = self._job(jobs, "check-daily")
+        assert chk.startswith("0 17 * * * ron ")
+        assert not any("--horizons later" in j or "--all-days" in j for j in jobs)
 
     def test_no_alerts_table_no_daily_check(self, install):
         cfg = _cfg("Professor_PTC")

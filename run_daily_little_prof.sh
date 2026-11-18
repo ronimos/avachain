@@ -187,7 +187,12 @@ if [[ $NO_SCENARIOS -eq 0 && $NO_RUNOUT -eq 0 ]]; then
     # A runout failure does not fail the run: snowpack and release succeeded
     # and are published, and a FAILED survey would redo SNOWPACK to retry
     # runout (Ron, 2026-11-04). A kill still ends FAILED (signal traps).
-    if python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG; then
+    # Nightly: today (T_0) only, due 03:00; cron runs the later days
+    # (runout_step --horizons later) queued behind every slope's T_0 (Ron,
+    # 2026-11-18). A --snapshot rerun runs every day itself.
+    RUNOUT_DAYS="all"
+    [[ -n "${SNAPSHOT_DATE:-}" ]] && RUNOUT_DAYS="all"
+    if python $PROJECT_DIR/src/avachain/runout_step.py --toml $TOML $SNAPSHOT_ARG --horizons $RUNOUT_DAYS; then
         RUNOUT_STATUS="ok"
     else
         RUNOUT_STATUS="FAILED (exit $?)"
