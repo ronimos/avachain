@@ -367,3 +367,123 @@ class TestForcedShots:
         py.chmod(0o755)
         monkeypatch.setattr(rs, "RUNOUT", fake)
         assert rs.main(["--toml", str(_toml(tmp_path)), "--snapshot-date", "2026-12-05"]) == 3
+
+
+# --- identical scenarios run once (Ron, 2026-11-18) ---------------------------
+
+def _scenario(stage, sid, *, depth="d1", poly=((0, 0), (10, 0), (10, 10)), w=0.1,
+              sf=1.0, mu=0.155, density=None, total=None):
+    d = stage / "scenarios" / sid
+    d.mkdir(parents=True)
+    (d / "depth.tif").write_text(depth)
+    (d / "density.json").write_text(json.dumps(density or {"mean_kgm3": 300.0, "std_kgm3": 20.0}))
+    params = {"mu": mu, "xi": 1500.0, "scour_depth_m": 0.0, "size_factor": sf,
+              "trigger_cluster": 7, "scenario_probability": w}
+    if total is not None:
+        params["ensemble_weight_total"] = total
+    (d / "params.json").write_text(json.dumps(params))
+    (d / "release.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": [{
+        "type": "Feature",
+        "properties": {"scenario_id": sid, "size_factor": sf, "weight": w, "trigger_cluster": 7},
+        "geometry": {"type": "Polygon", "coordinates": [[list(p) for p in poly + poly[:1]]]}}]}))
+
+
+def _set(tmp_path, specs, name="2026-12-05"):
+    """Publish a set from {sid: kwargs for _scenario}."""
+    stage = tmp_path / f".stage_{name}"
+    (stage / "scenarios").mkdir(parents=True)
+    (stage / "scour_depth.tif").write_text("scour")
+    for sid, kw in specs.items():
+        _scenario(stage, sid, **kw)
+    final = tmp_path / "release" / name
+    final.parent.mkdir(parents=True, exist_ok=True)
+    handoff.publish(stage, final, "release", snapshot_date="2026-12-05",
+                    status="ok", n_scenarios=len(specs))
+    return final
+
+
+def _params(view, sid):
+    return json.loads((view / "scenarios" / sid / "params.json").read_text())
+
+
+# five size factors of one trigger and depth, as the distance caps off makes them
+SIZE_FACTORS = (0.7, 0.85, 1.0, 1.15, 1.3)
+
+
+class TestMergeIdentical:
+    def test_size_factor_variants_run_once_with_summed_probability(self, tmp_path):
+        specs = {}
+        weights = {}
+        n = 0
+        for depth, w in (("p10", 0.0039), ("p50", 0.0116), ("p90", 0.0039)):
+            for sf in SIZE_FACTORS:
+                n += 1
+                sid = f"scenario_{n:03d}"
+                specs[sid] = dict(depth=depth, w=w * sf, sf=sf)
+                weights.setdefault(depth, []).append((sid, w * sf))
+        s = _set(tmp_path, specs)
+        view = tmp_path / "view"
+        rs.merge_view(s, view)
+        runs = sorted(p.name for p in (view / "scenarios").iterdir())
+        assert runs == ["scenario_001", "scenario_006", "scenario_011"]
+        for rep, (depth, members) in zip(runs, weights.items()):
+            p = _params(view, rep)
+            assert p["merged_scenarios"] == [m for m, _ in members]
+            assert p["scenario_probability"] == pytest.approx(sum(w for _, w in members), rel=1e-15)
+        # the probability mass is all still there
+        assert sum(_params(view, r)["scenario_probability"] for r in runs) == pytest.approx(
+            sum(kw["w"] for kw in specs.values()), rel=1e-15)
+        # inputs are the published files themselves, and the set is untouched
+        rep = view / "scenarios" / "scenario_006"
+        assert (rep / "depth.tif").resolve() == s / "scenarios" / "scenario_006" / "depth.tif"
+        assert (view / "scour_depth.tif").resolve() == s / "scour_depth.tif"
+        assert handoff.verify(s) == []
+        assert json.loads((view / "merged_scenarios.json").read_text())["scenario_011"] == [
+            f"scenario_{i:03d}" for i in range(11, 16)]
+
+    @pytest.mark.parametrize("change", [
+        dict(depth="other raster"),
+        dict(mu=0.2),
+        dict(poly=((0, 0), (10, 0), (10, 11))),
+        dict(density={"mean_kgm3": 300.0, "std_kgm3": 21.0}),
+    ])
+    def test_any_input_difference_keeps_them_apart(self, tmp_path, change):
+        s = _set(tmp_path, {"scenario_001": dict(sf=0.7), "scenario_002": dict(sf=1.0, **change)})
+        view = tmp_path / "view"
+        rs.merge_view(s, view)
+        assert view.is_symlink() and view.resolve() == s.resolve()
+
+    def test_an_unknown_params_field_keeps_them_apart(self, tmp_path):
+        stage_specs = {"scenario_001": dict(sf=0.7), "scenario_002": dict(sf=1.0)}
+        s = _set(tmp_path, stage_specs)
+        groups = rs.merge_groups(s)
+        assert [len(g) for g in groups] == [2]
+        p = s / "scenarios" / "scenario_002" / "params.json"
+        d = json.loads(p.read_text())
+        d["new_runout_knob"] = 1
+        p.write_text(json.dumps(d))
+        assert [len(g) for g in rs.merge_groups(s)] == [1, 1]
+
+    def test_absolute_shot_weights_keep_their_total(self, tmp_path):
+        s = _set(tmp_path, {f"scenario_{i:03d}": dict(sf=sf, w=1 / 3, total=1.0)
+                            for i, sf in enumerate(SIZE_FACTORS[:3], 1)}
+                 | {"scenario_004": dict(depth="other", w=1 / 3, total=1.0)})
+        view = tmp_path / "view"
+        rs.merge_view(s, view)
+        p = _params(view, "scenario_001")
+        assert p["scenario_probability"] == pytest.approx(1.0)
+        assert p["ensemble_weight_total"] == 1.0
+        assert _params(view, "scenario_004")["ensemble_weight_total"] == 1.0
+
+    def test_rerun_replaces_a_merged_view(self, tmp_path):
+        (tmp_path / "b").mkdir()
+        s = _set(tmp_path, {"scenario_001": dict(sf=0.7), "scenario_002": dict(sf=1.0)})
+        rc = rs.runout_settings(_toml(tmp_path))
+        day = tmp_path / "work" / "runout" / "P" / "scen" / "P_profile" / "20261205"
+        rs.prepare_tree(rc, {"T_0": s}, "2026-12-05")
+        assert (day / "T_0").is_dir() and not (day / "T_0").is_symlink()
+        rs.prepare_tree(rc, {"T_0": s}, "2026-12-05")
+        assert sorted(p.name for p in (day / "T_0" / "scenarios").iterdir()) == ["scenario_001"]
+        other = _published_set(tmp_path / "b")                # no duplicates
+        rs.prepare_tree(rc, {"T_0": other}, "2026-12-05")
+        assert (day / "T_0").is_symlink()

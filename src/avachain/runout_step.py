@@ -16,7 +16,10 @@ venv: AvaFrame 2.1 needs numpy < 2) on it:
        config/local.yaml          avachain_root = work_dir, scenario_root,
                                   publish_root (generated each run)
        config/{paths,physics,profiles.yaml} -> the repo's runout/config/
-       scen/<path_profile>/<YYYYMMDD>/T_n -> each verified release set
+       scen/<path_profile>/<YYYYMMDD>/T_n -> each verified release set, or
+                                  a merged view of it when scenarios repeat
+                                  the same runout input (merge_view: one run
+                                  per group, with the summed probability)
      Runout then writes its work tree, logs and products under work_dir and
      publishes report.html etc. to <publish_root>/forecasts/<path_profile>/.
   3. One global lock ([runout] lock_file) for every runout on the host, taken
@@ -42,6 +45,9 @@ survey stays DONE, because snowpack and release succeeded and are published
 """
 import argparse
 import fcntl
+import hashlib
+import json
+import math
 import os
 import shutil
 import subprocess
@@ -145,9 +151,106 @@ def prepare_tree(rc: dict, sets: dict, cycle_date: str) -> Path:
     for old in day.glob("T_*"):                 # an earlier run of this date
         if old.is_symlink():
             old.unlink()
+        elif old.is_dir():                      # a merged view (merge_view)
+            shutil.rmtree(old)
     for label, set_dir in sets.items():
-        (day / label).symlink_to(Path(set_dir).resolve())
+        merge_view(Path(set_dir).resolve(), day / label)
     return cfg_dir
+
+
+# Scenarios whose runout inputs are identical run once (Ron, 2026-11-18).
+# With the distance caps off (calibration 2026-11-17.1) the size factors scale
+# nothing in the release BFS, so the five size-factor variants of a trigger
+# and depth percentile are the same polygon, depth raster, density and
+# parameters: Jan 18 holds 15 distinct model runouts in 75 scenarios and 9 in
+# 45 shots. com1DFA is deterministic on identical input (checked on Jan 18:
+# every duplicate's rasters byte-identical), so one run carries the group,
+# with the summed scenario_probability. Every weighted product (P(reach) stack,
+# envelope, contours, weighted road and reference-point fractions) sums
+# w_i * mask_i, which is unchanged; absolute shot weights keep
+# ensemble_weight_total, so P(no release) is unchanged too. What does change
+# is anything that counts runs: n_scenarios, n_reached, the unweighted
+# fraction and its Wilson interval, which now count distinct runouts.
+#
+# These are the only fields that may differ inside a group: labels the runout
+# never reads. Any other difference, in any file, keeps the scenarios apart.
+MERGE_LABEL_PARAMS = ("scenario_probability", "size_factor")
+MERGE_LABEL_RELEASE_PROPS = ("scenario_id", "size_factor", "weight")
+
+
+def _input_key(scen_dir: Path) -> str:
+    """A digest of everything a scenario gives the runout, labels left out."""
+    h = hashlib.sha256()
+    for f in sorted(p for p in scen_dir.rglob("*") if p.is_file()):
+        if f.name == "params.json":
+            d = json.loads(f.read_text())
+            blob = json.dumps({k: v for k, v in d.items()
+                               if k not in MERGE_LABEL_PARAMS}, sort_keys=True)
+        elif f.name == "release.geojson":
+            d = json.loads(f.read_text())
+            for feat in d.get("features") or []:
+                feat["properties"] = {k: v for k, v in (feat.get("properties") or {}).items()
+                                      if k not in MERGE_LABEL_RELEASE_PROPS}
+            blob = json.dumps(d, sort_keys=True)
+        else:
+            blob = f.read_bytes()
+        if isinstance(blob, str):
+            blob = blob.encode()
+        h.update(f.relative_to(scen_dir).as_posix().encode() + b"\0"
+                 + hashlib.sha256(blob).digest())
+    return h.hexdigest()
+
+
+def merge_groups(set_dir: Path) -> list[list[Path]]:
+    """The set's scenario dirs grouped by identical runout input, in id order;
+    the first of each group is the one that runs."""
+    groups: dict[str, list[Path]] = {}
+    scen_root = set_dir / "scenarios"
+    if not scen_root.is_dir():
+        return []
+    for d in sorted(scen_root.iterdir()):
+        if d.is_dir() and d.name.startswith("scenario_"):
+            groups.setdefault(_input_key(d), []).append(d)
+    return list(groups.values())
+
+
+def merge_view(set_dir: Path, view: Path) -> None:
+    """Link `view` to the set; where scenarios duplicate, a merged view instead.
+
+    No duplicates: `view` is a symlink to the published set, as before.
+    Otherwise `view` is a directory of links to the set's files, with one
+    scenario per group: its files linked, except params.json, which gets the
+    group's summed scenario_probability and `merged_scenarios` (the ids it
+    stands for, itself first). The published set is never written."""
+    groups = merge_groups(set_dir)
+    if all(len(g) == 1 for g in groups):
+        view.symlink_to(set_dir)
+        return
+    view.mkdir()
+    for f in set_dir.iterdir():
+        if f.name != "scenarios":
+            (view / f.name).symlink_to(f)
+    scen = view / "scenarios"
+    scen.mkdir()
+    for group in groups:
+        rep = group[0]
+        out = scen / rep.name
+        out.mkdir()
+        for f in rep.iterdir():
+            if f.name != "params.json":
+                (out / f.name).symlink_to(f)
+        params = json.loads((rep / "params.json").read_text())
+        if len(group) > 1:
+            params["scenario_probability"] = math.fsum(
+                json.loads((d / "params.json").read_text())["scenario_probability"]
+                for d in group)
+            params["merged_scenarios"] = [d.name for d in group]
+        (out / "params.json").write_text(json.dumps(params, indent=2))
+    n = sum(len(g) for g in groups)
+    print(f"  {set_dir.name}: {n} scenarios, {len(groups)} distinct runout inputs "
+          f"(identical inputs run once with their summed probability)")
+    (view / "merged_scenarios.json").write_text(json.dumps(
+        {g[0].name: [d.name for d in g] for g in groups}, indent=2))
 
 
 def _write_shot_path_profile(path_profile: str, paths_dir: Path) -> None:

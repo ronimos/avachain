@@ -546,6 +546,18 @@ scoured clusters.
   `avachain_root` is its per-path work dir. Keep its `display:` in step with
   `little_professor.yaml`.
 - Slopes without `[runout]` (all the dev slopes) skip the step.
+- **Identical scenarios run once** (Ron, 2026-11-18; `runout_step.merge_view`).
+  With the distance caps off the size factors change nothing, so Jan 18 is 15
+  distinct runouts in 75 model scenarios and 9 in 45 shots. Each group runs
+  once with the summed `scenario_probability` (and `merged_scenarios` in its
+  params.json); com1DFA was byte-identical across all duplicates on Jan 18.
+  Every weighted product is unchanged, `ensemble_weight_total` too. Counts are
+  not: `n_scenarios`, `n_reached`, the unweighted fraction and its Wilson
+  interval count distinct runouts. Only `scenario_probability`/`size_factor`
+  in params.json and `scenario_id`/`size_factor`/`weight` in release.geojson
+  may differ inside a group; a new label field keeps scenarios apart (safe,
+  just slower) until it is added to `MERGE_LABEL_*`. The published set is
+  never written; the view lives in the runout work tree.
 
 ## Forecast days, snapshot time, cron time zone
 
