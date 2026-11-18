@@ -54,6 +54,28 @@ def ensemble_weight_total(params_list):
     return max(totals) if totals else None
 
 
+def n_represented(scenarios):
+    # How many published scenarios the runs stand for. avachain's runout_step
+    # runs scenarios with identical inputs once, with the summed
+    # scenario_probability and their ids in params 'merged_scenarios'
+    # (Ron, 2026-11-18); a run without it stands for itself.
+    # @param scenarios: iterable of scenario dicts (with 'params')
+    # @returns: int
+    return sum(len((sc.get('params') or {}).get('merged_scenarios') or [None])
+               for sc in scenarios)
+
+
+def runs_label(n_runs, n_rep=None):
+    # "15 distinct runouts (75 scenarios)" when runs were merged, else
+    # "75 scenarios"
+    # @param n_runs: int, runs simulated
+    # @param n_rep: int or None, published scenarios they stand for
+    # @returns: str
+    if n_rep and n_rep != n_runs:
+        return f"{n_runs} distinct runouts ({n_rep} scenarios)"
+    return f"{n_runs} scenarios"
+
+
 def stack_reach_masks(mask_paths, out_path, weights=None, total=None):
     # Stack N binary reach masks into a probability raster
     # @param mask_paths: list of Paths to reach mask GeoTIFFs
@@ -287,6 +309,8 @@ def build_road_impact_summary(scenario_summaries, out_path, scenarios=None,
     
     summary = {
         'n_scenarios': n_total,
+        'n_scenarios_represented': (n_represented(scenarios)
+                                    if scenarios is not None else n_total),
         'n_reached': n_reached,
         'fraction_reached': round(frac, 4),
         'wilson_95_ci': [round(ci_low, 4), round(ci_high, 4)],

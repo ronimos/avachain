@@ -37,6 +37,7 @@ from jinja2 import Template
 # goes on the path before they load.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import avalanche_helpers as h
+import avalanche_stack as st
 import build_viewer
 import report_interactive as ri
 
@@ -136,6 +137,15 @@ def load_cycle(cycle_dir):
             'manifest': manifest['horizons'][label],
         })
     return manifest, horizons
+
+
+def _n_label(road):
+    # The Scenarios cell: "75", or "15 runouts (75)" when identical scenarios
+    # ran once (avachain runout_step, 2026-11-18); Reached road counts runouts
+    n, rep = road.get('n_scenarios'), road.get('n_scenarios_represented')
+    if n is None:
+        return '-'
+    return f"{n} runouts ({rep})" if rep and rep != n else f"{n}"
 
 
 def nearest_miss_with_rank(hz, dist=None):
@@ -594,7 +604,7 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 <tr>
   <td class="l">{{ hz.name }}</td>
   <td class="c">{{ hz.valid }}</td>
-  <td>{{ hz.n }}</td>
+  <td>{{ hz.n_label }}</td>
   <td>{{ hz.n_reached }}</td>
   <td>{{ hz.p_w }}</td>
   <td>{{ hz.p_u }} [{{ hz.ci_lo }}, {{ hz.ci_hi }}]</td>
@@ -871,6 +881,7 @@ def build_report(cycle_dir, manifest, horizons, dpi=120):
         rows.append({
             'name': hz['name'], 'valid': hz['manifest']['valid_date'],
             'n': road.get('n_scenarios'), 'n_reached': road.get('n_reached'),
+            'n_label': _n_label(road),
             'p_w': _fmt(pw if pw is not None else road.get('fraction_reached')),
             'p_u': _fmt(road.get('fraction_reached')),
             'ci_lo': _fmt(ci[0]), 'ci_hi': _fmt(ci[1]),

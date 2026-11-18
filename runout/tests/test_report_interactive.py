@@ -205,7 +205,9 @@ class Labels(unittest.TestCase):
     next to "0 of 75" over the map looked like a contradiction)."""
 
     def test_map_title_names_the_road(self):
-        self.assertIn("' scenarios reach the road'", ri.JS)
+        self.assertIn("' reach the road'", ri.JS)
+        # merged runs (avachain runout_step, 2026-11-18) say what they count
+        self.assertIn("' distinct runouts (' + s.n_rep + ' scenarios)'", ri.JS)
 
     def test_cursor_table_names_the_spot(self):
         self.assertIn('<th>Scenarios reaching this spot</th>', ri.JS)

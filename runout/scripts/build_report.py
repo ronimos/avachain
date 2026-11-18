@@ -41,6 +41,7 @@ import geopandas as gpd
 from jinja2 import Template
 
 import avalanche_helpers as h
+import avalanche_stack as st
 
 
 # Palette shared with build_viewer so the report and viewer look alike
@@ -385,12 +386,12 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
 {% if project_subtitle %}<p class="subtitle">{{ project_subtitle }}</p>{% endif %}
 <p class="meta">Runout report &middot; generated {{ timestamp }} &middot;
    pipeline v{{ version }} &middot;
-   {{ n_scenarios }} scenarios &middot;
+   {{ runs }} &middot;
    {{ friction_model }}</p>
 
 <div class="headline">
   <p><span class="big">{{ n_reached }} / {{ n_scenarios }}</span>
-     scenarios reach the road</p>
+     {% if merged %}distinct runouts{% else %}scenarios{% endif %} reach the road</p>
   <p>Fraction reached (equal-weight): <b>{{ "%.1f"|format(fraction * 100) }}%</b><br>
      Wilson 95% CI: [<b>{{ "%.1f"|format(ci_low * 100) }}%</b>,
                      <b>{{ "%.1f"|format(ci_high * 100) }}%</b>]</p>
@@ -405,8 +406,11 @@ REPORT_TEMPLATE = """<!DOCTYPE html>
   {% endif %}
 </div>
 
-<p>This report summarizes an ensemble of {{ n_scenarios }} release scenarios
-run through AvaFrame com1DFA on the project DEM. The map shows, for every
+<p>This report summarizes an ensemble of {{ n_rep }} release scenarios
+run through AvaFrame com1DFA on the project DEM.{% if merged %} Scenarios with
+identical inputs (polygon, depth, density, parameters) were run once, with
+their probabilities summed: {{ n_scenarios }} distinct runouts. The counts and
+the equal-weight fraction count those runouts.{% endif %} The map shows, for every
 cell, the {% if weighting_on %}likelihood-weighted{% endif %} fraction of
 scenarios whose flow reached that cell. This is a probability conditional on
 the scenario set, not an annual or return-period probability.</p>
@@ -535,6 +539,11 @@ def build_report(outputs_dir, scenario_summaries, road_impact, shared_paths,
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M"),
         version=wrapper_version,
         n_scenarios=road_impact['n_scenarios'],
+        n_rep=road_impact.get('n_scenarios_represented') or road_impact['n_scenarios'],
+        merged=(road_impact.get('n_scenarios_represented') or road_impact['n_scenarios'])
+        != road_impact['n_scenarios'],
+        runs=st.runs_label(road_impact['n_scenarios'],
+                           road_impact.get('n_scenarios_represented')),
         n_reached=road_impact['n_reached'],
         fraction=road_impact['fraction_reached'],
         fraction_weighted=road_impact.get('fraction_reached_weighted'),

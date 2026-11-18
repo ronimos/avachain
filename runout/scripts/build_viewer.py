@@ -54,6 +54,7 @@ from PIL import Image
 from pyproj import Transformer
 
 import avalanche_helpers as h
+import avalanche_stack as st
 
 
 # Pipeline version stamp (shown in info-drawer header)
@@ -585,6 +586,7 @@ def _build_run_summary(scenarios, impact_points, outputs_dir, config):
 
     # Reach-to-road counts
     n_total = len(scenarios)
+    n_rep = st.n_represented(scenarios)     # identical scenarios run once
     n_reached = sum(1 for sid, s in per_scenario_summaries.items()
                     if s.get('road', {}).get('reached', False))
 
@@ -598,6 +600,7 @@ def _build_run_summary(scenarios, impact_points, outputs_dir, config):
                 rs = json.load(f)
             p_reach_road = rs.get('fraction_reached')
             p_reach_road_weighted = rs.get('fraction_reached_weighted')
+            n_rep = rs.get('n_scenarios_represented') or n_rep
         except Exception:
             pass
 
@@ -642,6 +645,7 @@ def _build_run_summary(scenarios, impact_points, outputs_dir, config):
         'model_date': model_date,
         'run_date': run_date,
         'n_scenarios': n_total,
+        'n_scenarios_represented': n_rep,
         'n_reached': n_reached,
         'p_reach_road': p_reach_road,
         'p_reach_road_weighted': p_reach_road_weighted,
@@ -684,6 +688,13 @@ def _fmt_float(x, decimals=2, unit=''):
     if unit:
         return f"{v:.{decimals}f} {unit}"
     return f"{v:.{decimals}f}"
+
+
+def _n_label(summary):
+    # The Scenarios stat: "75", or "15 runouts (75)" when identical
+    # scenarios ran once (avachain runout_step, 2026-11-18)
+    n, rep = summary['n_scenarios'], summary.get('n_scenarios_represented')
+    return f"{n} runouts ({rep})" if rep and rep != n else f"{n}"
 
 
 def _build_chrome_html(summary, scenario_layers, contour_levels):
@@ -1315,7 +1326,7 @@ def _build_chrome_html(summary, scenario_layers, contour_levels):
       </div>
       <div class="stat">
         <div class="stat-label">Scenarios</div>
-        <div class="stat-value">{N_SCENARIOS}</div>
+        <div class="stat-value">{N_SCENARIOS_LABEL}</div>
       </div>
     </div>
   </div>
@@ -1633,6 +1644,7 @@ def _build_chrome_html(summary, scenario_layers, contour_levels):
         SUBTITLE_BLOCK=subtitle_block,
         MODEL_DATE=summary['model_date'],
         N_SCENARIOS=summary['n_scenarios'],
+        N_SCENARIOS_LABEL=_n_label(summary),
         RUN_DATE=summary['run_date'],
         VERSION=PIPELINE_VERSION,
         ENV_THRESH=f"{summary['envelope_threshold']:.2f}",

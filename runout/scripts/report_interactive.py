@@ -458,6 +458,8 @@ def build_payload(horizons, cycle_date, reasons=None, pending=None):
         slot.update({
             'p_road': pw if pw is not None else road.get('fraction_reached', 0.0),
             'n_scen': int(road.get('n_scenarios') or len(scen)),
+            'n_rep': int(road.get('n_scenarios_represented')
+                         or road.get('n_scenarios') or len(scen)),
             'n_reached': int(road.get('n_reached') or 0),
             'prob_gz': _gz_b64(np.round(prob * P_SCALE)),
             'prob_png': _png_b64(probability_rgba(prob)),
@@ -743,7 +745,9 @@ JS = r"""
     const title = document.createElement('div'); title.className = 'imap-title';
     title.innerHTML = '<b>' + s.day + '</b> (' + s.name + '), valid ' + s.valid +
       (s.missing ? (s.pending ? '<br>still running' : s.reason ? '<br>no release' : '<br>no forecast') : '<br>P(reach road) = ' + s.p_road.toFixed(2) +
-       ', ' + s.n_reached + ' of ' + s.n_scen + ' scenarios reach the road');
+       ', ' + s.n_reached + ' of ' + s.n_scen +
+       (s.n_rep && s.n_rep != s.n_scen ? ' distinct runouts (' + s.n_rep + ' scenarios)' : ' scenarios') +
+       ' reach the road');
     const bx = document.createElement('div'); bx.className = 'imap-box';
     cell.append(title, bx); row.append(cell);
     if (s.missing) {
