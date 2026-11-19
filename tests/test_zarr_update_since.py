@@ -151,3 +151,34 @@ def test_windowed_build_holds_only_steps_after_since(pro_dir, tmp_path):
                      since=T0 + 3 * STEP)
     assert _times(fc) == [(T0 + i * STEP).strftime("%Y-%m-%dT%H:%M")
                           for i in (4, 5)]
+
+
+def _write_pro_snow_from(d: Path, cid: int, n_steps: int, first_snow: int):
+    """Bare ground (0501,1,0: no elements) before step first_snow, the
+    fixture block from it on. A store built from bare-ground profiles only
+    has HS, height and profile_status: no element variable exists yet."""
+    _write_pro(d, cid, [(i, 0) for i in range(first_snow, n_steps)])
+    p = d / f"cluster_{cid:04d}_cluster_{cid:04d}.pro"
+    head, rest = p.read_text().split("[DATA]\n", 1)
+    bare = "".join(f"0500,{(T0 + i * STEP).strftime('%d.%m.%Y %H:%M:%S')}\n"
+                   f"0501,1,0\n" for i in range(first_snow))
+    p.write_text(head + "[DATA]\n" + bare + rest)
+
+
+def test_first_snow_adds_the_element_variables(pro_dir, tmp_path):
+    """Professor_PTC, 2026-11-19: the store was built over a snow-free
+    season start, the 11-18 storm put the first elements in the .pro, and
+    the r+ region write refused the 27 variables it had never seen
+    ("non-pre-existing variables"), so the nightly run failed at Step 4."""
+    store = tmp_path / "s.zarr"
+    for cid in (1, 2, 3):
+        _write_pro_snow_from(pro_dir, cid, 3, first_snow=3)          # all bare
+    build_zarr_cache(pro_dir, store, n_cpus=1, max_layers=MAXL, rebuild=True)
+    with xr.open_zarr(store) as z:
+        assert "temperature" not in z.data_vars
+
+    for cid in (1, 2, 3):
+        _write_pro_snow_from(pro_dir, cid, 6, first_snow=3)
+    update_zarr_since(pro_dir, store, T0 + 2 * STEP, batch_size=2, n_cpus=1,
+                      max_layers=MAXL)
+    _same_as_fresh_build(store, pro_dir, tmp_path)

@@ -299,6 +299,41 @@ def _resize_time(zarr_out: Path, n: int) -> None:
     zarr.consolidate_metadata(str(zarr_out))
 
 
+def _add_missing_vars(zarr_out: Path, ds: xr.Dataset) -> None:
+    """Create, all fill value, the variables of a batch the store lacks.
+
+    A store built over snow-free profiles has no element variables (only HS,
+    height, profile_status): xsnow makes none from a 0-element block. When the
+    first snow arrives, a region write (mode='r+') refuses them as
+    "non-pre-existing" (Professor_PTC, 2026-11-19). They are added here with
+    the store's full shape and the chunks of an existing variable of the same
+    dims, so the region writes then fill only the new steps and every other
+    cell reads NaN, as in a fresh build of the same .pro files.
+    """
+    import dask.array as da
+    with xr.open_zarr(str(zarr_out)) as ex:
+        missing = [v for v in ds.data_vars if v not in ex.variables]
+        if not missing:
+            return
+        sizes = dict(ex.sizes)
+        like = {ex[v].dims: ex[v].encoding.get('chunks')
+                for v in ex.data_vars}
+    tmpl = {}
+    for name in missing:
+        dims = ds[name].dims
+        shape = tuple(sizes[d] for d in dims)
+        chunks = like.get(dims) or tuple(
+            {'location': 256, 'time': 1}.get(d, sizes[d]) for d in dims)
+        arr = xr.DataArray(
+            da.full(shape, np.nan, dtype=ds[name].dtype, chunks=chunks),
+            dims=dims, attrs=ds[name].attrs)
+        arr.encoding = {'chunks': chunks}
+        tmpl[name] = arr
+    xr.Dataset(tmpl).to_zarr(str(zarr_out), mode='a', compute=False)
+    print(f"update_zarr_since: added {len(missing)} variable(s) the store "
+          f"did not hold yet: {', '.join(sorted(missing))}")
+
+
 def update_zarr_since(pro_dir: Path,
                       zarr_out: Path,
                       since,
@@ -375,6 +410,7 @@ def update_zarr_since(pro_dir: Path,
         ds = ds.drop_vars([c for c in ('location', 'time', 'layer') if c in ds.coords])
         for v in ds.variables.values():
             v.encoding = {}
+        _add_missing_vars(zarr_out, ds)
         ds.to_zarr(str(zarr_out), mode='r+',
                    region={'location': slice(i0, i0 + len(batch_locs)),
                            'time': region_t})
