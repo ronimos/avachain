@@ -114,6 +114,12 @@ cluster passes the trigger gates. Without them that day publishes an empty
 scenario set. Give points rather than cluster IDs, because they stay valid when the
 cluster map changes.
 
+`shot_locations_only = true` makes the shot locations the only model triggers,
+on every day and with no gates (Sisters). `shot_radius_m` (Sisters: 10) moves
+each shot's trigger to the cluster within that radius with the lowest r_c,
+because a big charge loads far more than one cluster. Both are described in
+the README under *Release Geometry*.
+
 **`[wrf]`**
 
 Set `fcst_base_dir = "/ssd/snowpack/fcst"`.  Leave the `wrf_smet_*` fields blank —

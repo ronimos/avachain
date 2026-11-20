@@ -94,6 +94,47 @@ class Reasons(unittest.TestCase):
         self.assertIsNone(discover.release_info(d))
 
 
+class ShotLocationReasons(unittest.TestCase):
+    """Wording for sets that used to get the generic 'no release area could be
+    built from the trigger locations' (Sisters 2026-11-20, Ron)."""
+
+    def _info(self, **kw):
+        info = {'status': 'no_scenarios', 'snapshot_date': '2026-11-20',
+                'n_below_depth_floor': 0, 'min_release_depth_m': 0.1}
+        info.update(kw)
+        return discover.no_release_reason(info)
+
+    def test_fallback_with_no_polygon_names_the_shots(self):
+        r = self._info(trigger_source='explosive_fallback', n_trigger_locations=7)
+        self.assertIn('no snowpack cluster met the trigger criteria', r)
+        self.assertIn('no release area could be built at the 7 explosive-control '
+                      'shot locations', r)
+
+    def test_shot_locations_only_says_so(self):
+        r = self._info(trigger_source='shot_locations', n_trigger_locations=7,
+                       n_below_depth_floor=96)
+        self.assertIn('the 96 releases tried at the 7 explosive-control shot locations', r)
+        self.assertIn('triggers only there', r)
+        self.assertNotIn('trigger criteria', r)
+        r = self._info(trigger_source='shot_locations', n_trigger_locations=7)
+        self.assertIn('no release area could be built at the 7 explosive-control', r)
+        r = self._info(trigger_source='shot_locations', n_trigger_locations=0)
+        self.assertIn('on the cluster map', r)
+
+    def test_model_set_with_no_trigger_is_not_a_failed_build(self):
+        r = self._info(trigger_source='model', n_trigger_locations=0)
+        self.assertIn('no snowpack cluster met the trigger criteria', r)
+        self.assertNotIn('could be built', r)
+
+    def test_shot_locations_source_reaches_the_reason(self):
+        tmp = Path(tempfile.mkdtemp())
+        man, meta = SHOT
+        r = discover.release_info(_set(
+            tmp / 's', {**man, 'trigger_source': 'shot_locations'},
+            {**meta, 'trigger_source': 'shot_locations'}))
+        self.assertIn('triggers only there', r['reason'])
+
+
 class Discovery(unittest.TestCase):
 
     def test_an_empty_release_set_is_a_horizon(self):

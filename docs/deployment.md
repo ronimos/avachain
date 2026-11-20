@@ -245,8 +245,10 @@ no `scenarios/`. `metadata.json` counts the dropped scenarios in
 `manifest.json` records:
 - `producer`, `snapshot_date` and `horizon`;
 - `status`: `"ok"`, or `"no_scenarios"` for an empty set; and `n_scenarios`;
-- `trigger_source`: `"model"`, `"explosive_fallback"` (shot locations), or null
-  when there were no triggers at all;
+- `trigger_source`: `"model"`, `"explosive_fallback"` (shot locations, no
+  candidate), `"shot_locations"` (`[scenarios] shot_locations_only`: every shot,
+  always), `"explosive_forced"` (the `shots/` set), or null when there were no
+  triggers at all;
 - `created_utc`;
 - the code `commit` and `commit_dirty`, which is true if the code differed from
   that commit;

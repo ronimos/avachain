@@ -107,6 +107,14 @@ explosive_trigger_points = []
 # runout_step runs it as a second runout, published under
 # <publish_root>/shots/. CLI: --force-explosive-triggers.
 force_explosive_triggers = false
+# The model set triggers at every shot location above and nowhere else: no
+# initiation gate, elevation or Pi1 filter, ranking or n_triggers cap, equal
+# weights (rectangle fallback as usual). CLI: --[no-]shot-locations-only.
+shot_locations_only = false
+# Shot footprint radius, m: each shot triggers at the cluster within this
+# radius with the lowest r_c (then highest Pi1), in the model and forced-shot
+# sets. 0 = the cluster under the point. CLI: --shot-radius-m.
+shot_radius_m = 0.0
 
 # ---------------------------------------------------------------------------
 # [wrf] — WRF forecast forcing

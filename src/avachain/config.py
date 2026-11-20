@@ -153,6 +153,19 @@ class ProjectConfig:
     # Published beside the model set at <scenarios_dir>/<date>/shots[/T_n],
     # each shot equally weighted; the model set is unchanged (Ron, 2026-11-06).
     force_explosive_triggers: bool = False
+    # The model set triggers at every shot location (explosive_trigger_points)
+    # and nowhere else: no initiation gate, elevation or Pi1 filter, ranking
+    # or n_triggers cap; equal weights, rectangle fallback as in any model
+    # set (trigger_source 'shot_locations'). Ron, 2026-11-20 (Sisters).
+    shot_locations_only: bool = False
+    # Shot footprint radius, metres. Above 0, each shot triggers at the
+    # cluster within this radius of its point with the lowest r_c (then the
+    # highest Pi1): a big charge fails the weak layer over far more than one
+    # ~3 x 3 m cluster, and the avalanche starts where a crack runs most
+    # easily. Applies wherever the shot points are triggers (no-candidate
+    # fallback, shot_locations_only, forced-shot set). 0 = the cluster under
+    # the point. Ron, 2026-11-20: 10 m for Sisters.
+    shot_radius_m: float = 0.0
     # UTC hour of the snapshot every read of a run uses (features, release
     # depth, scour). None keeps the historical per-read hours (features 00,
     # depth 12, scour 18), which the Jan 18 validation runs rely on. Ron,
@@ -519,6 +532,9 @@ class ProjectConfig:
                 scenarios.get("explosive_trigger_points", [])),
             force_explosive_triggers=bool(
                 scenarios.get("force_explosive_triggers", False)),
+            shot_locations_only=bool(
+                scenarios.get("shot_locations_only", False)),
+            shot_radius_m=float(scenarios.get("shot_radius_m", 0.0)),
             snapshot_hour_utc=(int(scenarios["snapshot_hour_utc"])
                                if scenarios.get("snapshot_hour_utc") is not None else None),
             forecast_days=(int(scenarios["forecast_days"])

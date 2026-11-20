@@ -153,19 +153,41 @@ def no_release_reason(info):
         detail = f" ({'; '.join(parts)})" if parts else ''
         return (f"No release scenarios{snap}: none of the explosive-control shots "
                 f"would release an avalanche{detail}.")
+    crit = "no snowpack cluster met the trigger criteria"
+    where_shots = ("" if not n_trig else
+                   f" {n_trig} " if n_trig != 1 else " one ")
     if src == 'explosive_fallback' and n_low:
-        return (f"No release scenarios{snap}: no snowpack cluster met the trigger "
-                f"criteria, and the {n_low} releases tried at the explosive-control "
-                f"shot locations held too little snow (mean depth under {floor}).")
+        return (f"No release scenarios{snap}: {crit}, and the {n_low} releases tried "
+                f"at the explosive-control shot locations held too little snow "
+                f"(mean depth under {floor}).")
+    if src == 'explosive_fallback':
+        # Fallback triggers at the shots, and none gave a release polygon
+        return (f"No release scenarios{snap}: {crit}, and no release area could be "
+                f"built at the{where_shots}explosive-control shot location"
+                f"{'' if n_trig == 1 else 's'}.")
+    if src == 'shot_locations':
+        # shot_locations_only: every shot location is a trigger, ungated
+        shots = f"the{where_shots}explosive-control shot location{'' if n_trig == 1 else 's'}"
+        if n_low:
+            return (f"No release scenarios{snap}: the {n_low} releases tried at {shots} "
+                    f"(this path triggers only there) held too little snow "
+                    f"(mean depth under {floor}).")
+        if not n_trig:
+            return (f"No release scenarios{snap}: no explosive-control shot location "
+                    f"is on the cluster map.")
+        return (f"No release scenarios{snap}: no release area could be built at "
+                f"{shots} (this path triggers only there).")
     if src == 'model' and n_low:
         where = f" from {n_trig} trigger location{'s' if n_trig != 1 else ''}" if n_trig else ''
         return (f"No release scenarios{snap}: all {n_low} candidate releases{where} "
                 f"held too little snow (mean depth under {floor}).")
+    if src == 'model' and not n_trig:
+        return f"No release scenarios{snap}: {crit}."
     if src is None:
         return (f"No release scenarios{snap}: no snowpack cluster met the trigger "
                 f"criteria, and no explosive-control shot locations are configured.")
-    return (f"No release scenarios{snap}: no release area could be built from the "
-            f"trigger locations.")
+    return (f"No release scenarios{snap}: no release area could be built from the"
+            f"{where_shots or ' '}trigger location{'' if n_trig == 1 else 's'}.")
 
 
 def set_raster(src_dir):

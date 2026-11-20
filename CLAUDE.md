@@ -511,6 +511,14 @@ scoured clusters.
   avoids teaching the runout's manifest, report and viewer, which all
   parse `T_<int>`, a new label. This is avachain-only: it is not in
   `~/avalanche-release-areas`, and does not belong there.
+- **Shot triggers are footprint seeds where `shot_radius_m` > 0** (Ron,
+  2026-11-20; Sisters 10 m, others 0). Each shot point triggers at the
+  cluster within the radius with the lowest r_c, then highest Π₁, not at the
+  cluster under the point. That holds in the no-candidate fallback,
+  `shot_locations_only` (Sisters: every shot is the model set's trigger,
+  ungated, every day) and the forced-shot set alike. Trigger selection only,
+  avachain-only; `release_geometry` is untouched. A features CSV with no
+  Sk38 counts as no candidate (first snow; it was a KeyError until 11-20).
 - **Shot weights are absolute.** Each shot holds 1/N, and whatever does not
   release is `p_no_release` (Ron, 2026-11-06), so a shot set's weights sum
   to P(release) ≤ 1. Its `params.json` carries `ensemble_weight_total = 1.0`.

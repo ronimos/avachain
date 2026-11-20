@@ -127,6 +127,13 @@ explosive_trigger_points = [
     [39.6756262, -105.8871985],   # Sister 6
 ]
 force_explosive_triggers = true
+# The model set triggers at every shot location above and nowhere else, with
+# no initiation gate or filter (Ron, 2026-11-20). CLI: --[no-]shot-locations-only.
+shot_locations_only = true
+# Shot footprint (Ron, 2026-11-20, big charges): each shot triggers at the
+# cluster within 10 m of its point with the lowest r_c, then highest Pi1.
+# Model and forced-shot sets alike. CLI: --shot-radius-m.
+shot_radius_m = 10.0
 
 [nwp]
 lead_hours = 66   # T_stable (6-hourly WRF rows; 00 UTC at a 22:00 MST start) + 66 h = T_2 at 18 UTC (Ron, 2026-11-18)

@@ -55,3 +55,16 @@ def test_missing_sk38_is_never_a_trigger():
 def test_csv_without_rc_column_ranks_by_sk38_alone():
     df = _cands([(1, 0.80, 0.1), (2, 0.77, 0.1)]).drop(columns='rc_wl')
     assert list(_rank_triggers(df, 2, 'min_sk38').index) == [2, 1]
+
+
+def test_features_without_an_sk38_column_give_no_trigger():
+    """First snow: analyze wrote a features CSV with only hs/group (no layer
+    reached a weak layer), so there is no Sk38 column at all. That is the
+    all-NaN case, not a KeyError: Sisters cycle 2026-11-20 failed all three
+    days on KeyError ['sk38_min'] and published no report. The empty result
+    still carries the column, which _write_scenario_set prints."""
+    df = pd.DataFrame({'hs': [0.12, 0.09], 'group': ['adjacent'] * 2},
+                      index=pd.Index([1, 2], name='cid'))
+    ranked = _rank_triggers(df, 5, 'sk38_min')
+    assert ranked.empty
+    assert 'sk38_min' in ranked.columns

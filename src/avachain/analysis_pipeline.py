@@ -169,7 +169,14 @@ def _rank_triggers(cand_df: pd.DataFrame, n: int, sk38_col: str,
     multi-column sort is stable).
 
     rc_col is optional so older feature CSVs without it still rank by Sk38.
+
+    A features CSV with no Sk38 column at all (first snow: no profile reached
+    a weak layer, so analyze wrote only hs/group) ranks like an all-NaN one:
+    no trigger. It raised KeyError and failed the forecast day instead
+    (Sisters cycle 2026-11-20, all three days).
     """
+    if sk38_col not in cand_df.columns:
+        cand_df = cand_df.assign(**{sk38_col: np.nan})
     ranked = cand_df.dropna(subset=[sk38_col])
     keys = [sk38_col] + ([rc_col] if rc_col in ranked.columns else [])
     return ranked.sort_values(keys, na_position='last').head(n)
@@ -595,6 +602,24 @@ def _forcing_shots(cfg, args) -> bool:
     return True
 
 
+def _shot_locations_only(cfg, args) -> bool:
+    """True when model triggers are restricted to the shot locations: asked
+    for (--[no-]shot-locations-only, else [scenarios] shot_locations_only),
+    and the path has shot locations. Asked for without any, say so and use
+    the whole start zone."""
+    flag = getattr(args, 'shot_locations_only', None)
+    if flag is None:
+        flag = getattr(cfg, 'shot_locations_only', False)
+    if not flag:
+        return False
+    if not getattr(cfg, 'explosive_trigger_points', None):
+        print("  WARNING: shot_locations_only is on but [scenarios] "
+              "explosive_trigger_points is empty for this path — triggers "
+              "come from the whole start zone")
+        return False
+    return True
+
+
 def store_span(zarr_path):
     """(first, last) time in a Zarr store, or None when there is none."""
     if not zarr_path or not Path(zarr_path).exists():
@@ -979,6 +1004,28 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
                      if cid in sz_cids]
     print(f"  Start zone clusters with features: {len(candidate_ids)}")
     _FUNNEL['start_zone_with_features'] = len(candidate_ids)
+    if _shot_locations_only(cfg, args):
+        # Every shot location is a trigger, whatever the snowpack: no
+        # initiation gate, elevation or Pi1 filter, ranking or n_triggers cap
+        # (Ron, 2026-11-20, Sisters). Equal weights, rectangle fallback as
+        # for any model-set trigger; the release model decides the rest.
+        shot_cids = _shot_trigger_clusters(cfg, args, cluster_map, transform,
+                                           start_zone_mask, snap_features,
+                                           meloche_df)
+        sk38_col = 'min_sk38' if 'min_sk38' in snap_features.columns else 'sk38_min'
+        triggers = _explosive_triggers(shot_cids, cluster_map, snap_features,
+                                       sk38_col)
+        _FUNNEL['shot_locations'] = len(triggers)
+        if triggers.empty:
+            print("  shot_locations_only: no shot location is on the cluster "
+                  "map — publishing an empty scenario set")
+            return out_dir
+        print(f"  shot_locations_only: triggers at every shot location "
+              f"{list(triggers.index)}")
+        return _write_scenario_set(cfg, args, out_dir, triggers,
+                                   'shot_locations', sk38_col, snap_features,
+                                   meloche_df, ds, cluster_map, dem, transform,
+                                   crs_wkt, raster_profile, start_zone_mask)
 
     def _scalar_val(df, cid, col):
         """Safely get a scalar from a possibly multi-row index."""
@@ -1060,6 +1107,8 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
     # Use P50 in operational mode (full start zone)
     elev_pct = (mp.ELEVATION_PCTILE_RESTRICTED if args.restrict_to_release_area
                 else mp.ELEVATION_PCTILE)
+    # Not on the shot locations: a percentile of a handful of fixed points
+    # drops half of them by construction, whatever the snowpack.
     if candidate_ids:
         elevs = []
         for cid in candidate_ids:
@@ -1077,6 +1126,16 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
 
     sk38_col = 'min_sk38' if 'min_sk38' in snap_features.columns else 'sk38_min'
     trigger_source = 'model'
+    # Candidates are ranked by Sk38, so one with no Sk38 can never be a
+    # trigger. When none has one (first snow: no profile reached a weak
+    # layer, and analyze wrote only hs/group), no cluster passed the gates:
+    # take the shot-location fallback below. This failed every forecast day
+    # on a KeyError (Sisters cycle 2026-11-20) and, with the column present
+    # but all NaN, published an empty model set. Ron, 2026-11-20.
+    if candidate_ids and not _has_sk38(snap_features, candidate_ids, sk38_col):
+        print(f"  No candidate has an Sk38 ({len(candidate_ids)} without one) "
+              f"— no cluster met the trigger criteria")
+        candidate_ids = []
     if not candidate_ids:
         # No cluster passed the gates: every thin early-season day does this.
         # Trigger at the slope's explosive-control shot locations instead
@@ -1085,8 +1144,9 @@ def _build_scenarios(cfg, args, out_dir: Path, shot_dir: Path = None):
         # trigger with no features gets the oriented rectangle with depth
         # 0.8 x HS, and a trigger that fails the slab tensile gate releases
         # nothing. With no shot locations configured, publish an empty set.
-        shot_cids = _clusters_at_points(cfg.explosive_trigger_points,
-                                        cluster_map, transform)
+        shot_cids = _shot_trigger_clusters(cfg, args, cluster_map, transform,
+                                           start_zone_mask, snap_features,
+                                           meloche_df)
         triggers = _explosive_triggers(shot_cids, cluster_map, snap_features,
                                        sk38_col)
         if triggers.empty:
@@ -1191,17 +1251,15 @@ def _no_release_reason(cid, meloche_df, snap_features) -> str:
     return 'no_propagation'
 
 
-def _clusters_at_points(points, cluster_map, transform) -> list:
-    """Cluster id under each (lat, lon) WGS84 point, in order, no duplicates.
-
-    A point off the raster or on a cell with no cluster is reported and
-    skipped. Two points in one cluster give one trigger.
-    """
+def _points_on_map(points, cluster_map, transform) -> list:
+    """(x, y, cluster id) for each (lat, lon) WGS84 point on a cluster, in
+    order. A point off the raster or on a cell with no cluster is reported
+    and skipped."""
     from pyproj import Transformer
     from rasterio.transform import rowcol
     to_xy = Transformer.from_crs(4326, RASTER_EPSG, always_xy=True)
     nrow, ncol = cluster_map.shape
-    cids = []
+    out = []
     for lat, lon in points:
         x, y = to_xy.transform(lon, lat)
         cid = 0
@@ -1213,8 +1271,110 @@ def _clusters_at_points(points, cluster_map, transform) -> list:
             print(f"  WARNING: shot location ({lat}, {lon}) is on no cluster "
                   f"(E {x:.1f}, N {y:.1f}) — skipped")
             continue
+        out.append((x, y, cid))
+    return out
+
+
+def _clusters_at_points(points, cluster_map, transform) -> list:
+    """Cluster id under each (lat, lon) WGS84 point, in order, no duplicates.
+
+    A point off the raster or on a cell with no cluster is reported and
+    skipped. Two points in one cluster give one trigger.
+    """
+    cids = []
+    for _x, _y, cid in _points_on_map(points, cluster_map, transform):
         if cid not in cids:
             cids.append(cid)
+    return cids
+
+
+def _shot_radius_m(cfg, args) -> float:
+    """Shot footprint radius: --shot-radius-m, else [scenarios] shot_radius_m,
+    else 0 (the cluster under the shot point is the trigger)."""
+    r = getattr(args, 'shot_radius_m', None)
+    if r is None:
+        r = getattr(cfg, 'shot_radius_m', 0.0)
+    return float(r or 0.0)
+
+
+def _footprint_seed(x, y, shot_cid, radius_m, cluster_map, transform,
+                    start_zone_mask, snap_features, meloche_df):
+    """The trigger cluster for a shot at map point (x, y): within the shot's
+    footprint, the cluster with the most propagation-prone weak layer.
+
+    A big charge fails the weak layer over an area much larger than one
+    cluster (~3 x 3 m), and the avalanche starts where a crack runs most
+    easily inside it (Ron, 2026-11-20). The footprint is the shot cluster
+    plus every start-zone cluster whose centroid lies within radius_m of
+    the shot point. Ranked by lowest r_c (rc_wl: the critical cut length),
+    then highest Pi1_elastic, then nearest to the shot point; a cluster with
+    neither ranks last, so with no features anywhere the shot cluster stays.
+    Trigger selection only: the release model is unchanged.
+    """
+    from rasterio.transform import rowcol
+    px = abs(transform.a)
+    half = int(np.ceil(radius_m / px)) + 2
+    r0, c0 = rowcol(transform, x, y)
+    nrow, ncol = cluster_map.shape
+    rs, re_ = max(r0 - half, 0), min(r0 + half + 1, nrow)
+    cs, ce = max(c0 - half, 0), min(c0 + half + 1, ncol)
+    win = cluster_map[rs:re_, cs:ce]
+    in_sz = start_zone_mask[rs:re_, cs:ce] if start_zone_mask is not None else None
+    cands = {shot_cid: 0.0}
+    for cid in np.unique(win[win > 0]):
+        cid = int(cid)
+        # Centroid over the cluster's whole extent, not only the window.
+        rr, cc = np.nonzero(cluster_map == cid)
+        if in_sz is not None and not start_zone_mask[rr, cc].any():
+            continue
+        cx = transform.c + (cc.mean() + 0.5) * transform.a
+        cy = transform.f + (rr.mean() + 0.5) * transform.e
+        d = float(np.hypot(cx - x, cy - y))
+        if d <= radius_m:
+            cands[cid] = 0.0 if cid == shot_cid else d
+
+    def val(df, cid, col):
+        if df is None or df.empty or col not in df.columns or cid not in df.index:
+            return np.nan
+        v = df.loc[cid, col]
+        v = v.iloc[0] if isinstance(v, pd.Series) else v
+        return float(pd.to_numeric(v, errors='coerce'))
+
+    def key(cid):
+        rc = val(snap_features, cid, 'rc_wl')
+        if np.isnan(rc):
+            rc = val(meloche_df, cid, 'rc_wl')
+        pi1 = val(meloche_df, cid, 'Pi1_elastic')
+        return (np.isnan(rc), rc if not np.isnan(rc) else 0.0,
+                np.isnan(pi1), -pi1 if not np.isnan(pi1) else 0.0,
+                cands[cid])
+    return min(cands, key=key), len(cands)
+
+
+def _shot_trigger_clusters(cfg, args, cluster_map, transform, start_zone_mask,
+                           snap_features, meloche_df) -> list:
+    """Trigger cluster per shot location, in order, no duplicates.
+
+    shot_radius_m 0: the cluster under each point (as before 2026-11-20).
+    Above 0: the best seed in each shot's footprint (_footprint_seed). Two
+    shots that pick one seed give one trigger, as two points in one cluster
+    always did.
+    """
+    radius = _shot_radius_m(cfg, args)
+    points = list(getattr(cfg, 'explosive_trigger_points', []) or [])
+    if radius <= 0:
+        return _clusters_at_points(points, cluster_map, transform)
+    cids = []
+    for x, y, shot_cid in _points_on_map(points, cluster_map, transform):
+        seed, n = _footprint_seed(x, y, shot_cid, radius, cluster_map, transform,
+                                  start_zone_mask, snap_features, meloche_df)
+        note = "" if seed == shot_cid else f" -> seed {seed}"
+        print(f"  shot cluster {shot_cid}: {n} clusters within {radius:g} m{note}")
+        if seed not in cids:
+            cids.append(seed)
+        else:
+            print(f"  WARNING: shot cluster {shot_cid} picks seed {seed}, "
+                  f"already a trigger — one trigger")
     return cids
 
 
@@ -1251,8 +1411,8 @@ def _build_shot_set(cfg, args, shot_dir, cluster_map, snap_features,
     """
     print(f"\n--- Forced explosive triggers → {shot_dir} ---")
     shot_dir.mkdir(parents=True, exist_ok=True)
-    points = list(cfg.explosive_trigger_points)
-    cids = _clusters_at_points(points, cluster_map, transform)
+    cids = _shot_trigger_clusters(cfg, args, cluster_map, transform,
+                                  start_zone_mask, snap_features, meloche_df)
     sk38_col = 'min_sk38' if 'min_sk38' in snap_features.columns else 'sk38_min'
     triggers = _explosive_triggers(cids, cluster_map, snap_features, sk38_col)
     if triggers.empty:
@@ -1266,6 +1426,15 @@ def _build_shot_set(cfg, args, shot_dir, cluster_map, snap_features,
                         sk38_col, snap_features, meloche_df, ds, cluster_map,
                         dem, transform, crs_wkt, raster_profile,
                         start_zone_mask, rectangle_fallback=False)
+
+
+def _has_sk38(snap_features, candidate_ids, sk38_col) -> bool:
+    """True when at least one candidate has a finite Sk38 (rankable)."""
+    if sk38_col not in snap_features.columns:
+        return False
+    vals = pd.to_numeric(snap_features.loc[candidate_ids, sk38_col],
+                         errors='coerce')
+    return bool(np.isfinite(vals).any())
 
 
 def _model_triggers(candidate_ids, snap_features, meloche_df, sk38_col, args,
@@ -1873,6 +2042,19 @@ def build_parser():
                              '[scenarios] explosive_trigger_points location, no '
                              'initiation gate, propagation physics only (default: '
                              '[scenarios] force_explosive_triggers, off).')
+    parser.add_argument('--shot-locations-only', action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help='scenarios: model trigger candidates are only the '
+                             'clusters under [scenarios] explosive_trigger_points; '
+                             'they still take every initiation gate and the Sk38 '
+                             'ranking (default: [scenarios] shot_locations_only, off).')
+    parser.add_argument('--shot-radius-m', type=float, default=None,
+                        help='scenarios: shot footprint radius; each shot triggers '
+                             'at the cluster within it with the lowest r_c (then '
+                             'highest Pi1), in the model set (fallback, '
+                             'shot_locations_only) and the forced-shot set. 0 = '
+                             'the cluster under the point (default: [scenarios] '
+                             'shot_radius_m, 0).')
     parser.add_argument('--energy-delta', type=float, default=mp.ENERGY_DELTA,
                         help=f"delta in the energy-mode G_c (default: {mp.ENERGY_DELTA}; "
                              "R was fitted at 0). The Eq. 20 delta is unchanged.")

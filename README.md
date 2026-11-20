@@ -266,8 +266,36 @@ leave nothing.
 **No candidate (thin early-season pack).** When steps 1–3 leave nothing, the
 triggers are the slope's explosive-control shot locations,
 `[scenarios] explosive_trigger_points` ([lat, lon] WGS84). Each one is the
-cluster under the point on the current map, and they take equal weight.
-Before 2026-11-04 this case raised `ValueError` and failed the survey.
+cluster under the point on the current map (or the footprint seed, below),
+and they take equal weight. Before 2026-11-04 this case raised `ValueError`
+and failed the survey. A pool in which no candidate has an Sk38 counts as
+no candidate too. At first snow `analyze` writes a features CSV with only
+`hs`/`group`, because no profile has a weak layer yet. Until 2026-11-20 that
+failed the forecast day with `KeyError: ['sk38_min']` (Sisters cycle
+2026-11-20, all three days), and an all-NaN Sk38 published an empty model set.
+
+**Shot locations only (`[scenarios] shot_locations_only`, off by default; on
+for Sisters).** The model set triggers at every shot location and nowhere
+else, on every day. There are no initiation gates (steps 1–3), no elevation
+or Π₁ filter, no ranking and no `n_triggers` cap. The shots take equal weight
+and keep the rectangle fallback of any model set. `trigger_source` is
+`"shot_locations"`. CLI: `--[no-]shot-locations-only`. With no shot points
+configured it prints a WARNING and uses the whole start zone.
+
+**Shot footprint (`[scenarios] shot_radius_m`, 0 by default; 10 m for
+Sisters).** A cluster is about 3 × 3 m (median 10 px at 1 m on Sisters), far
+smaller than the area a big charge loads. With a radius above 0, each shot
+triggers at the *seed* of its footprint. The footprint is the shot's cluster
+plus every start-zone cluster whose centroid lies within the radius of the
+shot point. The seed is the footprint cluster with the lowest r_c (`rc_wl`; 0
+means the weak layer cannot carry the slab), then the highest Π₁, then the
+nearest. A footprint with no features keeps the shot's cluster. This is trigger
+selection only (`analysis_pipeline._shot_trigger_clusters`): the release model
+is unchanged. It applies wherever the shot points are triggers: the
+no-candidate fallback, `shot_locations_only`, and the forced-shot set, so all
+of them start from the same seeds. Two shots that pick one seed give one
+trigger. CLI: `--shot-radius-m`. On the Jan 18 fixture at 10 m every Professor
+shot moves (25–31 clusters per footprint).
 
 **Forced shots (`[scenarios] force_explosive_triggers`, off by default).**
 Every run also publishes a second set at `<date>/shots[/T_n]`, with a trigger
@@ -367,8 +395,12 @@ area, so it was NaN on every day without an observed avalanche, and runout passe
 it straight to com1DFA. This is a deliberate divergence from the standalone,
 which uses the trigger cluster's density.
 
-`metadata.json` and the handoff `manifest.json` record `trigger_source`
-(`"model"` or `"explosive_fallback"`). The manifest's `status` is `"ok"` or
+`metadata.json` and the handoff `manifest.json` record `trigger_source`:
+`"model"`, `"explosive_fallback"`, `"shot_locations"` (`shot_locations_only`),
+or `"explosive_forced"` in the forced-shot set. For an empty set the runout
+report gives the reason in those terms. A shot set that builds no release
+area says "no release area could be built at the N explosive-control shot
+locations", instead of the old generic sentence. The manifest's `status` is `"ok"` or
 `"no_scenarios"`.
 
 **Forecast days.** With `[scenarios] forecast_days` (Professor_PTC: 3) the run
