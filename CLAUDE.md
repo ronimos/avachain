@@ -665,6 +665,27 @@ Regenerate before trusting any release polygon.
   out and what measurement justified the change. Match that; follow `git log`.
 - Operational deployment lives at `/home/snowpath/avachain/` via `install.py`.
 
+## Long-running processes — always `nohup setsid` (Ron, 2026-11-20)
+
+Anything that can outlive the session runs detached, never as a child of the
+Claude shell: reruns of a cycle, rebuilds, reinit passes, acceptance and A/B
+runs, deploys, replays. A session that ends kills its children. The 10-29
+rehearsal died 2 min into pass 2 that way, and a partial pass 2 cannot be
+resumed (SNOWPACK erases its output `.sno` on start).
+
+- Put the steps in a script under `/home/avachain/scratch/ron/<task>/` that
+  takes the slope's cron lock (`flock` on `logs/<slope>/.cron_<slope>.lock`)
+  when it touches a slope, and ends with a marker line such as
+  `RERUN EXIT <rc>`, so the log alone says whether it finished.
+- Start it as
+  `nohup setsid <script> > <log> 2>&1 < /dev/null & disown`, then check it
+  is detached: `ps -o pid,ppid,sid -p <pid>` shows PPID 1 and its own SID.
+- `setsid` forks and returns at once when the caller leads a process group,
+  so a `tail` right after it reads the log too early. Wait on the marker line
+  instead.
+- A `pgrep -f` wait loop whose pattern also matches its own command line, or
+  a relaunched job, never ends. Match the script path with `^`.
+
 ## Verification
 
 Do not report something as working without having run it. For a bug fix,
