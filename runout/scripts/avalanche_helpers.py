@@ -392,6 +392,39 @@ def mosaic_dem_with_priority(primary_path, fallback_path, out_path,
 
 
 
+def _drop_covered(gdf, frac=0.999):
+    # Drop features lying inside another feature once holes are filled
+    # A forest patch inside a canopy gap overlaps the gap's polygon after
+    # the gap is filled, and com1DFA refuses overlapping area features
+    # ("Features [...] are overlapping"): Sisters 2026-11-20 T_1/T_2, the
+    # first Sisters release to reach com1DFA. Source layers do not overlap,
+    # so every overlap left is such a containment and the outer polygon
+    # already covers the patch. A layer without nesting is returned as is.
+    # @param gdf: GeoDataFrame of filled polygons
+    # @param frac: share of a feature's area that must lie in another one
+    # @returns: GeoDataFrame without the covered features
+    geoms = list(gdf.geometry)
+    sidx = gdf.sindex
+    drop = set()
+    for i, g in enumerate(geoms):
+        a = g.area
+        if a <= 0:
+            continue
+        for j in sidx.query(g, predicate='intersects'):
+            j = int(j)
+            if j == i or j in drop:
+                continue
+            o = geoms[j]
+            # equal polygons: keep the first, drop the later one
+            if o.area > a or (o.area == a and j < i):
+                if g.intersection(o).area >= frac * a:
+                    drop.add(i)
+                    break
+    if not drop:
+        return gdf
+    return gdf.drop(index=sorted(drop)).reset_index(drop=True)
+
+
 def geojson_to_shapefile(src_path, dst_path, attributes=None, fill_holes=False,
                          clip_to_raster=None, explode_multipart=False,
                          min_part_area_m2=1.0):
@@ -529,6 +562,7 @@ def geojson_to_shapefile(src_path, dst_path, attributes=None, fill_holes=False,
         gdf = gdf.set_geometry([_fill(g) for g in gdf.geometry])
         gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
         gdf = gdf.reset_index(drop=True)
+        gdf = _drop_covered(gdf)
 
     # Inject required attributes (e.g. thickness for AvaFrame validation)
     if attributes:
